@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- 背景 -->
+  <rect width="32" height="32" rx="6" fill="#1a1a2e"/>
+  <!-- 頭 -->
+  <circle cx="16" cy="10" r="5" fill="#7ecfff"/>
+  <!-- 体 -->
+  <path d="M9 28 Q9 20 16 20 Q23 20 23 28Z" fill="#7ecfff"/>
+  <!-- 光沢 -->
+  <circle cx="14" cy="8.5" r="1.5" fill="rgba(255,255,255,0.4)"/>
+</svg>

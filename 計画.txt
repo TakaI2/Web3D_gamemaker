@@ -1,0 +1,34 @@
+Three.jsを使ってWeb上で動く3Dゲーム。およびエディタを作りたい。
+
+キャラクターはVRMを用い、アニメーション機能（blenderで制作したものや、Mixamoとかでフリーで配布されている物）やリップシンクに対応
+
+エディタ：読み込んだモデルを表示、ズーム、パン、周囲から見られる。　アニメーションの再生（リストの中から選ぶ感じで）。
+
+ゲーム：　マウスやキーボードでキャラクタを移動させたりして、ターゲットを攻撃したりとかできるようにする。
+
+
+プロジェクトはこちらのgithubにて管理する。
+https://github.com/TakaI2/Web3D_gamemaker.git
+
+
+その他：
+.claudeは他から引っ張ってきたものなのでこのプロジェクト向けに改良を
+WebXR向けになるべく軽量な処理をこころがける。
+
+
+
+
+参考：（このプロジェクトの参考になれば）
+https://qiita.com/Chisenon/items/5e1f60a9e216bb58a2e4
+
+https://note.com/npaka/n/nf632f283f89a
+
+https://scrapbox.io/ke456memo/%2327_pixiv%2Fthree-vrm%E3%81%A7VRM%E3%81%AB%E5%AF%BE%E5%BF%9C%E3%81%97%E3%81%9FIK%E3%82%92%E5%AE%9F%E8%A3%85%E3%81%99%E3%82%8B
+
+https://note.com/sawa_zen/n/nd8f6e5a75ade
+
+https://zenn.dev/halby24/articles/015ffac7cb09b1
+
+https://zenn.dev/nciv/articles/05e0b1ed7a57c0
+
+https://techracho.bpsinc.jp/ecn/2023_12_03/136723

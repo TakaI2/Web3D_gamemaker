@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.svelte-kit/
+.env
+.env.*
+!.env.example
+
+# VRM/VRMA テストファイル（著作権対策）
+public/vrm/*.vrm
+public/vrma/*.vrma
+tests/fixtures/*.vrm
+tests/fixtures/*.vrma
+
+# Claude Code 個人設定
+.claude/settings.local.json
+.claude/tasks.json
+.claude/symlinks/
+
+# OS
+.DS_Store
+Thumbs.db
