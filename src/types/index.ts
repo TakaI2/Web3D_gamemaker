@@ -1,5 +1,6 @@
 import type { VRM } from '@pixiv/three-vrm';
 import type * as THREE from 'three';
+import type { SkinnedMesh } from 'three';
 
 // Viseme
 export type VisemeKey = 'aa' | 'ih' | 'ou' | 'ee' | 'oh' | 'neutral';
@@ -68,4 +69,69 @@ export type XRState = {
   readonly activeMode: XRMode | null;
   readonly isActive: boolean;
   readonly error: AppError | null;
+};
+
+// MMD モデルの状態
+export type MMDState = {
+  readonly mesh: SkinnedMesh | null;
+  readonly loading: boolean;
+  readonly error: AppError | null;
+};
+
+// VMD アニメーションエントリー
+export type VMDEntry = {
+  readonly name: string;
+  readonly clip: THREE.AnimationClip;
+};
+
+// VMD アニメーションの状態
+export type VMDState = {
+  readonly animations: VMDEntry[];
+  readonly currentName: string | null;
+  readonly isPlaying: boolean;
+  readonly isLooping: boolean;
+};
+
+// リターゲット - スロット毎のモデルタイプ
+export type SlotModelType = 'vrm' | 'mmd' | 'fbx';
+
+// リターゲット - スロット毎の状態
+export type SlotState = {
+  readonly modelType: SlotModelType;
+  readonly loaded: boolean;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly animNames: readonly string[];
+  readonly currentAnim: string | null;
+  readonly isPlaying: boolean;
+  readonly isLooping: boolean;
+  readonly scale: number;
+};
+
+// アプリモード
+export type AppMode = 'editor' | 'game' | 'retarget';
+
+// FBX モデルの状態
+export type FbxState = {
+  readonly root: import('three').Group | null;
+  readonly loading: boolean;
+  readonly error: AppError | null;
+  readonly animationNames: readonly string[];
+};
+
+// FBX アニメーション再生状態
+export type FbxAnimState = {
+  readonly currentName: string | null;
+  readonly isPlaying: boolean;
+  readonly isLooping: boolean;
+};
+
+// ゲームフェーズ
+export type GamePhase = 'start' | 'playing' | 'gameover';
+
+// gameStore の状態
+export type GameState = {
+  readonly phase: GamePhase;
+  readonly score: number;
+  readonly highScore: number;
 };

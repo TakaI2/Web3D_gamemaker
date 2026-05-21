@@ -32,3 +32,16 @@ export const extractVRMFile = (files: FileList | File[]): File | null => {
 export const extractVRMAFiles = (files: FileList | File[]): File[] => {
   return Array.from(files).filter(isVRMAFile);
 };
+
+/**
+ * ファイルが VMD かどうかチェック
+ */
+export const isVMDFile = (file: File): boolean =>
+  getExtension(file.name) === '.vmd';
+
+/**
+ * FileList または File[] から全 VMD ファイルを返す
+ */
+export const extractVMDFiles = (files: FileList | File[]): File[] => {
+  return Array.from(files).filter(isVMDFile);
+};

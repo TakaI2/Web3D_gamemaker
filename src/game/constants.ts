@@ -1,0 +1,28 @@
+export const GAME_CONSTANTS = {
+  // フィールド
+  FIELD_SIZE: 40,
+  FIELD_HALF: 20,
+
+  // プレイヤー
+  PLAYER_SPEED: 5.0,
+
+  // カメラ
+  CAMERA_OFFSET_BACK: 4.0,
+  CAMERA_OFFSET_UP: 2.0,
+  CAMERA_PITCH_MIN: -0.3,
+  CAMERA_PITCH_MAX: 0.8,
+  CAMERA_YAW_SPEED: 0.004,
+  CAMERA_FAR: 200,
+  CAMERA_FOV: 60,
+
+  // エネミー
+  ENEMY_COUNT: 5,
+  ENEMY_SPEED: 2.0,
+  ENEMY_CONTACT_RADIUS: 1.0,
+  ENEMY_SPAWN_MIN_DIST: 8.0,
+  ENEMY_CAPSULE_RADIUS: 0.3,
+  ENEMY_CAPSULE_HEIGHT: 0.8,
+
+  // スコア
+  HIGH_SCORE_KEY: 'game_highscore',
+} as const;

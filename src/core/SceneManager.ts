@@ -3,6 +3,8 @@ import * as THREE from 'three';
 export type SceneManagerOptions = {
   antialias?: boolean;
   showGrid?: boolean;
+  fov?: number;
+  far?: number;
 };
 
 export class SceneManager {
@@ -15,17 +17,17 @@ export class SceneManager {
   private _ambientLight: THREE.AmbientLight;
 
   constructor(canvas: HTMLCanvasElement, options: SceneManagerOptions = {}) {
-    const { antialias = true, showGrid = true } = options;
+    const { antialias = true, showGrid = true, fov = 30, far = 20 } = options;
 
     // シーン
     this.scene = new THREE.Scene();
 
     // カメラ
     this.camera = new THREE.PerspectiveCamera(
-      30,
+      fov,
       canvas.clientWidth / canvas.clientHeight,
       0.1,
-      20,
+      far,
     );
     this.camera.position.set(0, 1.3, 3);
 

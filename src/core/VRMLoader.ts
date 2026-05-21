@@ -72,6 +72,18 @@ export class VRMLoader {
     }
   }
 
+  /** シーンから取り外すが VRM オブジェクトは破棄しない（モード切替用） */
+  detach(scene: THREE.Scene): void {
+    if (!this._current) return;
+    scene.remove(this._current.scene);
+  }
+
+  /** 指定シーンに VRM を追加する（モード切替用） */
+  attach(scene: THREE.Scene): void {
+    if (!this._current) return;
+    scene.add(this._current.scene);
+  }
+
   unload(): void {
     if (!this._current) return;
 
