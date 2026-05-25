@@ -16,6 +16,8 @@
   import FbxAnimControls from './FbxAnimControls.svelte';
   import { mmdStore } from '../stores/mmdStore';
   import { fbxStore } from '../stores/fbxStore';
+  import { vrmStore } from '../stores/vrmStore';
+  import { appModeStore } from '../stores/appModeStore';
   import type { VRMLoader } from '../core/VRMLoader';
   import type { AnimationManager } from '../core/AnimationManager';
   import type { SpringBoneController } from '../core/SpringBoneController';
@@ -83,6 +85,17 @@
     <div class="header">
       <span class="title">VRM Editor</span>
       <ModelLoader {vrmLoader} {animationManager} />
+    </div>
+    <!-- アニメーション編集ボタン -->
+    <div class="anim-editor-btn-row">
+      <button
+        class="anim-editor-btn"
+        disabled={!$vrmStore.vrm}
+        title={$vrmStore.vrm ? 'アニメーションエディタを開く' : 'VRM を先に読み込んでください'}
+        on:click={() => appModeStore.toAnimEditor()}
+      >
+        ✏ アニメーション編集
+      </button>
     </div>
 
     <!-- VRM タブ -->
@@ -185,6 +198,24 @@
     z-index: 10;
     overflow: hidden;
   }
+  .anim-editor-btn-row {
+    padding: 6px 10px;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+  }
+  .anim-editor-btn {
+    width: 100%;
+    padding: 6px 0;
+    background: #1a2a3a;
+    border: 1px solid #2a4a6a;
+    color: #7af;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .anim-editor-btn:hover:not(:disabled) { background: #243040; }
+  .anim-editor-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
   .mode-selector {
     display: flex;
     border-bottom: 2px solid #333;

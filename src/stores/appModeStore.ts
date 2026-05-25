@@ -8,4 +8,6 @@ export const appModeStore = {
   toGame(): void { set('game'); },
   toEditor(): void { set('editor'); },
   toRetarget(): void { set('retarget'); },
+  toAnimEditor(): void { set('anim-editor'); },
+  toFps(): void { set('fps'); },
 };

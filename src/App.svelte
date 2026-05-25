@@ -6,6 +6,8 @@
   import GameHUD from './components/GameHUD.svelte';
   import RetargetViewport from './components/RetargetViewport.svelte';
   import ZoomControls from './components/ZoomControls.svelte';
+  import AnimEditor from './components/AnimEditor.svelte';
+  import FpsViewport from './components/FpsViewport.svelte';
   import { appModeStore } from './stores/appModeStore';
   import type { VRMLoader } from './core/VRMLoader';
   import type { AnimationManager } from './core/AnimationManager';
@@ -74,6 +76,10 @@
   {:else if $appModeStore === 'game'}
     <GameViewport {vrmLoader} />
     <GameHUD />
+  {:else if $appModeStore === 'anim-editor'}
+    <AnimEditor />
+  {:else if $appModeStore === 'fps'}
+    <FpsViewport />
   {:else}
     <RetargetViewport />
   {/if}

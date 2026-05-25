@@ -9,6 +9,9 @@
   <button class="mode-btn retarget-btn" on:click={() => appModeStore.toRetarget()}>
     比較 ⇄
   </button>
+  <button class="mode-btn fps-btn" on:click={() => appModeStore.toFps()}>
+    FPS ▶
+  </button>
 </div>
 
 <style>
@@ -35,4 +38,6 @@
   .game-btn:hover { background: #3b7; }
   .retarget-btn { background: #47a; }
   .retarget-btn:hover { background: #58b; }
+  .fps-btn { background: #a64; }
+  .fps-btn:hover { background: #b75; }
 </style>

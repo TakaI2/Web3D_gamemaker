@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Cloth Simulation</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #1a1a2e;
+      font-family: sans-serif;
+    }
+    #app { width: 100%; height: 100%; }
+
+    #ui {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 10;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: #ddd;
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 190px;
+    }
+    #ui h3 { margin: 0 0 4px; font-size: 14px; color: #fff; }
+    .ui-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .ui-row label { flex-shrink: 0; }
+    .ui-row input[type=range] { flex: 1; }
+    .ui-row input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; }
+    .ui-row input[type=color] { width: 36px; height: 22px; border: none; padding: 0; background: none; cursor: pointer; border-radius: 3px; }
+    .val { color: #adf; font-size: 11px; min-width: 30px; text-align: right; }
+    .ui-section { border-top: 1px solid rgba(255,255,255,0.12); padding-top: 8px; margin-top: 2px; }
+    .ui-section-title {
+      font-size: 11px; color: #888; text-transform: uppercase;
+      letter-spacing: 0.05em; margin-bottom: 6px; cursor: pointer;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .ui-section-title::after { content: '▾'; font-size: 10px; }
+    .ui-section-title.collapsed::after { content: '▸'; }
+    .ui-section-body { display: flex; flex-direction: column; gap: 8px; }
+    .ui-section-body.collapsed { display: none; }
+
+    #back-btn {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    #back-btn:hover { background: rgba(0,0,0,0.75); }
+
+    #fps-counter {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      z-index: 10;
+      color: rgba(255,255,255,0.7);
+      font-size: 13px;
+      font-family: monospace;
+      pointer-events: none;
+    }
+    #info {
+      position: fixed;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.45);
+      font-size: 12px;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: #1a1a2e;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      z-index: 50;
+      transition: opacity 0.4s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+
+    #error-msg {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #111;
+      color: #fff;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      text-align: center;
+      padding: 24px;
+      z-index: 100;
+    }
+    #error-msg.visible { display: flex; }
+    #error-msg h2 { margin: 0; color: #f66; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <a id="back-btn" href="../">← 戻る</a>
+
+  <div id="ui">
+    <h3>Settings</h3>
+    <div class="ui-row">
+      <label>Stiffness</label>
+      <input type="range" id="stiffness" min="0.1" max="0.5" step="0.01" value="0.2">
+      <span class="val" id="stiffness-val">0.20</span>
+    </div>
+    <div class="ui-row">
+      <label>Wind</label>
+      <input type="range" id="wind" min="0" max="5" step="0.1" value="1.0">
+      <span class="val" id="wind-val">1.0</span>
+    </div>
+    <div class="ui-row">
+      <label>Count</label>
+      <input type="range" id="count" min="1" max="10" step="1" value="1">
+      <span class="val" id="count-val">1</span>
+    </div>
+    <div class="ui-row">
+      <label>Wireframe</label>
+      <input type="checkbox" id="wireframe">
+    </div>
+    <div class="ui-row">
+      <label>Sphere</label>
+      <input type="checkbox" id="sphere" checked>
+    </div>
+
+    <div class="ui-section">
+      <div class="ui-section-title" id="mesh-toggle">Mesh</div>
+      <div class="ui-section-body" id="mesh-body">
+        <div class="ui-row">
+          <label>Segments</label>
+          <input type="range" id="segments" min="5" max="60" step="5" value="30">
+          <span class="val" id="segments-val">30×30</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ui-section">
+      <div class="ui-section-title" id="mat-toggle">Material</div>
+      <div class="ui-section-body" id="mat-body">
+        <div class="ui-row">
+          <label>表 Color</label>
+          <input type="color" id="mat-color-front" value="#204080">
+        </div>
+        <div class="ui-row">
+          <label>裏 Color</label>
+          <input type="color" id="mat-color-back" value="#803020">
+        </div>
+        <div class="ui-row">
+          <label>Roughness</label>
+          <input type="range" id="mat-roughness" min="0" max="1" step="0.01" value="1.0">
+          <span class="val" id="mat-roughness-val">1.00</span>
+        </div>
+        <div class="ui-row">
+          <label>Sheen</label>
+          <input type="range" id="mat-sheen" min="0" max="1" step="0.01" value="1.0">
+          <span class="val" id="mat-sheen-val">1.00</span>
+        </div>
+        <div class="ui-row">
+          <label>Sheen Rough</label>
+          <input type="range" id="mat-sheen-roughness" min="0" max="1" step="0.01" value="0.5">
+          <span class="val" id="mat-sheen-roughness-val">0.50</span>
+        </div>
+        <div class="ui-row">
+          <label>Sheen Color</label>
+          <input type="color" id="mat-sheen-color" value="#ffffff">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="fps-counter">-- FPS</div>
+  <div id="loading">読み込み中...</div>
+  <div id="info">ドラッグで視点回転 &nbsp;|&nbsp; スクロールでズーム</div>
+
+  <div id="error-msg">
+    <h2>初期化に失敗しました</h2>
+    <p>Chrome または Edge の最新版でお試しください。</p>
+    <p id="error-detail" style="font-size:12px;color:#aaa;"></p>
+  </div>
+
+  <script type="module" src="./cloth.js"></script>
+</body>
+</html>

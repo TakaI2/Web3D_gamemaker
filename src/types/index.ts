@@ -109,7 +109,37 @@ export type SlotState = {
 };
 
 // アプリモード
-export type AppMode = 'editor' | 'game' | 'retarget';
+export type AppMode = 'editor' | 'game' | 'retarget' | 'anim-editor' | 'fps';
+
+// アニメーションエディタ - IK ターゲット
+export type IKTarget = 'leftHand' | 'rightHand' | 'leftFoot' | 'rightFoot';
+
+// アニメーションエディタ - ボーンキーフレーム
+// キー: VRM HumanBoneName, 値: Map<frameIndex, Quaternion>
+export type BoneKeyframes = Map<string, Map<number, import('three').Quaternion>>;
+
+// アニメーションエディタ - ブレンドシェイプキーフレーム
+// キー: VRM ExpressionName, 値: Map<frameIndex, weight(0-1)>
+export type BlendShapeKeyframes = Map<string, Map<number, number>>;
+
+// アニメーションエディタ - ヒップ位置キーフレーム（正規化 VRM 空間、単位:メートル）
+// キー: frameIndex, 値: Vector3（ヒップ正規化ローカル位置）
+export type HipsPositionKeyframes = Map<number, import('three').Vector3>;
+
+// アニメーションエディタの状態
+export type AnimEditorState = {
+  readonly durationSec: number;
+  readonly fps: number;
+  readonly currentFrame: number;
+  readonly isPlaying: boolean;
+  readonly isLooping: boolean;
+  readonly boneKeyframes: BoneKeyframes;
+  readonly blendShapeKeyframes: BlendShapeKeyframes;
+  readonly hipsPositionKeyframes: HipsPositionKeyframes;
+  readonly selectedBoneName: string | null;
+  readonly ikEnabled: Readonly<Record<IKTarget, boolean>>;
+  readonly outputFilename: string;
+};
 
 // FBX モデルの状態
 export type FbxState = {
