@@ -10,4 +10,5 @@ export const appModeStore = {
   toRetarget(): void { set('retarget'); },
   toAnimEditor(): void { set('anim-editor'); },
   toFps(): void { set('fps'); },
+  toStageEditor(): void { set('stage-editor'); },
 };

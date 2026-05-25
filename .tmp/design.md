@@ -1,626 +1,385 @@
-# 詳細設計書 - VRM対応3Dキャラクターエディタ（Web/WebXR）
+# 設計書 - FPS ステージエディタ
 
-## 1. アーキテクチャ概要
-
-### 1.1 システム構成図
+## 1. アーキテクチャ概観
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Browser / Quest 3                       │
-│                                                             │
-│  ┌───────────────────┐    ┌──────────────────────────────┐  │
-│  │   Svelte UI Layer │    │      Three.js Core Layer     │  │
-│  │                   │    │                              │  │
-│  │  ControlPanel     │◄──►│  SceneManager                │  │
-│  │  AnimationList    │    │  ├─ VRMLoader                │  │
-│  │  LipSyncPanel     │    │  ├─ AnimationManager         │  │
-│  │  SpringBonePanel  │    │  ├─ SpringBoneController     │  │
-│  │  XRControls       │    │  ├─ RenderLoop               │  │
-│  │  ModelLoader      │    │  └─ OrbitController          │  │
-│  └─────────┬─────────┘    └──────────────┬───────────────┘  │
-│            │                             │                   │
-│            ▼                             ▼                   │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │                  Svelte Stores                       │    │
-│  │   vrmStore │ animationStore │ xrStore │ lipSyncStore │    │
-│  └─────────────────────────────────────────────────────┘    │
-│            │                             │                   │
-│            ▼                             ▼                   │
-│  ┌───────────────────┐    ┌──────────────────────────────┐  │
-│  │   LipSync Layer   │    │        XR Layer              │  │
-│  │                   │    │                              │  │
-│  │  LipSyncEngine    │    │  XRSessionManager            │  │
-│  │  JapaneseLipSync  │    │  XRUIManager (three-mesh-ui) │  │
-│  │  EnglishLipSync   │    │                              │  │
-│  └───────────────────┘    └──────────────────────────────┘  │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │              <canvas> WebGL Viewport                 │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
+既存 App.svelte
+  └─ AppMode: 'stage-editor' を追加
+       └─ StageEditorViewport.svelte（メインコンテナ）
+            ├─ StageEditorToolbar.svelte     ← 上部ツールバー
+            ├─ StageEditorShapePanel.svelte  ← 左パネル（図形選択・オブジェクト一覧）
+            ├─ <canvas>                      ← Three.js ビューポート
+            └─ StageEditorPropsPanel.svelte  ← 右パネル（位置・回転・スケール・マテリアル）
 ```
 
-### 1.2 技術スタック
+### 状態フロー
 
-| カテゴリ | ライブラリ / ツール | バージョン目安 | 用途 |
-|---|---|---|---|
-| レンダリング | three | ^0.170 | 3D描画エンジン |
-| VRMサポート | @pixiv/three-vrm | ^3.x | VRM 0.x / 1.0 読み込み・SpringBone |
-| VRMアニメーション | @pixiv/three-vrm-animation | ^3.x | .vrma 再生 |
-| UI フレームワーク | svelte | ^5.x | リアクティブUI（コンパイル後バニラJS） |
-| XR UI | three-mesh-ui | ^6.5.4 | WebXR内浮遊パネル |
-| ビルド | vite | ^6.x | バンドル / HMR |
-| 言語 | typescript | ^5.x | 型安全 |
-| 型定義 | @types/three | three対応版 | Three.js型 |
+```
+stageEditorStore（Svelte writable）
+  ├─ objects: StageObjectDef[]      ← 正規データ（SSoT）
+  ├─ selectedId: string | null
+  ├─ toolMode: 'place' | 'select'
+  ├─ activeShape: ShapeType
+  ├─ snapSize: 0.5 | 1 | 2 | 4
+  └─ previewGlbUrl: string | null   ← FPS プレビュー用 Blob URL
+
+Three.js Scene（命令型）
+  └─ meshMap: Map<id, THREE.Mesh>   ← store の objects と 1:1 同期
+```
+
+**UI → Store → Scene の一方向データフロー**を維持する。
+Svelte の `$: { ... }` リアクティブ文で store の変化を検知し、meshMap を同期する。
 
 ---
 
-## 2. ディレクトリ構成
+## 2. ファイル構成
 
 ```
 src/
-├── main.ts                      # エントリーポイント
-├── App.svelte                   # ルートコンポーネント
-│
-├── core/                        # Three.js コアロジック
-│   ├── SceneManager.ts          # シーン・カメラ・レンダラー管理
-│   ├── VRMLoader.ts             # VRMファイル読み込み/破棄
-│   ├── AnimationManager.ts      # VRMAアニメーション管理
-│   ├── SpringBoneController.ts  # Spring Bone パラメータ制御
-│   ├── OrbitController.ts       # OrbitControls ラッパー
-│   └── RenderLoop.ts            # requestAnimationFrame ループ
-│
-├── xr/                          # WebXR 関連
-│   ├── XRSessionManager.ts      # VR/ARセッションライフサイクル
-│   └── XRUIManager.ts           # three-mesh-ui XRパネル
-│
-├── lipsync/                     # リップシンク処理
-│   ├── LipSyncEngine.ts         # 統合エントリーポイント
-│   ├── JapaneseLipSync.ts       # 仮名→Viseme変換
-│   ├── EnglishLipSync.ts        # 英字パターン→Viseme変換
-│   └── visemeMaps.ts            # マッピングテーブル定数
-│
-├── stores/                      # Svelte ストア（状態管理）
-│   ├── vrmStore.ts
-│   ├── animationStore.ts
-│   ├── xrStore.ts
-│   └── lipSyncStore.ts
-│
-├── components/                  # Svelte UIコンポーネント
-│   ├── Viewport.svelte          # canvasコンテナ
-│   ├── ControlPanel.svelte      # サイドバー統括
-│   ├── ModelLoader.svelte       # D&Dドロップゾーン
-│   ├── AnimationList.svelte     # アニメーション一覧
-│   ├── AnimationControls.svelte # 再生・タイムライン
-│   ├── SpringBonePanel.svelte   # SpringBone制御UI
-│   ├── LipSyncPanel.svelte      # テキスト入力・口パク
-│   └── XRControls.svelte        # VR/ARボタン
-│
-├── types/
-│   └── index.ts                 # 共通型定義
-│
-└── utils/
-    └── fileHelpers.ts           # File API ユーティリティ
+  stage-editor/
+    types.ts                    # 型定義（ShapeType, StageObjectDef, SceneDef）
+    StageEditorScene.ts         # Three.js 初期化・グリッド・ライト・レンダーループ
+    StageEditorGizmo.ts         # ゴーストプレビュー + 選択ハイライト
+    StageEditorExporter.ts      # JSON 保存/読み込み + GLB エクスポート
+    StageEditorMeshSync.ts      # store.objects ↔ meshMap の同期ロジック
+
+  stores/
+    stageEditorStore.ts         # エディタ全体の Svelte writable store
+
+  components/
+    StageEditorViewport.svelte  # メインコンポーネント（canvas + イベント制御）
+    StageEditorToolbar.svelte   # モード切替・スナップ・保存・エクスポート・FPS プレビュー
+    StageEditorShapePanel.svelte # 図形パレット + オブジェクトリスト
+    StageEditorPropsPanel.svelte # 位置/回転/スケール + マテリアル設定
 ```
 
 ---
 
-## 3. コンポーネント設計
+## 3. データモデル（types.ts）
 
-### 3.1 コンポーネント一覧
+```typescript
+export type ShapeType = 'box' | 'sphere' | 'cylinder' | 'cone';
 
-| コンポーネント | 責務 | 依存 |
-|---|---|---|
-| SceneManager | Three.js シーン・カメラ・レンダラーの初期化と管理 | RenderLoop |
-| VRMLoader | VRMファイルのパース・シーン追加・メモリ解放 | SceneManager |
-| AnimationManager | VRMAのロード・AnimationMixer管理・再生制御 | VRMLoader |
-| SpringBoneController | VRM.springBoneManagerへのアクセス・パラメータ調整 | VRMLoader |
-| OrbitController | OrbitControlsの有効/無効切り替え（XR中は無効） | SceneManager |
-| RenderLoop | RAF ループ・delta時間管理・全更新処理の呼び出し | — |
-| XRSessionManager | immersive-vr / immersive-ar セッション管理 | SceneManager |
-| XRUIManager | three-mesh-uiでXRパネルを構築・コントローラーレイキャスト | XRSessionManager |
-| LipSyncEngine | テキスト→Visemeシーケンス生成・タイマー駆動再生 | AnimationManager |
-| JapaneseLipSync | ひらがな/カタカナ→母音→Viseme変換 | visemeMaps |
-| EnglishLipSync | ASCII英字パターン→Viseme変換 | visemeMaps |
+export type ToolMode = 'place' | 'select';
 
-### 3.2 各コンポーネントの詳細
+export type SnapSize = 0.5 | 1 | 2 | 4;
 
-#### SceneManager
+export type MaterialDef = {
+  color: string;                 // CSS hex e.g. "#4488cc"
+  roughness: number;             // 0.0 - 1.0
+  metalness: number;             // 0.0 - 1.0
+  textureDataUrl: string | null; // data:image/... or null
+};
 
-- **目的**: Three.js の Scene / PerspectiveCamera / WebGLRenderer を初期化・管理する唯一の窓口
-- **公開インターフェース**:
-  ```typescript
-  interface SceneManagerAPI {
-    readonly scene: THREE.Scene;
-    readonly camera: THREE.PerspectiveCamera;
-    readonly renderer: THREE.WebGLRenderer;
-    init(canvas: HTMLCanvasElement): void;
-    resize(width: number, height: number): void;
-    dispose(): void;
-  }
-  ```
-- **内部実装方針**:
-  - `renderer.xr.enabled = true` でWebXR対応を有効化
-  - DirectionalLight（intensity: 1.0）+ AmbientLight（intensity: 0.5）のデフォルト照明
-  - GridHelper をオプション表示（Svelte storeの値を参照）
-  - `renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))` でPixelRatio上限を2に制限（Quest 3 負荷対策）
+export type StageObjectDef = {
+  id: string;                        // crypto.randomUUID()
+  name: string;                      // 表示名 e.g. "Box_001"
+  shape: ShapeType;
+  position: readonly [number, number, number];  // world XYZ
+  rotation: readonly [number, number, number];  // degrees XYZ (Euler)
+  scale: readonly [number, number, number];      // XYZ
+  material: MaterialDef;
+};
 
-#### VRMLoader
-
-- **目的**: VRMファイルの読み込み・シーンへの追加・既存モデルの破棄
-- **公開インターフェース**:
-  ```typescript
-  interface VRMLoaderAPI {
-    load(file: File): Promise<VRM>;
-    unload(): void;
-    readonly current: VRM | null;
-  }
-  ```
-- **内部実装方針**:
-  - `GLTFLoader` に `VRMLoaderPlugin` を登録
-  - `File` → `URL.createObjectURL()` → GLTFLoader で読み込み
-  - 読み込み後に `URL.revokeObjectURL()` でメモリ解放
-  - 既存 VRM の `dispose()` を呼び出してからシーン削除
-  - VRM0/VRM1 の差異は `@pixiv/three-vrm` の抽象APIが吸収するためローダー側では意識しない
-
-#### AnimationManager
-
-- **目的**: 複数のVRMAファイルを管理し、AnimationMixerによる再生を制御する
-- **公開インターフェース**:
-  ```typescript
-  type AnimationEntry = { name: string; clip: THREE.AnimationClip };
-
-  interface AnimationManagerAPI {
-    loadVRMA(file: File): Promise<void>;
-    play(name: string): void;
-    stop(): void;
-    setLoop(enabled: boolean): void;
-    setSpeed(multiplier: number): void;
-    seek(normalizedTime: number): void;  // 0.0 〜 1.0
-    resetTPose(): void;
-    update(delta: number): void;
-    readonly animations: AnimationEntry[];
-    readonly currentAction: THREE.AnimationAction | null;
-    readonly progress: number;  // 0.0 〜 1.0
-  }
-  ```
-- **内部実装方針**:
-  - VRMAロード: `GLTFLoader` + `VRMAnimationLoaderPlugin`
-  - `createVRMAnimationClip(vrmAnimation, vrm)` でAnimationClipを生成
-  - AnimationMixerは VRM 切り替え時に再生成
-  - `animations` は `Map<string, THREE.AnimationClip>` で管理（ファイル名をキー）
-  - 重複ファイル名は `name_1`, `name_2` 形式でリネーム
-
-#### SpringBoneController
-
-- **目的**: VRM Spring Bone の有効/無効切り替えとパラメータのリアルタイム調整
-- **公開インターフェース**:
-  ```typescript
-  interface SpringBoneControllerAPI {
-    setEnabled(enabled: boolean): void;
-    setStiffness(value: number): void;   // 0.0 〜 4.0
-    setDamping(value: number): void;     // 0.0 〜 1.0
-    reset(): void;
-    update(delta: number): void;
-  }
-  ```
-- **内部実装方針**:
-  - `vrm.springBoneManager` が存在しない場合はno-op
-  - パラメータ変更は各JointのsettingsオブジェクトをVRM APIで書き換え
-  - 無効時は `update()` をスキップしてCPU負荷を削減
-
-#### LipSyncEngine
-
-- **目的**: テキストをVisemeシーケンスに変換し、タイプライター表示と同期してVRM Expressionをアニメーションする
-- **公開インターフェース**:
-  ```typescript
-  type VisemeKey = 'aa' | 'ih' | 'ou' | 'ee' | 'oh' | 'neutral';
-
-  interface LipSyncEngineAPI {
-    play(text: string, charsPerSecond: number): void;
-    stop(): void;
-    readonly displayedText: string;   // タイプライター表示用（Storeに反映）
-    readonly isPlaying: boolean;
-  }
-  ```
-- **内部実装方針**:
-  - テキストを1文字ずつ処理するタイマーを `setInterval` で駆動
-  - 各文字を `JapaneseLipSync` / `EnglishLipSync` に振り分け（文字ごとにUnicode範囲チェック）
-  - Viseme適用: `vrm.expressionManager.setValue(visemeKey, weight)` を `requestAnimationFrame` 内で補間
-  - 停止・完了時は `setValue('neutral', 1.0)` で閉口状態に戻す
-  - 次の Viseme への遷移は線形補間（LERP、係数0.3/frame）でなめらかに
-
-#### XRSessionManager
-
-- **目的**: immersive-vr / immersive-ar セッションのライフサイクルを管理する
-- **公開インターフェース**:
-  ```typescript
-  type XRMode = 'vr' | 'ar';
-
-  interface XRSessionManagerAPI {
-    isSupported(mode: XRMode): Promise<boolean>;
-    enterXR(mode: XRMode): Promise<void>;
-    exitXR(): Promise<void>;
-    readonly activeMode: XRMode | null;
-    readonly isActive: boolean;
-  }
-  ```
-- **内部実装方針**:
-  - `navigator.xr.isSessionSupported()` で事前にサポート確認
-  - セッション開始: `renderer.xr.setSession()` で Three.js に委譲
-  - VR↔AR切り替え: 現セッション終了 → 新セッション開始（1フレーム待機）
-  - セッション中は OrbitControls を無効化
-  - AR時: `sessionInit.requiredFeatures = ['local-floor', 'hit-test']`, Quest 3パススルー用に `'dom-overlay'` をオプションで追加
-
-#### XRUIManager
-
-- **目的**: three-mesh-ui を使ってXRセッション中に浮遊する操作パネルを表示する
-- **内部実装方針**:
-  - セッション開始時にカメラ正面1.5m の位置にパネルをスポーン
-  - アニメーションリスト・再生ボタン・リップシンク入力の主要3機能を提供
-  - コントローラーの `selectstart` イベントでレイキャストを実行しボタン判定
-  - デスクトップUIのSvelteストアと同一ストアを参照して状態を同期
-
----
-
-## 4. データフロー
-
-### 4.1 VRM読み込みフロー
-
-```
-[ユーザー: ファイルD&D]
-        │
-        ▼
-  ModelLoader.svelte
-  (FileList取得)
-        │
-        ▼
-  VRMLoader.load(file)
-  ├─ URL.createObjectURL()
-  ├─ GLTFLoader + VRMLoaderPlugin
-  └─ URL.revokeObjectURL()
-        │
-        ▼
-  vrmStore.set(vrm)
-        │
-        ├──► AnimationManager.setVRM(vrm)  (Mixer再生成)
-        ├──► SpringBoneController.setVRM(vrm)
-        └──► LipSyncEngine.setVRM(vrm)
+export type SceneDef = {
+  version: 1;
+  objects: StageObjectDef[];
+};
 ```
 
-### 4.2 アニメーション再生フロー
-
-```
-[ユーザー: リスト選択]
-        │
-        ▼
-  AnimationList.svelte
-        │
-        ▼
-  animationStore.selectAnimation(name)
-        │
-        ▼
-  AnimationManager.play(name)
-  ├─ mixer.clipAction(clip)
-  ├─ action.setLoop(LoopRepeat / LoopOnce)
-  └─ action.play()
-        │
-        ▼
-  RenderLoop.update(delta)
-  └─ mixer.update(delta)
-```
-
-### 4.3 リップシンクフロー
-
-```
-[ユーザー: テキスト入力 → 再生ボタン]
-        │
-        ▼
-  LipSyncPanel.svelte
-        │
-        ▼
-  LipSyncEngine.play(text, speed)
-        │
-        ▼
-  文字ループ (setInterval)
-  ├─ isJapanese(char) → JapaneseLipSync.toViseme(char)
-  └─ isAscii(char)    → EnglishLipSync.toViseme(char)
-        │
-        ▼
-  lipSyncStore.update({ displayedText, currentViseme })
-        │
-        ▼
-  RenderLoop内でVRM Expression補間
-  └─ vrm.expressionManager.setValue(viseme, weight)
-```
-
-### 4.4 WebXR切り替えフロー
-
-```
-[ユーザー: VR/ARボタン押下]
-        │
-        ▼
-  XRControls.svelte
-        │
-        ▼
-  XRSessionManager.enterXR(mode)
-  ├─ 既存セッションがあれば exitXR() を先に実行
-  ├─ navigator.xr.requestSession(mode, sessionInit)
-  ├─ renderer.xr.setSession(session)
-  └─ OrbitController.setEnabled(false)
-        │
-        ▼
-  xrStore.set({ activeMode: mode, isActive: true })
-        │
-        ▼
-  XRUIManager.spawn()  ← XRパネルをカメラ正面に配置
+### デフォルトマテリアル
+```typescript
+export const DEFAULT_MATERIAL: MaterialDef = {
+  color: '#888888',
+  roughness: 0.7,
+  metalness: 0.0,
+  textureDataUrl: null,
+};
 ```
 
 ---
 
-## 5. 型定義
+## 4. ストア設計（stageEditorStore.ts）
 
+```typescript
+type StageEditorState = {
+  objects: StageObjectDef[];
+  selectedId: string | null;
+  toolMode: ToolMode;
+  activeShape: ShapeType;
+  snapSize: SnapSize;
+  previewGlbUrl: string | null;
+};
+
+// writable + 操作関数を返すファクトリ
+export const stageEditorStore = createStageEditorStore();
+```
+
+操作関数（ミューテーション）:
+- `addObject(def: Omit<StageObjectDef, 'id' | 'name'>): string` → id 返却
+- `updateObject(id: string, partial: Partial<StageObjectDef>): void`
+- `removeObject(id: string): void`
+- `setSelected(id: string | null): void`
+- `setToolMode(mode: ToolMode): void`
+- `setActiveShape(shape: ShapeType): void`
+- `setSnapSize(size: SnapSize): void`
+- `setPreviewGlbUrl(url: string | null): void`
+
+---
+
+## 5. Three.js シーン設計（StageEditorScene.ts）
+
+### 初期化
+```
+renderer: WebGLRenderer（antialias, shadows）
+scene: Scene
+  ├─ HemisphereLight (sky: #8dc1de, ground: #445544, intensity: 1.5)
+  ├─ DirectionalLight (castShadow, position: (10,20,10))
+  ├─ GridHelper (size: 100, divisions: 100, step: 1)  ← 補助グリッド
+  └─ [動的 Mesh 群]
+camera: PerspectiveCamera (fov: 60)
+  └─ 初期位置: (10, 15, 20), lookAt: (0, 0, 0)
+```
+
+### OrbitControls 設定
+```typescript
+// three/addons/controls/OrbitControls.js を直接使用
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 1;
+controls.maxDistance = 200;
+controls.maxPolarAngle = Math.PI * 0.49;  // 地面下まで回らない
+```
+
+`OrbitController.ts`（class 実装）は流用しない。
+ステージエディタ専用のファクトリ関数 `createStageEditorOrbit` として実装し、class 禁止規約に従う。
+
+### レンダーループ
+```typescript
+renderer.setAnimationLoop(() => {
+  controls.update();   // damping
+  ghost.update();      // ゴースト位置更新
+  renderer.render(scene, camera);
+});
+```
+
+---
+
+## 6. グリッドスナップとレイキャスト（StageEditorScene.ts）
+
+### XZ 平面への投影
+```typescript
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);  // y=0 平面
+
+function getSnappedPosition(event: MouseEvent, snapSize: number): THREE.Vector3 | null {
+  raycaster.setFromCamera(ndc(event, canvas), camera);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(groundPlane, hit)) return null;
+  return new THREE.Vector3(
+    Math.round(hit.x / snapSize) * snapSize,
+    0,
+    Math.round(hit.z / snapSize) * snapSize,
+  );
+}
+```
+
+- **配置モード**: mousemove → `getSnappedPosition` → ゴーストを移動
+- **選択モード**: click → `raycaster.intersectObjects(meshes)` → 最近傍を選択
+
+### OrbitControls との競合回避
+- `mousemove` は常に処理（OrbitControls は dragstart/dragend で管理）
+- `click` は `mousedown` からのドラッグ距離 < 3px の場合のみ処理
+
+---
+
+## 7. ゴーストプレビュー（StageEditorGizmo.ts）
+
+```typescript
+type StageEditorGizmo = {
+  showGhost(shape: ShapeType, pos: THREE.Vector3): void;
+  hideGhost(): void;
+  setSelection(mesh: THREE.Mesh | null): void;
+  clearSelection(): void;
+  dispose(): void;
+};
+```
+
+### ゴーストメッシュ
+- 半透明マテリアル: `MeshStandardMaterial({ color: 0x4488ff, opacity: 0.4, transparent: true })`
+- shape が切り替わるたびに geometry を差し替え
+- シーンには常時 1 つだけ存在（配置確定時は `visible = false`）
+
+### 選択ハイライト
+- 選択時に対象 Mesh のマテリアルを clone し `emissive = 0x224422` を設定
+- 選択解除時に元のマテリアルに戻す
+
+---
+
+## 8. Mesh 生成（StageEditorMeshSync.ts）
+
+### 図形 → Geometry マッピング
+```typescript
+function createGeometry(shape: ShapeType): THREE.BufferGeometry {
+  switch (shape) {
+    case 'box':      return new THREE.BoxGeometry(1, 1, 1);
+    case 'sphere':   return new THREE.SphereGeometry(0.5, 16, 12);
+    case 'cylinder': return new THREE.CylinderGeometry(0.5, 0.5, 1, 16);
+    case 'cone':     return new THREE.ConeGeometry(0.5, 1, 16);
+  }
+}
+```
+
+### マテリアル → Three.js MeshStandardMaterial
+- `textureDataUrl` がある場合: `TextureLoader().load(dataUrl)` でテクスチャ生成
+- テクスチャは `Blob URL` ではなく `data: URL` で保持（JSON シリアライズ可能）
+
+### store 変化 → meshMap 同期
+```typescript
+// 追加
+function syncAdd(def: StageObjectDef): void { ... }
+
+// 更新（position/rotation/scale/material）
+function syncUpdate(def: StageObjectDef, mesh: THREE.Mesh): void { ... }
+
+// 削除
+function syncRemove(id: string): void { mesh.geometry.dispose(); ... }
+```
+
+---
+
+## 9. エクスポート（StageEditorExporter.ts）
+
+### JSON 保存
+```typescript
+function saveJson(objects: StageObjectDef[]): void {
+  const def: SceneDef = { version: 1, objects };
+  const blob = new Blob([JSON.stringify(def, null, 2)], { type: 'application/json' });
+  downloadBlob(blob, 'stage.json');
+}
+```
+
+### JSON 読み込み
+```typescript
+function loadJson(file: File): Promise<SceneDef>
+// → JSON.parse + バージョンチェック + 型バリデーション
+```
+
+### GLB エクスポート
+```typescript
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+async function exportGlb(scene: THREE.Scene, meshMap: Map<string, THREE.Mesh>): Promise<ArrayBuffer> {
+  // グリッドヘルパー等を除いた Mesh だけのグループを作る
+  const exportGroup = new THREE.Group();
+  for (const mesh of meshMap.values()) exportGroup.add(mesh.clone());
+
+  return new Promise((resolve, reject) => {
+    const exporter = new GLTFExporter();
+    exporter.parse(exportGroup, (result) => resolve(result as ArrayBuffer), reject, { binary: true });
+  });
+}
+```
+
+- `Octree.fromGraphNode()` は `THREE.Mesh` を再帰的に収集するので、エクスポートグループに Mesh が含まれていれば衝突が機能する
+- テクスチャは `binary: true` で GLB に埋め込まれる
+
+---
+
+## 10. FPS プレビューモード
+
+### フロー
+```
+[FPS でテスト] ボタン
+  → exportGlb() → ArrayBuffer
+  → Blob → URL.createObjectURL()
+  → stageEditorStore.setPreviewGlbUrl(url)
+  → appModeStore.toFps()
+
+FpsViewport.svelte
+  → previewGlbUrl が store にあれば collision-world.glb の代わりに使用
+  → 「エディタへ戻る」ボタン
+       → URL.revokeObjectURL(url)  ← メモリ解放
+       → stageEditorStore.setPreviewGlbUrl(null)
+       → appModeStore.toStageEditor()
+```
+
+### FpsViewport の改修
+```typescript
+// 既存の load 呼び出しを変更
+const mapUrl = get(stageEditorStore).previewGlbUrl
+  ?? `${base}models/gltf/collision-world.glb`;
+world.load(scene, mapUrl, ...);
+```
+
+### AppMode の拡張
 ```typescript
 // src/types/index.ts
+export type AppMode = 'editor' | 'game' | 'retarget' | 'anim-editor' | 'fps' | 'stage-editor';
 
-import type { VRM } from '@pixiv/three-vrm';
-import type * as THREE from 'three';
-
-// Viseme
-export type VisemeKey = 'aa' | 'ih' | 'ou' | 'ee' | 'oh' | 'neutral';
-
-// アニメーションエントリー
-export type AnimationEntry = {
-  readonly name: string;
-  readonly clip: THREE.AnimationClip;
-  readonly duration: number;
-};
-
-// アニメーション再生速度プリセット
-export type SpeedPreset = 0.25 | 0.5 | 1.0 | 2.0;
-
-// XRモード
-export type XRMode = 'vr' | 'ar';
-
-// XRサポート状態
-export type XRSupportState = {
-  readonly vr: boolean;
-  readonly ar: boolean;
-};
-
-// アプリケーション全体エラー
-export type AppError = {
-  readonly type: 'load' | 'xr' | 'animation' | 'lipsync';
-  readonly message: string;
-  readonly detail?: string;
-};
-
-// Spring Bone パラメータ
-export type SpringBoneParams = {
-  stiffness: number;   // 0.0 〜 4.0
-  damping: number;     // 0.0 〜 1.0
-  enabled: boolean;
-};
-
-// vrmStore の状態
-export type VRMState = {
-  readonly vrm: VRM | null;
-  readonly loading: boolean;
-  readonly error: AppError | null;
-};
-
-// animationStore の状態
-export type AnimationState = {
-  readonly animations: AnimationEntry[];
-  readonly currentName: string | null;
-  readonly isPlaying: boolean;
-  readonly isLooping: boolean;
-  readonly speed: SpeedPreset;
-  readonly progress: number;
-};
-
-// lipSyncStore の状態
-export type LipSyncState = {
-  readonly isPlaying: boolean;
-  readonly displayedText: string;
-  readonly currentViseme: VisemeKey;
-  readonly charsPerSecond: number;
-};
-
-// xrStore の状態
-export type XRState = {
-  readonly support: XRSupportState;
-  readonly activeMode: XRMode | null;
-  readonly isActive: boolean;
-};
+// src/stores/appModeStore.ts
+toStageEditor(): void { set('stage-editor'); },
 ```
 
 ---
 
-## 6. Visemeマッピング設計
+## 11. UI レイアウト
 
-```typescript
-// src/lipsync/visemeMaps.ts
-
-export const JP_VISEME_MAP: Readonly<Record<string, VisemeKey>> = {
-  // あ行
-  'あ':'aa','ア':'aa',
-  // い行
-  'い':'ih','イ':'ih',
-  // う行
-  'う':'ou','ウ':'ou',
-  // え行
-  'え':'ee','エ':'ee',
-  // お行
-  'お':'oh','オ':'oh',
-  // か行 → 母音で決定
-  'か':'aa','き':'ih','く':'ou','け':'ee','こ':'oh',
-  'カ':'aa','キ':'ih','ク':'ou','ケ':'ee','コ':'oh',
-  // （さ〜わ行、濁音、半濁音、拗音を同様に列挙）
-  // 拗音（きゃ等）は直前の小文字に従う
-  // ん・ッ → neutral
-  'ん':'neutral','ン':'neutral','っ':'neutral','ッ':'neutral',
-};
-
-// 英語: 母音文字 → Viseme
-export const EN_VOWEL_MAP: Readonly<Record<string, VisemeKey>> = {
-  'a':'aa','A':'aa',
-  'e':'ee','E':'ee',
-  'i':'ih','I':'ih',
-  'o':'oh','O':'oh',
-  'u':'ou','U':'ou',
-};
-// 子音はデフォルト neutral
 ```
-
-**言語判定ロジック**:
-```typescript
-const isJapanese = (char: string): boolean => {
-  const code = char.charCodeAt(0);
-  return (code >= 0x3040 && code <= 0x309F)   // ひらがな
-      || (code >= 0x30A0 && code <= 0x30FF);  // カタカナ
-};
+┌──────────────────────────────────────────────────────────────────┐
+│ [← エディタ]  [Place|Select]  スナップ:[1▼]  [JSON保存][JSON読込]  │  ← Toolbar (48px)
+│                               [GLBエクスポート]  [🎮 FPSでテスト] │
+├──────────┬───────────────────────────────────┬───────────────────┤
+│          │                                   │ Properties        │
+│ 図形     │                                   │ ─────────────     │
+│ [Box]    │       3D Viewport (canvas)        │ 位置 X Y Z        │
+│ [Sphere] │                                   │ 回転 X Y Z        │
+│ [Cylind] │                                   │ スケール X Y Z    │
+│ [Cone]   │                                   │ ─────────────     │
+│ ─────    │                                   │ マテリアル        │
+│ Objects  │                                   │ Color [   ]       │
+│ Box_001  │                                   │ Roughness ─●──    │
+│ Box_002  │                                   │ Metalness ●────   │
+│ Sphere_1 │                                   │ Texture [upload]  │
+└──────────┴───────────────────────────────────┴───────────────────┘
+  220px            flex: 1                          240px
 ```
 
 ---
 
-## 7. Svelte ストア設計
+## 12. 既存コードへの統合変更
 
-```typescript
-// src/stores/vrmStore.ts
-import { writable } from 'svelte/store';
-import type { VRMState } from '../types';
-
-export const vrmStore = writable<VRMState>({
-  vrm: null,
-  loading: false,
-  error: null,
-});
-
-// src/stores/animationStore.ts
-export const animationStore = writable<AnimationState>({
-  animations: [],
-  currentName: null,
-  isPlaying: false,
-  isLooping: true,
-  speed: 1.0,
-  progress: 0,
-});
-
-// src/stores/xrStore.ts
-export const xrStore = writable<XRState>({
-  support: { vr: false, ar: false },
-  activeMode: null,
-  isActive: false,
-});
-
-// src/stores/lipSyncStore.ts
-export const lipSyncStore = writable<LipSyncState>({
-  isPlaying: false,
-  displayedText: '',
-  currentViseme: 'neutral',
-  charsPerSecond: 8,
-});
-```
-
----
-
-## 8. エラーハンドリング
-
-### 8.1 エラー分類と対処
-
-| エラータイプ | 原因例 | ユーザー通知 | 処理 |
-|---|---|---|---|
-| `load` | 非VRMファイル・破損 | トーストで「読み込み失敗」 | vrmStore.error にセット |
-| `animation` | 非VRMAファイル・VRM未ロード時の読み込み | トーストで警告 | animationStore は変更しない |
-| `xr` | WebXR非対応・セッション確立失敗 | ボタンをグレーアウト + ツールチップ | xrStore に反映 |
-| `lipsync` | VRM Expression 未定義 | サイレント（該当文字をneutralに変換） | フォールバック |
-
-### 8.2 エラー通知
-
-- エラーは `AppError` 型で統一
-- UI通知はトーストコンポーネント（3秒自動消去）
-- `console.error` でスタックトレースをコンソールに出力
-- XSS対策: テキスト挿入は Svelte の `{text}` バインディング経由のみ（`@html` 不使用）
-
----
-
-## 9. セキュリティ設計
-
-| 項目 | 対策 |
+| ファイル | 変更内容 |
 |---|---|
-| XSS | Svelte テンプレートの `{text}` 経由のみで描画（`@html` 禁止） |
-| ファイル読み込み | `File` オブジェクトのみ受付（`fetch` 等での外部URLアクセスなし） |
-| Object URL | 使用後は必ず `URL.revokeObjectURL()` で解放 |
-| MIME チェック | 拡張子確認（`.vrm` / `.vrma`）+ GLTFLoader 失敗時のエラー処理 |
+| `src/types/index.ts` | `AppMode` に `'stage-editor'` を追加 |
+| `src/stores/appModeStore.ts` | `toStageEditor()` メソッドを追加 |
+| `src/components/ModeToggle.svelte` | ステージエディタへの遷移ボタンを追加 |
+| `src/components/FpsViewport.svelte` | `previewGlbUrl` を参照してマップ URL を切り替え |
+| `src/App.svelte`（または相当コンポーネント） | `mode === 'stage-editor'` で `StageEditorViewport` をレンダリング |
+
+**vite.config.ts の変更は不要**（既存アプリの AppMode として統合するため）。
 
 ---
 
-## 10. パフォーマンス最適化
+## 13. 技術リスクと対策
 
-### 10.1 レンダリング
-
-- `renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))` — Quest 3 の高解像度ディスプレイによる過負荷を防止
-- `renderer.shadowMap.enabled = false` — エディタ段階では影なし
-- MToon シェーダーの `isCutoff` モード（アルファ判定の簡略化）を推奨
-- フレームループ内での GC 発生を防ぐため Vector3/Quaternion は再利用
-
-### 10.2 Spring Bone
-
-- Spring Bone 無効時は `update()` をスキップ
-- ボーン数が多い VRM の場合はワーニングを出し、ユーザーに Spring Bone オフを促す
-
-### 10.3 アニメーション
-
-- VRMA の AnimationClip は `animations Map` に保持してファイル再読み込みを不要にする
-- シーク操作時の `mixer.setTime()` は重いため、スライダーの `input` イベントではなく `change` イベントで実行
-
-### 10.4 メモリ
-
-- VRM 差し替え時に旧モデルの `.dispose()` を呼び GeometryBuffer を確実に解放
-- テクスチャは `texture.dispose()` を明示的に呼び出す
-- VRMA ファイルは削除ボタンで `animations Map` から削除可能にする（将来対応）
+| リスク | 詳細 | 対策 |
+|---|---|---|
+| Octree 互換性 | `fromGraphNode` は `Mesh` ノードが world transform を持つことを前提 | エクスポートグループに `clone()` を使い、`applyMatrix4` で transform を焼き込む |
+| data: URL サイズ | テクスチャを data URL で JSON に埋め込むと巨大になる | テクスチャは 1024px 上限でリサイズしてから格納 |
+| Blob URL リーク | FPS プレビュー後に URL が残る | `appModeStore` の subscribe で `fps → 他` の遷移を検知し自動 revoke |
+| OrbitControls + Raycaster 競合 | ドラッグ中に click 判定が誤発火 | `mousedown` 座標と `mouseup` 座標の距離が 4px 未満の場合のみ配置/選択を実行 |
 
 ---
 
-## 11. デプロイメント
+## 14. 実装順序（タスク分割の指針）
 
-### 11.1 ビルド設定（vite.config.ts）
-
-```typescript
-import { defineConfig } from 'vite';
-import { svelte } from '@sveltejs/vite-plugin-svelte';
-
-export default defineConfig({
-  plugins: [svelte()],
-  build: {
-    target: 'es2020',      // Quest 3 Meta Browser 対応
-    outDir: 'dist',
-    assetsInlineLimit: 0,  // バイナリ系アセットをインライン化しない
-  },
-});
-```
-
-### 11.2 Netowl デプロイ手順
-
-1. `npm run build` で `dist/` を生成
-2. FTP/SFTP で `dist/` 配下のファイルをサーバーにアップロード
-3. Netowl コントロールパネルで SSL 証明書（Let's Encrypt）を有効化
-4. **WebXR は HTTPS 必須** — `https://` でアクセスされることを確認
-5. 将来 Rapier.js 導入時: `.htaccess` に `AddType application/wasm .wasm` を追加
-
----
-
-## 12. 実装上の注意事項
-
-1. **OrbitControls と WebXR の共存**: `renderer.xr.isPresenting` が `true` の間は OrbitControls の `enabled` を `false` にすること。XR セッション中に OrbitControls が有効だとカメラ行列が競合する。
-
-2. **VRM の `update()` 呼び出し順**: `vrm.update(delta)` は `mixer.update(delta)` の **後** に呼ぶこと。Spring Bone はアニメーション後のボーン位置を基準に演算するため順序が重要。
-
-3. **VRM Expression と LipSync の競合**: アニメーションクリップが Expression を書き換える場合と LipSync が書き換える場合が競合する。LipSync 中はアニメーション側の Expression トラックのウェイトを 0 にする処理が必要。
-
-4. **Svelte 5 の runes モード**: Svelte 5 では `$state` / `$derived` / `$effect` runes を使用する。`writable` との混在は避け、ストア設計を統一する（プロジェクト開始前に Svelte 4/5 どちらを使うか確定すること）。
-
-5. **three-mesh-ui のフォント**: XR パネルでテキストを表示するには `MSDF` フォントファイルが必要。`three-mesh-ui` 付属のサンプルフォントを初期使用し、日本語表示が必要な場合は日本語対応 MSDF フォントを別途生成すること。
-
-6. **Quest 3 AR モードの背景**: AR（パススルー）時は `renderer.setClearAlpha(0)` を設定してシーン背景を透明にすること。デフォルトでは黒背景になり現実が見えなくなる。
+1. `types.ts` + `stageEditorStore.ts` の型・ストア骨格
+2. `StageEditorScene.ts` — Three.js 初期化・グリッド・OrbitControls
+3. `StageEditorMeshSync.ts` — 図形生成・meshMap 管理
+4. `StageEditorGizmo.ts` — ゴーストプレビュー・選択ハイライト
+5. `StageEditorViewport.svelte` — canvas・イベント制御・store → scene 同期
+6. `StageEditorShapePanel.svelte` + `StageEditorPropsPanel.svelte`
+7. `StageEditorToolbar.svelte`
+8. `StageEditorExporter.ts` — JSON / GLB
+9. AppMode 統合（types, store, ModeToggle, App.svelte）
+10. FPS プレビュー連携（FpsViewport 改修）

@@ -2,6 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import * as THREE from 'three';
   import { appModeStore } from '../stores/appModeStore';
+  import { stageEditorStore } from '../stores/stageEditorStore';
+  import { get } from 'svelte/store';
   import { createFpsPlayer } from '../fps/FpsPlayer';
   import { createFpsSpheres } from '../fps/FpsSpheres';
   import { createFpsWorld } from '../fps/FpsWorld';
@@ -143,9 +145,11 @@
     });
     resizeObserver.observe(canvas);
 
-    // マップロード
+    // マップロード（ステージエディタからのプレビューURL優先）
     const base = import.meta.env.BASE_URL ?? '/';
-    world.load(scene, `${base}models/gltf/collision-world.glb`, (p) => {
+    const previewUrl = get(stageEditorStore).previewGlbUrl;
+    const mapUrl = previewUrl ?? `${base}models/gltf/collision-world.glb`;
+    world.load(scene, mapUrl, (p) => {
       loadProgress = Math.round(p * 100);
     }).then(() => {
       loading = false;
@@ -196,6 +200,14 @@
     }
     if (onBack) {
       onBack();
+      return;
+    }
+    // ステージエディタからのプレビューなら戻先はエディタ
+    const previewUrl = get(stageEditorStore).previewGlbUrl;
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      stageEditorStore.setPreviewGlbUrl(null);
+      appModeStore.toStageEditor();
     } else {
       appModeStore.toEditor();
     }

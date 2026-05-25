@@ -22,8 +22,12 @@ export function createFpsWorld(): FpsWorld {
           url,
           resolve,
           (event) => {
-            if (onProgress && event.lengthComputable) {
-              onProgress(event.loaded / event.total);
+            if (onProgress) {
+              // Blob URL は lengthComputable が false になる場合があるので、その場合は不確定として 50% を渡す
+              const progress = event.lengthComputable
+                ? event.loaded / event.total
+                : 0.5;
+              onProgress(progress);
             }
           },
           reject,

@@ -8,6 +8,7 @@
   import ZoomControls from './components/ZoomControls.svelte';
   import AnimEditor from './components/AnimEditor.svelte';
   import FpsViewport from './components/FpsViewport.svelte';
+  import StageEditorViewport from './components/StageEditorViewport.svelte';
   import { appModeStore } from './stores/appModeStore';
   import type { VRMLoader } from './core/VRMLoader';
   import type { AnimationManager } from './core/AnimationManager';
@@ -80,6 +81,8 @@
     <AnimEditor />
   {:else if $appModeStore === 'fps'}
     <FpsViewport />
+  {:else if $appModeStore === 'stage-editor'}
+    <StageEditorViewport />
   {:else}
     <RetargetViewport />
   {/if}

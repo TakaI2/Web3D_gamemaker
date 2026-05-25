@@ -109,7 +109,7 @@ export type SlotState = {
 };
 
 // アプリモード
-export type AppMode = 'editor' | 'game' | 'retarget' | 'anim-editor' | 'fps';
+export type AppMode = 'editor' | 'game' | 'retarget' | 'anim-editor' | 'fps' | 'stage-editor';
 
 // アニメーションエディタ - IK ターゲット
 export type IKTarget = 'leftHand' | 'rightHand' | 'leftFoot' | 'rightFoot';

@@ -12,6 +12,9 @@
   <button class="mode-btn fps-btn" on:click={() => appModeStore.toFps()}>
     FPS ▶
   </button>
+  <button class="mode-btn stage-btn" on:click={() => appModeStore.toStageEditor()}>
+    ステージ編集
+  </button>
 </div>
 
 <style>
@@ -40,4 +43,6 @@
   .retarget-btn:hover { background: #58b; }
   .fps-btn { background: #a64; }
   .fps-btn:hover { background: #b75; }
+  .stage-btn { background: #557; }
+  .stage-btn:hover { background: #668; }
 </style>
