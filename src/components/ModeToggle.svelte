@@ -15,6 +15,9 @@
   <button class="mode-btn stage-btn" on:click={() => appModeStore.toStageEditor()}>
     ステージ編集
   </button>
+  <a class="mode-btn cloth-btn" href="/cloth-editor/" target="_blank">
+    布エディタ ↗
+  </a>
 </div>
 
 <style>
@@ -45,4 +48,6 @@
   .fps-btn:hover { background: #b75; }
   .stage-btn { background: #557; }
   .stage-btn:hover { background: #668; }
+  .cloth-btn { background: #466; text-decoration: none; text-align: center; }
+  .cloth-btn:hover { background: #577; }
 </style>

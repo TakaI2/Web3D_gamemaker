@@ -10,10 +10,22 @@ import { OrbitControls } from 'https://esm.sh/three@0.184.0/examples/jsm/control
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 
 // ---- Cloth geometry constants ----
-const clothWidth   = 1;
-const clothHeight  = 1;
-const sphereRadius = 0.15;
+const sphereRadius  = 0.15;
 const CLOTH_SPACING = 1.3; // インスタンス間隔 (m)
+
+// ---- Shape params (UI で変更可) ----
+const shapeParams = {
+  type:        'rect',  // 'rect' | 'trapezoid' | 'semicircle'
+  topWidth:    1.0,
+  bottomWidth: 1.0,
+  height:      1.0,
+  pinCount:    7,       // 上端に打つピン数
+  topCurve:    0.0,     // 上端曲率: + で中央が前へ（肩フィット）, - で後ろへ
+};
+
+// ---- Picking constants ----
+const GRAB_NONE        = -1;      // grabbedIndexUniform の「掴みなし」値
+const GRAB_THRESHOLD_PX = 22;    // スクリーン上の最大ピッキング距離 (px)
 
 // ---- Mutable settings ----
 let clothNumSegments = 30;
@@ -41,6 +53,23 @@ const instances = [];
 let fpsFrameCount = 0;
 let fpsLastTime   = performance.now();
 
+// ---- Frame counter for readback throttle ----
+let frameCounter = 0;
+
+// ---- Grab state ----
+const grab = {
+  active:      false,
+  instanceIdx: -1,
+  vertexIdx:   -1,
+  dragPlane:   new THREE.Plane(),
+  raycaster:   new THREE.Raycaster(),
+  highlightMesh: null,
+  // Per-instance CPU position snapshots (updated async from GPU)
+  snapshots:       [],   // Float32Array[], indexed by instances index
+  snapshotPending: [],   // bool[]
+  snapshotAge:     [],   // number[] (frames since last readback)
+};
+
 // ---- Runtime params ----
 const params = {
   wireframe: false,
@@ -63,7 +92,39 @@ timer.connect(document);
 // Per-instance creation / teardown
 // ============================================================
 
-function buildVerletGeometry(segs) {
+/**
+ * グリッド上の (xi, yi) → ワールド座標 を返す。
+ * yi=0 が上端（ピン行）、yi=segs が下端。
+ */
+function calcVertexPos(xi, yi, segs, sp) {
+  const t = yi / segs; // 0=上端, 1=下端
+
+  // X: 形状に応じて幅を変化させる
+  let posX;
+  if (sp.type === 'trapezoid') {
+    // 上から下へ topWidth→bottomWidth にリニア補間
+    const halfW = (sp.topWidth + (sp.bottomWidth - sp.topWidth) * t) * 0.5;
+    posX = (xi / segs) * 2 * halfW - halfW;
+  } else if (sp.type === 'semicircle') {
+    // 上端は topWidth の直線、下端は bottomWidth の半円弧
+    const straightX = (xi / segs - 0.5) * sp.topWidth;
+    const angle     = Math.PI * (xi / segs) - Math.PI * 0.5; // -π/2 〜 π/2
+    const circleX   = Math.sin(angle) * sp.bottomWidth * 0.5;
+    posX = straightX + (circleX - straightX) * t;
+  } else {
+    // rect（デフォルト）
+    posX = (xi / segs - 0.5) * sp.topWidth;
+  }
+
+  // 上端曲率: nx = -1〜+1 の放物線で Z オフセット、下へ向かいフェードアウト
+  const nx          = (xi / segs) * 2 - 1;            // -1(左端) 〜 +1(右端)
+  const curveOffset = sp.topCurve * (1 - nx * nx) * (1 - t); // 中央最大・下端0
+  const posZ = t * sp.height + curveOffset;
+  const posY = sp.height * 0.5;
+  return { posX, posY, posZ };
+}
+
+function buildVerletGeometry(segs, sp) {
   const verletVertices      = [];
   const verletSprings       = [];
   const verletVertexColumns = [];
@@ -81,13 +142,20 @@ function buildVerletGeometry(segs) {
     verletSprings.push({ id, vertex0: v0, vertex1: v1 });
   };
 
+  // ピン位置を均等配置で決定（pinCount 本、両端を含む）
+  const pinSet = new Set();
+  const pc = Math.max(2, sp.pinCount);
+  for (let k = 0; k < pc; k++) {
+    const xi = Math.round(k / (pc - 1) * segs);
+    pinSet.add(Math.min(xi, segs));
+  }
+
   for (let x = 0; x <= segs; x++) {
     const col = [];
     for (let y = 0; y <= segs; y++) {
-      const posX    = x * (clothWidth / segs) - clothWidth * 0.5;
-      const posZ    = y * (clothHeight / segs);
-      const isFixed = (y === 0) && ((x % Math.max(1, Math.floor(segs / 6))) === 0);
-      col.push(addVertex(posX, clothHeight * 0.5, posZ, isFixed));
+      const { posX, posY, posZ } = calcVertexPos(x, y, segs, sp);
+      const isFixed = (y === 0) && pinSet.has(x);
+      col.push(addVertex(posX, posY, posZ, isFixed));
     }
     verletVertexColumns.push(col);
   }
@@ -106,7 +174,7 @@ function buildVerletGeometry(segs) {
 }
 
 function createInstance(segs, offsetX) {
-  const { verletVertices, verletSprings, verletVertexColumns } = buildVerletGeometry(segs);
+  const { verletVertices, verletSprings, verletVertexColumns } = buildVerletGeometry(segs, shapeParams);
 
   // ---- Vertex buffers ----
   const vertexCount     = verletVertices.length;
@@ -148,8 +216,10 @@ function createInstance(segs, offsetX) {
   const springRestLengthBuffer = instancedArray(springRestLenArr, 'float');
   const springForceBuffer      = instancedArray(springCount * 3, 'vec3').setPBO(true);
 
-  // ---- Per-instance uniform ----
-  const spherePositionUniform = uniform(new THREE.Vector3(0, 0, 0));
+  // ---- Per-instance uniforms ----
+  const spherePositionUniform  = uniform(new THREE.Vector3(0, 0, 0));
+  const grabbedIndexUniform    = uniform(GRAB_NONE);  // float: -1 = no grab
+  const grabbedTargetUniform   = uniform(new THREE.Vector3(0, 0, 0)); // local-space target
 
   // ---- Compute shaders ----
   const computeSpringForces = Fn(() => {
@@ -169,7 +239,19 @@ function createInstance(segs, offsetX) {
     const springCnt     = vparams.y;
     const springPointer = vparams.z;
 
+    // 固定頂点はスキップ（固定頂点はグラブも不可）
     If(isFixed, () => { Return(); });
+
+    // ---- グラブ オーバーライド ----
+    // float(instanceIndex) と float(grabbedIndexUniform) を比較
+    If(float(instanceIndex).equal(float(grabbedIndexUniform)), () => {
+      // 速度をゼロにしてターゲット位置へ瞬時移動
+      const grabForce = vertexForceBuffer.element(instanceIndex).toVar('grabForce');
+      grabForce.mulAssign(0);
+      vertexForceBuffer.element(instanceIndex).assign(grabForce);
+      vertexPositionBuffer.element(instanceIndex).assign(grabbedTargetUniform);
+      Return();
+    });
 
     const position = vertexPositionBuffer.element(instanceIndex).toVar('vertexPosition');
     const force    = vertexForceBuffer.element(instanceIndex).toVar('vertexForce');
@@ -293,6 +375,12 @@ function createInstance(segs, offsetX) {
   return {
     offsetX,
     spherePositionUniform,
+    grabbedIndexUniform,
+    grabbedTargetUniform,
+    vertexPositionBuffer,
+    vertexParamsCPU:     vertexParamsArr,   // 固定フラグ参照用
+    vertexCount,
+    cpuPositions:        vertexPosArr.slice(), // GPU→CPU スナップショット（初期値）
     computeSpringForces,
     computeVertexForces,
     clothMesh,
@@ -314,7 +402,23 @@ function teardownInstance(inst) {
   inst.sphereMesh.geometry.dispose();
 }
 
+function clearGrabState() {
+  if (grab.active && grab.instanceIdx >= 0 && instances[grab.instanceIdx]) {
+    instances[grab.instanceIdx].grabbedIndexUniform.value = GRAB_NONE;
+  }
+  grab.active      = false;
+  grab.instanceIdx = -1;
+  grab.vertexIdx   = -1;
+  if (grab.highlightMesh) grab.highlightMesh.visible = false;
+  if (controls) controls.enabled = true;
+}
+
 function setInstanceCount(n, segs) {
+  clearGrabState();
+  grab.snapshots.length       = 0;
+  grab.snapshotPending.length = 0;
+  grab.snapshotAge.length     = 0;
+
   for (const inst of instances) teardownInstance(inst);
   instances.length = 0;
   timeSinceLastStep = 0;
@@ -323,6 +427,9 @@ function setInstanceCount(n, segs) {
   for (let i = 0; i < n; i++) {
     const offsetX = (i - (n - 1) / 2) * CLOTH_SPACING;
     instances.push(createInstance(segs, offsetX));
+    grab.snapshots.push(null);
+    grab.snapshotPending.push(false);
+    grab.snapshotAge.push(999); // 初回はすぐリードバック
   }
 
   applyVisibility();
@@ -343,6 +450,144 @@ function applyVisibility() {
     inst.springWireframeObject.visible = params.wireframe;
     inst.sphereMesh.visible            = params.sphere;
   }
+}
+
+// ============================================================
+// Grab / Picking
+// ============================================================
+
+/**
+ * スクリーン座標 (clientX, clientY) に最も近い非固定頂点を探す。
+ * @returns {{ instIdx, vertIdx, screenDist }} or null
+ */
+function pickNearestVertex(clientX, clientY) {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  let bestInstIdx  = -1;
+  let bestVertIdx  = -1;
+  let bestDist     = GRAB_THRESHOLD_PX;
+
+  const projected = new THREE.Vector3();
+
+  for (let ii = 0; ii < instances.length; ii++) {
+    const inst     = instances[ii];
+    const snapshot = grab.snapshots[ii] ?? inst.cpuPositions;
+    const vcnt     = inst.vertexCount;
+
+    for (let vi = 0; vi < vcnt; vi++) {
+      // 固定頂点はグラブ対象外
+      if (inst.vertexParamsCPU[vi * 3] === 1) continue;
+
+      // ローカル座標 → ワールド座標
+      projected.set(
+        snapshot[vi * 3    ] + inst.offsetX,
+        snapshot[vi * 3 + 1],
+        snapshot[vi * 3 + 2],
+      );
+
+      // ワールド座標 → NDC → スクリーン座標
+      projected.project(camera);
+      if (projected.z > 1) continue; // カメラ背後
+
+      const sx = (projected.x *  0.5 + 0.5) * w;
+      const sy = (projected.y * -0.5 + 0.5) * h;
+      const d  = Math.hypot(sx - clientX, sy - clientY);
+
+      if (d < bestDist) {
+        bestDist     = d;
+        bestInstIdx  = ii;
+        bestVertIdx  = vi;
+      }
+    }
+  }
+
+  if (bestInstIdx === -1) return null;
+  return { instIdx: bestInstIdx, vertIdx: bestVertIdx };
+}
+
+function buildDragPlane(worldPos) {
+  // ドラッグ平面：カメラ→頂点方向を法線とし、頂点を通る平面
+  const normal = worldPos.clone().sub(camera.position).normalize();
+  grab.dragPlane.setFromNormalAndCoplanarPoint(normal, worldPos);
+}
+
+function applyGrabTarget(clientX, clientY) {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  grab.raycaster.setFromCamera(
+    { x: (clientX / w) * 2 - 1, y: -(clientY / h) * 2 + 1 },
+    camera,
+  );
+
+  const hitPoint = new THREE.Vector3();
+  if (!grab.raycaster.ray.intersectPlane(grab.dragPlane, hitPoint)) return;
+
+  const inst = instances[grab.instanceIdx];
+  // ワールド座標 → クロスのローカル座標（offsetX を引く）
+  inst.grabbedTargetUniform.value.set(
+    hitPoint.x - inst.offsetX,
+    hitPoint.y,
+    hitPoint.z,
+  );
+
+  // ハイライトをワールド座標で追従
+  grab.highlightMesh.position.copy(hitPoint);
+}
+
+function setupGrabEvents(canvas) {
+  // キャプチャフェーズで受け取ることで OrbitControls より先に実行
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+
+    const hit = pickNearestVertex(e.clientX, e.clientY);
+    if (!hit) return; // 布の近くでないクリックは OrbitControls に委ねる
+
+    // OrbitControls より先に grab 処理を実施
+    controls.enabled = false;
+
+    grab.active      = true;
+    grab.instanceIdx = hit.instIdx;
+    grab.vertexIdx   = hit.vertIdx;
+
+    const inst     = instances[hit.instIdx];
+    const snapshot = grab.snapshots[hit.instIdx] ?? inst.cpuPositions;
+    const wx = snapshot[hit.vertIdx * 3    ] + inst.offsetX;
+    const wy = snapshot[hit.vertIdx * 3 + 1];
+    const wz = snapshot[hit.vertIdx * 3 + 2];
+
+    buildDragPlane(new THREE.Vector3(wx, wy, wz));
+    inst.grabbedIndexUniform.value = hit.vertIdx;
+
+    // ハイライト表示
+    grab.highlightMesh.position.set(wx, wy, wz);
+    grab.highlightMesh.visible = true;
+
+    applyGrabTarget(e.clientX, e.clientY);
+
+    // キャンバス外でも pointermove/pointerup を受け取る
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = 'grabbing';
+    e.stopPropagation();
+  }, { capture: true });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!grab.active) return;
+    applyGrabTarget(e.clientX, e.clientY);
+  });
+
+  canvas.addEventListener('pointerup', (e) => {
+    if (!grab.active) return;
+    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    clearGrabState();
+    canvas.style.cursor = '';
+  });
+
+  canvas.addEventListener('pointercancel', () => {
+    if (!grab.active) return;
+    clearGrabState();
+    canvas.style.cursor = '';
+  });
 }
 
 // ============================================================
@@ -447,8 +692,44 @@ function setupUI() {
     for (const inst of instances) inst.clothMat.sheenColor.set(matSheenColor.value);
   });
 
+  // Shape
+  const shapeSelect = document.getElementById('shape-type');
+  shapeSelect.addEventListener('change', () => {
+    shapeParams.type = shapeSelect.value;
+    _updateShapeVisibility();
+    setInstanceCount(instanceCount, clothNumSegments);
+  });
+
+  const bindShape = (id, valId, key, parse, fmt, isRange = true) => {
+    const el = document.getElementById(id);
+    const vl = document.getElementById(valId);
+    el.addEventListener('input', () => {
+      const v = parse(el.value);
+      if (vl) vl.textContent = fmt(v);
+      shapeParams[key] = v;
+      clearTimeout(el._t);
+      el._t = setTimeout(() => setInstanceCount(instanceCount, clothNumSegments), 300);
+    });
+  };
+  bindShape('shape-top-width',    'shape-top-width-val',    'topWidth',    parseFloat, v => v.toFixed(2));
+  bindShape('shape-bottom-width', 'shape-bottom-width-val', 'bottomWidth', parseFloat, v => v.toFixed(2));
+  bindShape('shape-height',       'shape-height-val',       'height',      parseFloat, v => v.toFixed(2));
+  bindShape('shape-pin-count',    'shape-pin-count-val',    'pinCount',    parseInt,   v => String(v));
+  bindShape('shape-top-curve',    'shape-top-curve-val',    'topCurve',    parseFloat, v => v.toFixed(2));
+
+  function _updateShapeVisibility() {
+    const isTrap = shapeParams.type === 'trapezoid';
+    const isSemi = shapeParams.type === 'semicircle';
+    document.getElementById('row-bottom-width').style.display =
+      (isTrap || isSemi) ? '' : 'none';
+  }
+  _updateShapeVisibility();
+
+  // マント出力
+  document.getElementById('btn-export-mantle').addEventListener('click', exportMantle);
+
   // セクション折りたたみ
-  for (const id of ['mat-toggle', 'mesh-toggle']) {
+  for (const id of ['mat-toggle', 'mesh-toggle', 'shape-toggle']) {
     const toggle = document.getElementById(id);
     const body   = document.getElementById(id.replace('toggle', 'body'));
     if (toggle && body) {
@@ -458,6 +739,60 @@ function setupUI() {
       });
     }
   }
+}
+
+// ============================================================
+// Mantle export
+// ============================================================
+function exportMantle() {
+  const segs = clothNumSegments;
+  const { verletVertices, verletSprings, verletVertexColumns } = buildVerletGeometry(segs, shapeParams);
+
+  const vertexCount   = verletVertices.length;
+  const positions     = [];
+  const pinnedIndices = [];
+
+  for (let i = 0; i < vertexCount; i++) {
+    const v = verletVertices[i];
+    positions.push(v.position.x, v.position.y, v.position.z);
+    if (v.isFixed) pinnedIndices.push(i);
+  }
+
+  const springs = [];
+  for (const s of verletSprings) springs.push(s.vertex0.id, s.vertex1.id);
+
+  // グリッドからトライアングルインデックスを生成
+  const indices = [];
+  for (let x = 0; x < segs; x++) {
+    for (let y = 0; y < segs; y++) {
+      const v00 = verletVertexColumns[x][y].id;
+      const v10 = verletVertexColumns[x + 1][y].id;
+      const v01 = verletVertexColumns[x][y + 1].id;
+      const v11 = verletVertexColumns[x + 1][y + 1].id;
+      indices.push(v00, v10, v01);
+      indices.push(v10, v11, v01);
+    }
+  }
+
+  const data = {
+    version:      1,
+    shapeParams:  { ...shapeParams },
+    segments:     segs,
+    vertexCount,
+    positions,
+    springs,
+    pinnedIndices,
+    indices,
+    material: { colorFront: matParams.colorFront, colorBack: matParams.colorBack },
+  };
+
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'mantle.cloth.json';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ============================================================
@@ -487,6 +822,33 @@ function updateFPS() {
   }
 }
 
+/**
+ * GPU バッファ → CPU スナップショットの非同期リードバック（ピッキング用）
+ * グラブ中はスキップして競合を防ぐ
+ */
+function scheduleReadbacks() {
+  if (grab.active) return; // グラブ中はスキップ
+
+  for (let i = 0; i < instances.length; i++) {
+    grab.snapshotAge[i] = (grab.snapshotAge[i] ?? 999) + 1;
+    if (grab.snapshotAge[i] < 30 || grab.snapshotPending[i]) continue;
+
+    grab.snapshotAge[i]     = 0;
+    grab.snapshotPending[i] = true;
+    const inst = instances[i];
+
+    renderer.getArrayBufferAsync(inst.vertexPositionBuffer.value)
+      .then((ab) => {
+        grab.snapshots[i]       = new Float32Array(ab);
+        inst.cpuPositions       = grab.snapshots[i];
+        grab.snapshotPending[i] = false;
+      })
+      .catch(() => {
+        grab.snapshotPending[i] = false; // エラー時は次フレームでリトライ
+      });
+  }
+}
+
 async function render() {
   timer.update();
   updateFPS();
@@ -508,6 +870,9 @@ async function render() {
       renderer.compute(inst.computeVertexForces);
     }
   }
+
+  frameCounter++;
+  if (frameCounter % 4 === 0) scheduleReadbacks();
 
   renderer.render(scene, camera);
 }
@@ -535,6 +900,21 @@ async function init() {
   camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.01, 100);
   camera.position.set(-1.6, -0.1, -1.6);
 
+  // ---- グラブ ハイライト (グラブ中に掴んでいる頂点を表示) ----
+  grab.highlightMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.028, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color:       0xffee00,
+      depthTest:   false,
+      transparent: true,
+      opacity:     0.9,
+    }),
+  );
+  grab.highlightMesh.visible     = false;
+  grab.highlightMesh.renderOrder = 999;
+  scene.add(grab.highlightMesh);
+
+  // ---- OrbitControls（グラブイベントより後に登録して優先度を下げる）----
   controls = new OrbitControls(camera, renderer.domElement);
   controls.minDistance = 0.5;
   controls.maxDistance = 30;
@@ -569,6 +949,7 @@ async function init() {
 
   setInstanceCount(1, clothNumSegments);
   setupUI();
+  setupGrabEvents(renderer.domElement);
 
   if (!hasWebGPU) {
     // WebGL2フォールバック: セグメント変更でクラッシュするため無効化

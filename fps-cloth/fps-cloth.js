@@ -1,4 +1,4 @@
-// fps-cloth.js — FPS first-person view with hanging cloth simulation
+// fps-cloth.js — FPS first-person view with hanging cloth simulation (PC only)
 // Three.js v0.184 via esm.sh CDN (WebGPU + TSL required)
 
 import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
@@ -20,7 +20,7 @@ const CLOTH_SPACING  = 1.5;
 const CLOTH_Y_OFFSET = 2.0;
 
 // ── Player constants ──────────────────────────────────────────────────────
-const PLAYER_SPEED   = 20;   // acceleration (games_fps style)
+const PLAYER_SPEED   = 20;
 const GRAVITY_ACCEL  = 25;
 const JUMP_VEL       = 10;
 const RESPAWN_Y      = -8;
@@ -38,8 +38,8 @@ let timeSinceLastStep = 0;
 let timestamp         = 0;
 
 // ── Player state ──────────────────────────────────────────────────────────
-const playerVel  = new THREE.Vector3();
-let   playerYaw   = Math.PI; // looking toward +z (toward cloth)
+const playerVel = new THREE.Vector3();
+let   playerYaw   = Math.PI;
 let   playerPitch = 0;
 const keysDown    = {};
 let   isLocked    = false;
@@ -47,6 +47,10 @@ let   isLocked    = false;
 // ── FPS counter ───────────────────────────────────────────────────────────
 let fpsFrameCount = 0;
 let fpsLastTime   = performance.now();
+
+// ── Frustum culling for cloth compute ────────────────────────────────────
+const clothFrustum    = new THREE.Frustum();
+const clothProjMatrix = new THREE.Matrix4();
 
 // ── Shared uniforms ───────────────────────────────────────────────────────
 let stiffnessUniform;
@@ -96,13 +100,10 @@ function buildLevel() {
     group.add(mesh);
   };
 
-  // ── Ground floor (z: -3 to 8) ─────────────────────────────────────────
   box(0, -0.25, 2.5, 22, 0.5, 11, mFloor);
-  // Boundary walls at ground level
   box(-11, 1.5, 2.5, 0.3, 3, 11, mWall);
   box( 11, 1.5, 2.5, 0.3, 3, 11, mWall);
 
-  // ── Staircase 1 (z: -3→-7, y: 0→2.5, 5 steps) ────────────────────────
   const S1 = { count: 5, rise: 0.5, tread: 0.8, zStart: -3, yStart: 0, width: 16 };
   for (let i = 0; i < S1.count; i++) {
     const h  = (i + 1) * S1.rise;
@@ -111,20 +112,16 @@ function buildLevel() {
     box(0, cy, cz, S1.width, h, S1.tread, mStair);
   }
 
-  // ── Mid platform (y: 2.5, z: -7→-17) ─────────────────────────────────
   box(0, 2.25, -12, 16, 0.5, 10, mPlatform);
   box(-8, 4.0, -12, 0.3, 3, 10, mWall);
   box( 8, 4.0, -12, 0.3, 3, 10, mWall);
-  // Columns at platform entrance
   for (const px of [-6, -3, 3, 6]) {
     box(px, 3.75, -7.5, 0.4, 2.5, 0.4, mColumn);
   }
-  // Point light marker (visual sphere)
   const midLight = new THREE.PointLight(0xfff0cc, 1.5, 18);
   midLight.position.set(0, 5.0, -12);
   scene.add(midLight);
 
-  // ── Staircase 2 (z: -17→-21, y: 2.5→5, 5 steps) ──────────────────────
   const S2 = { count: 5, rise: 0.5, tread: 0.8, zStart: -17, yStart: 2.5, width: 14 };
   for (let i = 0; i < S2.count; i++) {
     const h  = (i + 1) * S2.rise;
@@ -133,13 +130,10 @@ function buildLevel() {
     box(0, cy, cz, S2.width, h, S2.tread, mStair);
   }
 
-  // ── High platform (y: 5, z: -21→-31) ──────────────────────────────────
   box(0, 4.75, -26, 14, 0.5, 10, mPlatform);
   box(-7, 7.0, -26, 0.3, 4, 10, mWall);
   box( 7, 7.0, -26, 0.3, 4, 10, mWall);
-  // Back wall
   box(0, 7.0, -31, 14, 4, 0.3, mWall);
-  // Columns on high platform
   for (const px of [-5, 0, 5]) {
     box(px, 6.5, -22, 0.4, 3, 0.4, mColumn);
   }
@@ -148,13 +142,12 @@ function buildLevel() {
   scene.add(hiLight);
 
   scene.add(group);
-
   worldOctree = new Octree();
   worldOctree.fromGraphNode(group);
 }
 
 // ============================================================
-// Cloth geometry builder (unchanged from cloth.js)
+// Cloth geometry builder
 // ============================================================
 
 function buildVerletGeometry(segs) {
@@ -400,8 +393,14 @@ function createInstance(segs, offsetX) {
     poles.push(pole);
   }
 
+  const boundingSphere = new THREE.Sphere(
+    new THREE.Vector3(offsetX, CLOTH_Y_OFFSET, 0),
+    1.5,
+  );
+
   return {
     offsetX,
+    boundingSphere,
     spherePositionUniform,
     computeSpringForces,
     computeVertexForces,
@@ -456,7 +455,7 @@ function applyVisibility() {
 }
 
 // ============================================================
-// Player physics (Octree + Capsule)
+// Player physics
 // ============================================================
 
 function playerCollisions() {
@@ -474,7 +473,6 @@ function playerCollisions() {
 function updatePlayer(dt) {
   if (!isLocked) return;
 
-  // Horizontal input
   const speedDelta = dt * (playerOnFloor ? PLAYER_SPEED : PLAYER_SPEED * 0.4);
   const fwd   = new THREE.Vector3(-Math.sin(playerYaw), 0, -Math.cos(playerYaw));
   const right  = new THREE.Vector3( Math.cos(playerYaw), 0, -Math.sin(playerYaw));
@@ -484,7 +482,6 @@ function updatePlayer(dt) {
   if (keysDown['KeyA'] || keysDown['ArrowLeft'])  playerVel.addScaledVector(right, -speedDelta);
   if (keysDown['KeyD'] || keysDown['ArrowRight']) playerVel.addScaledVector(right,  speedDelta);
 
-  // Damping
   let damping = Math.exp(-4 * dt) - 1;
   if (!playerOnFloor) {
     playerVel.y -= GRAVITY_ACCEL * dt;
@@ -492,11 +489,9 @@ function updatePlayer(dt) {
   }
   playerVel.addScaledVector(playerVel, damping);
 
-  // Move capsule
   playerCollider.translate(playerVel.clone().multiplyScalar(dt));
   playerCollisions();
 
-  // Respawn if fallen off
   if (playerCollider.end.y < RESPAWN_Y) {
     playerCollider.set(
       new THREE.Vector3(0, 0.35, 4),
@@ -511,10 +506,10 @@ function updatePlayer(dt) {
 }
 
 // ============================================================
-// FPS controls
+// PC controls (pointer lock + keyboard)
 // ============================================================
 
-function setupFPS() {
+function setupControls() {
   const canvas = renderer.domElement;
   canvas.addEventListener('click', () => canvas.requestPointerLock());
 
@@ -535,9 +530,7 @@ function setupFPS() {
 
   document.addEventListener('keydown', (e) => {
     keysDown[e.code] = true;
-    if (e.code === 'Space' && playerOnFloor) {
-      playerVel.y = JUMP_VEL;
-    }
+    if (e.code === 'Space' && playerOnFloor) playerVel.y = JUMP_VEL;
   });
   document.addEventListener('keyup', (e) => { keysDown[e.code] = false; });
 
@@ -579,8 +572,8 @@ function setupUI() {
   const windSlider = document.getElementById('wind');
   const windVal    = document.getElementById('wind-val');
   windSlider?.addEventListener('input', () => {
-    params.wind           = parseFloat(windSlider.value);
-    windVal.textContent   = params.wind.toFixed(1);
+    params.wind         = parseFloat(windSlider.value);
+    windVal.textContent = params.wind.toFixed(1);
   });
 
   document.getElementById('wireframe')?.addEventListener('change', (e) => {
@@ -689,18 +682,26 @@ async function render() {
   sphereVisibleUniform.value = params.sphere ? 1 : 0;
   windUniform.value          = params.wind;
 
-  const stepsPerSec = 360;
-  const timePerStep = 1 / stepsPerSec;
+  clothProjMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  clothFrustum.setFromProjectionMatrix(clothProjMatrix);
+
+  const stepsPerSec     = 360;
+  const timePerStep     = 1 / stepsPerSec;
+  const MAX_STEPS_FRAME = 6;
+  let stepsThisFrame    = 0;
   timeSinceLastStep += dt;
-  while (timeSinceLastStep >= timePerStep) {
+  while (timeSinceLastStep >= timePerStep && stepsThisFrame < MAX_STEPS_FRAME) {
+    stepsThisFrame    += 1;
     timestamp         += timePerStep;
     timeSinceLastStep -= timePerStep;
     updateSpheres();
     for (const inst of instances) {
+      if (!clothFrustum.intersectsSphere(inst.boundingSphere)) continue;
       renderer.compute(inst.computeSpringForces);
       renderer.compute(inst.computeVertexForces);
     }
   }
+  if (stepsThisFrame >= MAX_STEPS_FRAME) timeSinceLastStep = 0;
 
   renderer.render(scene, camera);
 }
@@ -719,7 +720,7 @@ async function init() {
     antialias: true,
     requiredLimits: { maxStorageBuffersInVertexStage: 1 },
   });
-  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping         = THREE.NeutralToneMapping;
   renderer.toneMappingExposure = 1.1;
@@ -732,17 +733,14 @@ async function init() {
   camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 120);
   camera.rotation.order = 'YXZ';
 
-  // ---- Lighting ----
   scene.add(new THREE.AmbientLight(0xffffff, 0.5));
   const sun = new THREE.DirectionalLight(0xfff4cc, 1.8);
   sun.position.set(5, 12, -3);
   scene.add(sun);
   scene.add(new THREE.HemisphereLight(0x8ab8d8, 0x4a8c3a, 0.6));
 
-  // ---- Level ----
   buildLevel();
 
-  // ---- Player capsule (start at z=4, above ground) ----
   playerCollider = new Capsule(
     new THREE.Vector3(0, 0.35, 4),
     new THREE.Vector3(0, 1.0,  4),
@@ -752,7 +750,6 @@ async function init() {
   camera.position.copy(playerCollider.end);
   camera.rotation.set(playerPitch, playerYaw, 0, 'YXZ');
 
-  // ---- Shared uniforms ----
   stiffnessUniform     = uniform(0.2);
   dampeningUniform     = uniform(0.99);
   windUniform          = uniform(1.0);
@@ -761,9 +758,11 @@ async function init() {
   backColorUniform     = uniform(new THREE.Color(matParams.colorBack));
 
   setInstanceCount(instanceCount, clothNumSegments);
-
-  setupFPS();
   setupUI();
+  setupControls();
+
+  const lockOverlay = document.getElementById('lock-overlay');
+  if (lockOverlay) lockOverlay.style.display = 'flex';
 
   if (!hasWebGPU) {
     const segsSlider  = document.getElementById('segments');

@@ -76,7 +76,6 @@
       pointer-events: none;
     }
 
-    /* Crosshair */
     #crosshair {
       position: fixed;
       top: 50%;
@@ -90,19 +89,18 @@
       text-shadow: 0 0 3px rgba(0,0,0,0.8);
     }
 
-    /* Click-to-lock overlay: pointer-events none so UI panel is always reachable */
     #lock-overlay {
       position: fixed;
       inset: 0;
       z-index: 20;
       background: rgba(0,0,0,0.55);
-      display: flex;
+      display: none;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       gap: 12px;
       color: #fff;
-      pointer-events: none; /* clicks pass through to canvas */
+      pointer-events: none;
     }
     #lock-overlay h2 { margin: 0; font-size: 22px; }
     #lock-overlay p  { margin: 0; color: #aaa; font-size: 13px; }
@@ -224,10 +222,8 @@
   </div>
 
   <div id="crosshair">+</div>
-
   <div id="fps-counter">-- FPS</div>
 
-  <!-- Pointer lock overlay (shown when not locked) -->
   <div id="lock-overlay">
     <h2>FPS Cloth Simulation</h2>
     <p>クリックしてマウスをキャプチャ &nbsp;|&nbsp; ESC で解放</p>

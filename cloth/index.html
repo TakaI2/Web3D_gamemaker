@@ -160,6 +160,45 @@
     </div>
 
     <div class="ui-section">
+      <div class="ui-section-title" id="shape-toggle">Shape</div>
+      <div class="ui-section-body" id="shape-body">
+        <div class="ui-row">
+          <label>Type</label>
+          <select id="shape-type" style="flex:1;background:#222;color:#ddd;border:1px solid #555;border-radius:3px;padding:2px 4px;font-size:12px;">
+            <option value="rect">四角 (Rect)</option>
+            <option value="trapezoid">台形 (Cape)</option>
+            <option value="semicircle">半円 (Semicircle)</option>
+          </select>
+        </div>
+        <div class="ui-row">
+          <label>上端幅</label>
+          <input type="range" id="shape-top-width" min="0.2" max="3.0" step="0.05" value="1.0">
+          <span class="val" id="shape-top-width-val">1.00</span>
+        </div>
+        <div class="ui-row" id="row-bottom-width" style="display:none">
+          <label>下端幅</label>
+          <input type="range" id="shape-bottom-width" min="0.2" max="4.0" step="0.05" value="1.0">
+          <span class="val" id="shape-bottom-width-val">1.00</span>
+        </div>
+        <div class="ui-row">
+          <label>高さ</label>
+          <input type="range" id="shape-height" min="0.3" max="3.0" step="0.05" value="1.0">
+          <span class="val" id="shape-height-val">1.00</span>
+        </div>
+        <div class="ui-row">
+          <label>ピン数</label>
+          <input type="range" id="shape-pin-count" min="2" max="20" step="1" value="7">
+          <span class="val" id="shape-pin-count-val">7</span>
+        </div>
+        <div class="ui-row">
+          <label>上端曲率</label>
+          <input type="range" id="shape-top-curve" min="-1.0" max="1.0" step="0.05" value="0.0">
+          <span class="val" id="shape-top-curve-val">0.00</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ui-section">
       <div class="ui-section-title" id="mat-toggle">Material</div>
       <div class="ui-section-body" id="mat-body">
         <div class="ui-row">
@@ -191,11 +230,20 @@
         </div>
       </div>
     </div>
+
+    <div class="ui-section">
+      <div class="ui-section-title">Export</div>
+      <div class="ui-section-body">
+        <button id="btn-export-mantle" style="width:100%;padding:6px 0;background:rgba(100,180,80,0.3);border:1px solid rgba(100,200,80,0.5);color:#beb;border-radius:4px;font-size:12px;cursor:pointer;">
+          布エディタ用に出力 (.json)
+        </button>
+      </div>
+    </div>
   </div>
 
   <div id="fps-counter">-- FPS</div>
   <div id="loading">読み込み中...</div>
-  <div id="info">ドラッグで視点回転 &nbsp;|&nbsp; スクロールでズーム</div>
+  <div id="info">左クリックで布を掴む &nbsp;|&nbsp; ドラッグで視点回転 &nbsp;|&nbsp; スクロールでズーム</div>
 
   <div id="error-msg">
     <h2>初期化に失敗しました</h2>

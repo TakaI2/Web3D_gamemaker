@@ -60,16 +60,51 @@ WebGPU ベースの FPS デモ（`src/fps/`）。
 
 WebGPU コンピュートシェーダーによる布物理シミュレーション（`cloth/`）。
 
-- TSL（Three.js Shader Language）の `instancedArray` + `Fn` でバーレット積分
+- TSL（Three.js Shader Language）の `instancedArray` + `Fn` で Verlet 積分
 - 布枚数・セグメント数・剛性・風力をリアルタイム変更
 - 球コリジョン・シェーン（Sheen）マテリアル対応
-- **WebGPU 必須**（HTTPS 接続が必要）。WebGL2 環境では Count/Segment 変更不可
+- **布形状パラメータ**: 四角 / 台形 / 半円、上端幅・下端幅・高さ・ピン数・上端曲率（肩フィット用）
+- 作成した布形状を **`.cloth.json`** としてエクスポート（布エディタへの入力）
+- **WebGPU 必須**（HTTPS 接続が必要）
 
 デプロイ先: `/htdocs/cloth/`
 
 ```bash
 npm run build:cloth   # dist-cloth/ に出力
 ```
+
+### 布エディタ（cloth-editor）
+
+VRM モデルに布シミュレーションを適用する専用エディタ（`cloth-editor/`）。スタンドアローン HTML+JS。
+
+**機能:**
+- VRM モデルを読み込み、任意のメッシュを布シミュレーションに変換
+- `/cloth/` で作成した `.cloth.json`（マントなど）を読み込んでキャラに着せる
+- ピン頂点の手動指定（`P` キーで編集モード、黄色マーカー表示）
+- VRM ヒューマノイドボーンから球コライダーを自動生成（布が体を貫通しない）
+- 剛性 / 減衰 / 風のリアルタイム調整
+- マウスドラッグによる頂点グラブ操作
+
+**手グリップシステム:**
+
+ゲーム中にキャラがマントを掴む動作をプログラム制御できる仕組み。
+
+- シミュ停止中に L手 / R手 グリップ頂点を指定（青・橙マーカー）
+- シミュ実行中に **`L` / `R` キー長押し**でグリップ動作をテスト（頂点がマウスカーソルに追従）
+- `window.clothAPI` 経由でゲームコードから呼び出し可能
+
+```js
+clothAPI.gripLeft(x, y, z)   // 左手グリップ ON + ワールド座標をターゲットに設定
+clothAPI.gripRight(x, y, z)  // 右手グリップ ON
+clothAPI.releaseLeft()        // 左手グリップ解放
+clothAPI.releaseRight()       // 右手グリップ解放
+```
+
+**技術的特記事項:**
+- WebGPU ストレージバッファ上限（8 個）対策として、グリップマスクを `vertexParamsBuffer (uvec4)` の `.w` に格納
+- MToon v0 (`ShaderMaterial`) → `MeshPhysicalNodeMaterial` の自動変換（WebGPU NodeBuilder 互換化）
+
+デプロイ先: `/htdocs/cloth-editor/`（ビルド不要、そのままコピー）
 
 ### FPS + 布シミュレーション複合デモ（fps-cloth）
 
@@ -109,8 +144,12 @@ npm run build:fps-cloth   # dist-fps-cloth/ に出力
 
 ```
 cloth/
-├── index.html        # 布シミュレーション UI
+├── index.html        # 布シミュレーション UI（形状パラメータ・エクスポート対応）
 └── cloth.js          # WebGPU 布物理（スタンドアローン）
+
+cloth-editor/
+├── index.html        # 布エディタ UI
+└── cloth-editor.js   # VRM 布変換・ピン/グリップ指定・GPU シミュ・clothAPI
 
 fps-cloth/
 ├── index.html        # FPS+布デモ UI

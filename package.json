@@ -9,6 +9,7 @@
     "build:fps": "node node_modules/vite/bin/vite.js build --config vite.config.fps.ts",
     "build:cloth": "node scripts/build-cloth.mjs",
     "build:fps-cloth": "node scripts/build-fps-cloth.mjs",
+    "build:fps-cloth-mobile": "node scripts/build-fps-cloth-mobile.mjs",
     "preview": "node node_modules/vite/bin/vite.js preview",
     "test": "vitest run",
     "test:watch": "vitest",

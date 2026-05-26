@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>布エディタ</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #1a1a2e;
+      font-family: sans-serif;
+    }
+    #app { width: 100%; height: 100%; }
+
+    /* ── 左パネル ─────────────────────────────── */
+    #panel-left {
+      position: fixed;
+      top: 0; left: 0;
+      width: 210px;
+      height: 100%;
+      z-index: 20;
+      background: rgba(10,10,24,0.82);
+      border-right: 1px solid rgba(255,255,255,0.12);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #panel-left h2 {
+      margin: 0;
+      padding: 12px 14px 8px;
+      font-size: 14px;
+      color: #fff;
+      letter-spacing: 0.03em;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .p-section {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .p-section-title {
+      font-size: 10px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 7px;
+    }
+
+    #btn-vrm-load {
+      width: 100%;
+      padding: 7px 0;
+      background: rgba(70,120,200,0.55);
+      border: 1px solid rgba(100,160,255,0.4);
+      color: #cde;
+      border-radius: 5px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #btn-vrm-load:hover { background: rgba(70,120,200,0.8); }
+
+    #mesh-list-wrap {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 8px;
+    }
+    #mesh-list {
+      list-style: none;
+      margin: 0; padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    #mesh-list li {
+      padding: 5px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #bbb;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background: rgba(255,255,255,0.04);
+    }
+    #mesh-list li:hover { background: rgba(255,255,255,0.1); color: #fff; }
+    #mesh-list li.selected { background: rgba(70,140,255,0.35); color: #fff; }
+
+    .pin-controls { display: flex; flex-direction: column; gap: 6px; }
+    .btn-sm {
+      width: 100%;
+      padding: 6px 0;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #ccc;
+      background: rgba(255,255,255,0.07);
+    }
+    .btn-sm:hover { background: rgba(255,255,255,0.15); }
+    .btn-sm:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-sm.active {
+      background: rgba(255,220,50,0.3);
+      border-color: rgba(255,220,50,0.6);
+      color: #ffd;
+    }
+    .btn-grip-l.active {
+      background: rgba(50,120,255,0.35);
+      border-color: rgba(80,160,255,0.6);
+      color: #adf;
+    }
+    .btn-grip-r.active {
+      background: rgba(255,80,50,0.35);
+      border-color: rgba(255,120,80,0.6);
+      color: #fba;
+    }
+
+    /* ── 右パネル ─────────────────────────────── */
+    #panel-right {
+      position: fixed;
+      top: 0; right: 0;
+      width: 200px;
+      z-index: 20;
+      background: rgba(10,10,24,0.82);
+      border-left: 1px solid rgba(255,255,255,0.12);
+      padding: 12px 14px;
+      color: #ddd;
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #panel-right h3 { margin: 0; font-size: 14px; color: #fff; }
+
+    .ui-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .ui-row label { flex-shrink: 0; font-size: 12px; }
+    .ui-row input[type=range] { flex: 1; }
+    .ui-row-left { display: flex; align-items: center; gap: 5px; }
+    .ui-row-left input[type=range] { flex: 1; }
+    .val { color: #adf; font-size: 11px; min-width: 36px; text-align: right; }
+
+    .sim-controls { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+    .btn-sim {
+      width: 100%;
+      padding: 7px 0;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #ddd;
+      background: rgba(255,255,255,0.07);
+    }
+    .btn-sim:hover:not(:disabled) { background: rgba(255,255,255,0.15); }
+    .btn-sim:disabled { opacity: 0.35; cursor: not-allowed; }
+    #btn-sim-start { border-color: rgba(80,200,100,0.5); color: #9eb; }
+    #btn-sim-start:hover:not(:disabled) { background: rgba(80,200,100,0.2); }
+    #btn-sim-stop  { border-color: rgba(255,100,80,0.5); color: #ebb; }
+    #btn-sim-stop:hover:not(:disabled) { background: rgba(255,100,80,0.2); }
+
+    /* コライダー行 */
+    .collider-row {
+      display: grid;
+      grid-template-columns: 22px repeat(4, auto 1fr);
+      align-items: center;
+      gap: 3px;
+      font-size: 11px;
+      color: #bbb;
+    }
+    .c-label { color: #7af; font-size: 10px; text-align: center; }
+    .c-input {
+      width: 100%;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 3px;
+      color: #ddd;
+      font-size: 10px;
+      padding: 1px 3px;
+      text-align: right;
+    }
+    .c-input:focus { outline: none; border-color: rgba(100,180,255,0.5); }
+
+    /* ── 戻るボタン ───────────────────────────── */
+    #back-btn {
+      position: fixed;
+      bottom: 12px; left: 220px;
+      z-index: 30;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: #fff;
+      padding: 5px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    #back-btn:hover { background: rgba(0,0,0,0.75); }
+
+    /* ── FPS カウンター ───────────────────────── */
+    #fps-counter {
+      position: fixed;
+      bottom: 12px; right: 210px;
+      z-index: 10;
+      color: rgba(255,255,255,0.6);
+      font-size: 12px;
+      font-family: monospace;
+      pointer-events: none;
+    }
+
+    /* ── 操作ヒント ───────────────────────────── */
+    #hint {
+      position: fixed;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.35);
+      font-size: 11px;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    /* ── WebGPU 警告 ──────────────────────────── */
+    #webgpu-warning {
+      display: none;
+      position: fixed;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(180,120,0,0.88);
+      color: #fff;
+      padding: 5px 14px;
+      border-radius: 4px;
+      font-size: 12px;
+      z-index: 40;
+      pointer-events: none;
+    }
+
+    /* ── トースト通知 ─────────────────────────── */
+    #toast {
+      position: fixed;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(40,40,60,0.92);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: #ddd;
+      padding: 6px 16px;
+      border-radius: 5px;
+      font-size: 12px;
+      z-index: 50;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+      white-space: nowrap;
+    }
+    #toast.visible { opacity: 1; }
+    #toast.error { border-color: rgba(255,80,80,0.5); color: #faa; }
+    #toast.warn  { border-color: rgba(255,200,50,0.5); color: #fda; }
+
+    /* ── ローディング ─────────────────────────── */
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: #1a1a2e;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      z-index: 60;
+      transition: opacity 0.4s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+
+    /* ── エラー表示 ───────────────────────────── */
+    #error-msg {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #111;
+      color: #fff;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      text-align: center;
+      padding: 24px;
+      z-index: 100;
+    }
+    #error-msg.visible { display: flex; }
+    #error-msg h2 { margin: 0; color: #f66; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- 左パネル -->
+  <div id="panel-left">
+    <h2>布エディタ</h2>
+
+    <div class="p-section">
+      <div class="p-section-title">VRM モデル</div>
+      <button id="btn-vrm-load">VRM を読み込む</button>
+      <input type="file" id="vrm-file" accept=".vrm" style="display:none">
+    </div>
+
+    <div class="p-section" style="padding-bottom:6px;">
+      <div class="p-section-title">メッシュ一覧 (クリックで選択)</div>
+    </div>
+    <div id="mesh-list-wrap">
+      <ul id="mesh-list"></ul>
+    </div>
+
+    <div class="p-section">
+      <div class="p-section-title">ピン頂点</div>
+      <div class="pin-controls">
+        <button class="btn-sm" id="btn-pin-mode">ピン編集 OFF &nbsp;[P]</button>
+        <button class="btn-sm" id="btn-pin-reset">ピンをリセット</button>
+      </div>
+    </div>
+
+    <div class="p-section">
+      <div class="p-section-title">グリップ頂点 (シミュ停止中に編集)</div>
+      <div class="pin-controls">
+        <button class="btn-sm btn-grip-l" id="btn-grip-left-mode">L手グリップ編集 OFF</button>
+        <button class="btn-sm btn-grip-r" id="btn-grip-right-mode">R手グリップ編集 OFF</button>
+        <button class="btn-sm" id="btn-grip-reset">グリップをリセット</button>
+      </div>
+      <div style="margin-top:5px;font-size:10px;color:#666;line-height:1.4;">
+        青=L手 / 橙=R手<br>
+        <code style="font-size:10px;color:#68a;">clothAPI.gripLeft(x,y,z)</code><br>
+        <code style="font-size:10px;color:#68a;">clothAPI.releaseLeft()</code>
+      </div>
+    </div>
+
+    <div class="p-section">
+      <div class="p-section-title">マント読み込み</div>
+      <button id="btn-mantle-load" class="btn-sm" style="width:100%;margin-bottom:4px;">マント (.cloth.json) を読み込む</button>
+      <input type="file" id="mantle-file" accept=".json" style="display:none">
+      <button class="btn-sm" id="btn-mantle-clear" style="width:100%;display:none;">マントを削除</button>
+    </div>
+
+    <div class="p-section" id="mantle-export-section" style="display:none;">
+      <div class="p-section-title">エクスポート</div>
+      <button class="btn-sm" id="btn-export-grip" style="width:100%;background:rgba(80,160,80,0.2);border-color:rgba(100,200,100,0.4);color:#9eb;">
+        グリップ付きで保存 (.json)
+      </button>
+    </div>
+
+    <div class="p-section" id="mantle-transform-section" style="display:none;">
+      <div class="p-section-title">マント位置調整</div>
+      <div style="display:flex;flex-direction:column;gap:5px;">
+        <div class="ui-row-left">
+          <label style="font-size:11px;color:#888;width:14px;">X</label>
+          <input type="range" id="mt-tx" min="-2" max="2" step="0.01" value="0" style="flex:1;">
+          <span class="val" id="mt-tx-val">0.00</span>
+        </div>
+        <div class="ui-row-left">
+          <label style="font-size:11px;color:#888;width:14px;">Y</label>
+          <input type="range" id="mt-ty" min="-1" max="3" step="0.01" value="0" style="flex:1;">
+          <span class="val" id="mt-ty-val">0.00</span>
+        </div>
+        <div class="ui-row-left">
+          <label style="font-size:11px;color:#888;width:14px;">Z</label>
+          <input type="range" id="mt-tz" min="-2" max="2" step="0.01" value="0" style="flex:1;">
+          <span class="val" id="mt-tz-val">0.00</span>
+        </div>
+        <div class="ui-row-left">
+          <label style="font-size:11px;color:#888;width:14px;">R</label>
+          <input type="range" id="mt-ry" min="-180" max="180" step="1" value="0" style="flex:1;">
+          <span class="val" id="mt-ry-val">0°</span>
+        </div>
+        <div class="ui-row-left">
+          <label style="font-size:11px;color:#888;width:14px;">S</label>
+          <input type="range" id="mt-scale" min="0.1" max="3.0" step="0.01" value="1.0" style="flex:1;">
+          <span class="val" id="mt-scale-val">1.00</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右パネル -->
+  <div id="panel-right">
+    <h3>シミュレーション</h3>
+
+    <div class="ui-row">
+      <label>Stiffness</label>
+      <input type="range" id="stiffness" min="0.05" max="0.5" step="0.005" value="0.2">
+      <span class="val" id="stiffness-val">0.200</span>
+    </div>
+    <div class="ui-row">
+      <label>Dampening</label>
+      <input type="range" id="dampening" min="0.95" max="1.0" step="0.001" value="0.99">
+      <span class="val" id="dampening-val">0.990</span>
+    </div>
+    <div class="ui-row">
+      <label>Wind</label>
+      <input type="range" id="wind" min="0" max="5" step="0.1" value="1.0">
+      <span class="val" id="wind-val">1.0</span>
+    </div>
+
+    <div class="sim-controls">
+      <button class="btn-sim" id="btn-sim-start">▶ シミュ開始</button>
+      <button class="btn-sim" id="btn-sim-stop"  disabled>⏹ シミュ停止</button>
+      <button class="btn-sim" id="btn-sim-reset" disabled>↺ リセット</button>
+    </div>
+
+    <div style="border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;margin-top:4px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;">球コライダー</span>
+        <label style="font-size:11px;color:#aaa;display:flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="collider-visible" checked style="width:13px;height:13px;">表示
+        </label>
+      </div>
+      <div id="collider-list" style="display:flex;flex-direction:column;gap:5px;max-height:220px;overflow-y:auto;"></div>
+      <button class="btn-sm" id="btn-collider-rebuild" style="width:100%;margin-top:6px;">ボーンから再生成</button>
+    </div>
+  </div>
+
+  <a id="back-btn" href="../">← 戻る</a>
+  <div id="fps-counter">-- FPS</div>
+  <div id="hint">P: ピン編集 &nbsp;|&nbsp; L/R手グリップ割り当て: 左パネルで編集 &nbsp;|&nbsp; シミュ中 L/R 長押し: グリップテスト &nbsp;|&nbsp; マウスドラッグ: 頂点をつかむ</div>
+
+  <div id="webgpu-warning">⚠ WebGPU 非対応: シミュレーションは使用できません</div>
+  <div id="toast"></div>
+  <div id="loading">読み込み中...</div>
+
+  <div id="error-msg">
+    <h2>初期化に失敗しました</h2>
+    <p>Chrome または Edge の最新版 (WebGPU 対応) でお試しください。</p>
+    <p id="error-detail" style="font-size:12px;color:#aaa;"></p>
+  </div>
+
+  <script type="module" src="./cloth-editor.js"></script>
+</body>
+</html>
