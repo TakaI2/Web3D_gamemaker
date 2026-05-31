@@ -21,7 +21,7 @@ fs.writeFileSync(path.join(dest, 'swing-catch.js'), jsSrc);
 console.log('copied: swing-catch.js (import rewritten)');
 
 // 共有モジュールを同梱（lib 内の相互 import も ./ に書き換え）
-for (const f of ['vrm-ragdoll.js', 'vrm-cloth.js']) {
+for (const f of ['vrm-ragdoll.js', 'vrm-cloth.js', 'npc-state-machine.js']) {
   const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8').replace(/\.\.\/lib\//g, './');
   fs.writeFileSync(path.join(dest, f), libSrc);
   console.log(`copied: ${f}`);

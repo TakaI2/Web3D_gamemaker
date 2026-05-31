@@ -12,6 +12,7 @@ import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse }
   from '../lib/vrm-ragdoll.js';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
+import { createNpcStateMachine } from '../lib/npc-state-machine.js';
 import { positionWorld, mix, color } from 'https://esm.sh/three@0.184.0/tsl';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 
@@ -358,6 +359,10 @@ async function createMegu(bundle, pos) {
     tlFps: bundle.timeline?.fps ?? 30,
     tlDuration: bundle.timeline?.durationFrames ?? 0,
     tlClock: 0,                              // アニメ無し(ayu等)用の手グリップ・タイムライン時計
+    sm: createNpcStateMachine(bundle.character),   // ステートマシン（character 省略時は既定＝検知無効）
+    dir: null,                               // 直近のステート出力（表情/視線/attack）
+    blinkT: randRange(1, 4), blinkDur: 0,    // 自動まばたき
+
     vel: randomDir().multiplyScalar(randRange(2, 4)),
     grabbed: false, clothGrabbed: false, grabBone: 'chest', grabOffset: new THREE.Vector3(), recoverTimer: 0,
   };
@@ -463,6 +468,14 @@ function grabbedMegu() {
 
 function updateMegu(m, dt) {
   const rd = m.ragdoll;
+  // ステート更新（表情・視線・attack を決定）
+  const held = m.grabbed || m.clothGrabbed;
+  meguCenter(m, _meguC);
+  m.dir = m.sm ? m.sm.update(dt, {
+    ragdollActive: rd.active, ragdollRecovering: rd.recovering,
+    held, distanceToPlayer: camera.position.distanceTo(_meguC),
+  }) : null;
+
   if (rd.active) {
     // 被弾/本体掴み/マント掴みいずれもラグドール。
     const env = { floorY: 0, bounds: ARENA_BOUNDS };
@@ -485,11 +498,33 @@ function updateMegu(m, dt) {
     if (!rd.recovering) onMeguRecovered(m);
   } else {
     if (m.mixer) m.mixer.update(dt);
+    if (m.dir && m.dir.attacking) {
+      // attack：プレイヤー方向へ接近加速
+      _force.copy(camera.position).sub(m.pos);
+      const d = _force.length() || 1;
+      m.vel.addScaledVector(_force, (m.sm.behavior.approachAccel * dt) / d);
+      clampSpeed(m.vel);
+    }
     m.pos.addScaledVector(m.vel, dt);
     bounceAxis(m, 'x', -ROOM.x / 2 + MEGU_RADIUS, ROOM.x / 2 - MEGU_RADIUS);
     bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
     bounceAxis(m, 'z', -ROOM.z / 2 + MEGU_RADIUS, ROOM.z / 2 - MEGU_RADIUS);
     m.vrm.scene.position.copy(m.pos);
+  }
+
+  // 表情・視線をステート出力から適用（vrm.update の前に設定）
+  if (m.dir && m.sm) {
+    const em = m.vrm.expressionManager;
+    if (em) {
+      for (const name of m.sm.expressionNames) em.setValue(name, m.dir.expression[name] ?? 0);
+      // 自動まばたき（ダウン中は除く）
+      if (m.blinkT <= 0 && m.blinkDur <= 0) { m.blinkDur = 0.12; m.blinkT = randRange(2.5, 6); }
+      m.blinkT -= dt;
+      let bw = 0;
+      if (m.blinkDur > 0) { m.blinkDur -= dt; bw = Math.sin((1 - Math.max(0, m.blinkDur) / 0.12) * Math.PI); }
+      em.setValue('blink', m.dir.state === 'downed' ? 0 : bw);
+    }
+    if (m.vrm.lookAt) m.vrm.lookAt.target = m.dir.lookAtEye > 0.5 ? camera : null;
   }
   m.vrm.update(dt);
   if (m.cloth) {
