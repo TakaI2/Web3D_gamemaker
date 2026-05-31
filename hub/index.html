@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>Web3D GameMaker — 一覧</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      background: linear-gradient(160deg, #1a2438 0%, #0f1422 100%);
+      color: #e8eef6; font-family: system-ui, sans-serif;
+      padding: 40px 24px;
+    }
+    h1 { font-size: 26px; margin: 0 0 4px; }
+    .sub { color: #8fa3bf; font-size: 13px; margin-bottom: 28px; }
+    h2 { font-size: 15px; color: #9fd0ff; border-bottom: 1px solid #2a3756; padding-bottom: 6px; margin: 28px 0 14px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+    a.card {
+      display: block; text-decoration: none; color: inherit;
+      background: rgba(255,255,255,0.04); border: 1px solid #2a3756;
+      border-radius: 10px; padding: 16px 18px; transition: all .15s;
+    }
+    a.card:hover { background: rgba(120,170,255,0.12); border-color: #5580cc; transform: translateY(-2px); }
+    a.card .name { font-size: 15px; font-weight: 600; }
+    a.card .desc { font-size: 12px; color: #9fb0c8; margin-top: 5px; line-height: 1.5; }
+    .tag { display:inline-block; font-size:10px; padding:1px 7px; border-radius:10px; margin-left:6px; vertical-align:middle; }
+    .tag.game { background:#2e5a3a; color:#aef0c0; }
+    .tag.editor { background:#3a3060; color:#d0bfff; }
+    footer { margin-top: 36px; color: #6a7c96; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h1>Web3D GameMaker</h1>
+  <div class="sub">エディタ・ゲーム一覧（開発用ランチャー）</div>
+
+  <h2>ゲーム</h2>
+  <div class="grid">
+    <a class="card" href="../swing-catch/"><div class="name">Swing Catch <span class="tag game">GAME</span></div><div class="desc">空中のオブジェクト/VRM NPC をキャッチ・振り回し・吹っ飛ばす。NPCはステート/表情/ラグドール。</div></a>
+    <a class="card" href="../fps-cloth-vrm/"><div class="name">FPS VRM NPC + Cloth <span class="tag game">GAME</span></div><div class="desc">FPS視点でマント付きVRM NPCと布シミュ。発射→ラグドール。</div></a>
+    <a class="card" href="../fps-cloth/"><div class="name">FPS + Cloth <span class="tag game">GAME</span></div><div class="desc">FPS移動＋GPU布シミュレーション。</div></a>
+    <a class="card" href="../cloth/"><div class="name">Cloth Sim <span class="tag game">GAME</span></div><div class="desc">WebGPU 布物理シミュレーション（形状パラメータ・エクスポート）。</div></a>
+  </div>
+
+  <h2>エディタ</h2>
+  <div class="grid">
+    <a class="card" href="../character-editor/"><div class="name">Character Editor <span class="tag editor">EDITOR</span></div><div class="desc">VRM NPC のステート（通常/警戒/攻撃/ダウン/復帰）に表情・視線・行動を設定し .npc.json として書き出す。</div></a>
+    <a class="card" href="../cloth-editor/"><div class="name">Cloth Editor <span class="tag editor">EDITOR</span></div><div class="desc">VRMにマント等の布を着せ、ピン/コライダー/手グリップを設定して書き出す。</div></a>
+    <a class="card" href="../"><div class="name">VRM / MMD / FBX Editor <span class="tag editor">EDITOR</span></div><div class="desc">モデル読込・アニメ再生・リターゲット・FBX→VRMA 変換などの本体エディタ。</div></a>
+  </div>
+
+  <footer>各リンクは開発サーバーの相対パス（本番デプロイでは個別配置）。</footer>
+</body>
+</html>
