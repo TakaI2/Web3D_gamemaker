@@ -245,12 +245,12 @@ function tryGrab() {
   let kind = hits.length ? 'obj' : null;
   let dist = hits.length ? hits[0].distance : Infinity;
   const obj = hits.length ? hits[0].object.userData.obj : null;
-  let target = null, clothIdx = -1;
+  let target = null, clothIdx = -1, grabBone = null;
 
-  // 全 NPC の本体/マントを判定し、最も手前を採用
+  // 全 NPC の本体（関節）/マントを判定し、最も手前を採用
   for (const m of megus) {
-    const bh = raycaster.intersectObject(m.vrm.scene, true);
-    if (bh.length && bh[0].distance < dist) { kind = 'body'; dist = bh[0].distance; target = m; }
+    const jb = nearestMeguJoint(m);
+    if (jb && jb.along < dist) { kind = 'body'; dist = jb.along; target = m; grabBone = jb.bone; }
     const cl = nearestClothVertex(m);
     if (cl && cl.along < dist) { kind = 'cloth'; dist = cl.along; target = m; clothIdx = cl.index; }
   }
@@ -258,7 +258,7 @@ function tryGrab() {
   if (kind === 'cloth') {
     grabMeguCloth(target, clothIdx);
   } else if (kind === 'body') {
-    grabMeguBody(target);
+    grabMeguBody(target, grabBone);
   } else if (kind === 'obj' && obj) {
     obj.grabbed = true; grabbed = obj; updateCrosshair();
   }
@@ -359,7 +359,7 @@ async function createMegu(bundle, pos) {
     tlDuration: bundle.timeline?.durationFrames ?? 0,
     tlClock: 0,                              // アニメ無し(ayu等)用の手グリップ・タイムライン時計
     vel: randomDir().multiplyScalar(randRange(2, 4)),
-    grabbed: false, clothGrabbed: false, grabOffset: new THREE.Vector3(), recoverTimer: 0,
+    grabbed: false, clothGrabbed: false, grabBone: 'chest', grabOffset: new THREE.Vector3(), recoverTimer: 0,
   };
 }
 
@@ -406,9 +406,33 @@ function hitMegu(m, dir) {
   m.recoverTimer = MEGU_RECOVER_DELAY;
 }
 
-function grabMeguBody(m) {
+// 照準レイに最も近い m の関節を探す。飛行中はボーンのワールド位置、ラグドール中は粒子位置を使う
+// （スキンメッシュのレイキャストは姿勢変化で外れるため、姿勢に追従するこの方式にする）。{ bone, along } or null。
+function nearestMeguJoint(m) {
+  const rd = m.ragdoll;
+  const orig = raycaster.ray.origin, dir = raycaster.ray.direction;
+  let best = null, bestAlong = Infinity;
+  for (const p of rd.particles) {
+    if (rd.active) {
+      _grabV.copy(p.pos);
+    } else {
+      const node = m.vrm.humanoid?.getNormalizedBoneNode(p.bone);
+      if (!node) continue;
+      node.getWorldPosition(_grabV);
+    }
+    _grabV.sub(orig);
+    const along = _grabV.dot(dir);
+    if (along < 0 || along > GRAB_RANGE) continue;
+    const perp2 = _grabV.lengthSq() - along * along;
+    if (perp2 < 0.25 && along < bestAlong) { bestAlong = along; best = p.bone; }   // 0.5m 以内
+  }
+  return best ? { bone: best, along: bestAlong } : null;
+}
+
+function grabMeguBody(m, bone) {
   m.grabbed = true;
   if (!m.ragdoll.active) setRagdollActive(m.ragdoll, true);
+  m.grabBone = bone || 'chest';   // 掴んだ部位（頭・手・足など）をピン
   updateCrosshair();
 }
 
@@ -444,8 +468,8 @@ function updateMegu(m, dt) {
     const env = { floorY: 0, bounds: ARENA_BOUNDS };
     const held = m.grabbed || m.clothGrabbed;
     if (m.grabbed) {
-      // 本体掴み：胸を手アンカーにハードピン（しっかり掴む）
-      updateHandAnchor(); env.pinBone = 'chest'; env.pinPos = handAnchor;
+      // 本体掴み：掴んだ部位（手・足・頭など）を手アンカーにハードピン
+      updateHandAnchor(); env.pinBone = m.grabBone || 'chest'; env.pinPos = handAnchor;
     } else if (m.clothGrabbed) {
       // マント掴み：胸を手アンカーへ“緩く”引き寄せ → 本体は吊り下がってぶらぶら
       updateHandAnchor(); env.tetherBone = 'chest'; env.tetherPos = handAnchor; env.tetherStrength = 0.03;
@@ -547,15 +571,19 @@ function stepProjectiles(dt) {
       }
     }
 
-    // NPC 命中（未発動時のみラグドール発動）
+    // NPC 命中：未発動ならラグドール発動、発動中なら追加の撃力で小突く（倒れていても当たる）
     if (!dead) {
       for (const m of megus) {
-        if (m.ragdoll.active) continue;
         meguCenter(m, _meguC);
         const rr = p.radius + MEGU_RADIUS;
         if (p.pos.distanceToSquared(_meguC) <= rr * rr) {
           _hitDir.copy(p.vel).normalize();
-          hitMegu(m, _hitDir);
+          if (m.ragdoll.active) {
+            applyRagdollImpulse(m.ragdoll, _hitDir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'hips');
+            if (!m.grabbed && !m.clothGrabbed) m.recoverTimer = MEGU_RECOVER_DELAY;   // 倒れたまま延長
+          } else {
+            hitMegu(m, _hitDir);
+          }
           dead = true;
           break;
         }
