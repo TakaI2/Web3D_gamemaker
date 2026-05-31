@@ -12,6 +12,8 @@ import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse }
   from '../lib/vrm-ragdoll.js';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
+import { positionWorld, mix, color } from 'https://esm.sh/three@0.184.0/tsl';
+import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 
 // ── アリーナ ───────────────────────────────────────────────────
 const ROOM = { x: 14, y: 9, z: 14 };   // 内寸（床 y=0、天井 y=ROOM.y）
@@ -36,6 +38,7 @@ const STEP_HZ         = 120;
 const MAX_STEPS_FRAME = 5;
 
 // ── Megu（VRM ラグドール）─────────────────────────────────────
+const MEGU_COUNT         = 3;      // 出現する NPC 数
 const MEGU_RADIUS        = 0.55;   // 当たり/掴み判定の体半径
 const MEGU_CENTER_Y      = 1.0;    // 飛行時の判定中心の高さ（root からのオフセット）
 const MEGU_RECOVER_DELAY = 2.5;    // 被弾→ラグドール継続時間(秒)
@@ -74,7 +77,7 @@ const objects     = [];   // 飛行オブジェクト
 const projectiles = [];   // 発射体
 let   grabbed     = null;  // 掴み中のオブジェクト（1個）
 const handAnchor  = new THREE.Vector3();
-let   megu        = null;  // { vrm, ragdoll, mixer, pos, vel, grabbed, recoverTimer }
+const megus       = [];    // 複数の VRM NPC（各 { vrm, ragdoll, mixer, action, cloth, pos, vel, grabbed, clothGrabbed, recoverTimer }）
 
 // ── 物理ステップ用 ─────────────────────────────────────────────
 let timeSinceLastStep = 0;
@@ -116,20 +119,25 @@ function buildArena() {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
     mesh.position.set(x, y, z);
     group.add(mesh);
+    return mesh;
   };
 
   // 床・天井（プレイ域より少し大きめ）
-  box(0, -t / 2,          0, ROOM.x + t * 2, t, ROOM.z + t * 2, mFloor);
-  box(0, ROOM.y + t / 2,  0, ROOM.x + t * 2, t, ROOM.z + t * 2, mCeiling);
+  const floorMesh = box(0, -t / 2, 0, ROOM.x + t * 2, t, ROOM.z + t * 2, mFloor);
+  const hidden = [];
+  hidden.push(box(0, ROOM.y + t / 2, 0, ROOM.x + t * 2, t, ROOM.z + t * 2, mCeiling));
   // 四方の壁（内面がプレイ域境界に一致）
-  box( hx + t / 2, ROOM.y / 2, 0, t, ROOM.y, ROOM.z + t * 2, mWall);
-  box(-hx - t / 2, ROOM.y / 2, 0, t, ROOM.y, ROOM.z + t * 2, mWall);
-  box(0, ROOM.y / 2,  hz + t / 2, ROOM.x + t * 2, ROOM.y, t, mWall);
-  box(0, ROOM.y / 2, -hz - t / 2, ROOM.x + t * 2, ROOM.y, t, mWall);
+  hidden.push(box( hx + t / 2, ROOM.y / 2, 0, t, ROOM.y, ROOM.z + t * 2, mWall));
+  hidden.push(box(-hx - t / 2, ROOM.y / 2, 0, t, ROOM.y, ROOM.z + t * 2, mWall));
+  hidden.push(box(0, ROOM.y / 2,  hz + t / 2, ROOM.x + t * 2, ROOM.y, t, mWall));
+  hidden.push(box(0, ROOM.y / 2, -hz - t / 2, ROOM.x + t * 2, ROOM.y, t, mWall));
 
   scene.add(group);
   worldOctree = new Octree();
   worldOctree.fromGraphNode(group);
+  // 床だけ表示。壁・天井は非表示（当たり判定は Octree に残る）。
+  for (const m of hidden) m.visible = false;
+  void floorMesh;
 }
 
 // ============================================================
@@ -229,7 +237,7 @@ function updateHandAnchor() {
 }
 
 function tryGrab() {
-  if (grabbed || (megu && (megu.grabbed || megu.clothGrabbed))) return;
+  if (grabbed || grabbedMegu()) return;
   raycaster.setFromCamera(screenCenter, camera);
   raycaster.far = GRAB_RANGE;
 
@@ -237,39 +245,28 @@ function tryGrab() {
   let kind = hits.length ? 'obj' : null;
   let dist = hits.length ? hits[0].distance : Infinity;
   const obj = hits.length ? hits[0].object.userData.obj : null;
-  let clothIdx = -1;
+  let target = null, clothIdx = -1;
 
-  if (megu) {
-    // Megu 本体（スキンメッシュ再帰判定）
-    const bh = raycaster.intersectObject(megu.vrm.scene, true);
-    if (bh.length && bh[0].distance < dist) { kind = 'body'; dist = bh[0].distance; }
-    // マント（CPU シャドウから最近頂点）。より手前ならマント掴み。
-    const cl = nearestClothVertex();
-    if (cl && cl.along < dist) { kind = 'cloth'; dist = cl.along; clothIdx = cl.index; }
+  // 全 NPC の本体/マントを判定し、最も手前を採用
+  for (const m of megus) {
+    const bh = raycaster.intersectObject(m.vrm.scene, true);
+    if (bh.length && bh[0].distance < dist) { kind = 'body'; dist = bh[0].distance; target = m; }
+    const cl = nearestClothVertex(m);
+    if (cl && cl.along < dist) { kind = 'cloth'; dist = cl.along; target = m; clothIdx = cl.index; }
   }
 
   if (kind === 'cloth') {
-    updateHandAnchor();
-    megu.cloth.grab(clothIdx, handAnchor);                           // 掴んだマント点を手にピン
-    megu.clothGrabbed = true;
-    if (!megu.ragdoll.active) setRagdollActive(megu.ragdoll, true);  // 本体もラグドール化して吊り下げ振り回す
-    updateCrosshair();
+    grabMeguCloth(target, clothIdx);
   } else if (kind === 'body') {
-    grabMegu();
+    grabMeguBody(target);
   } else if (kind === 'obj' && obj) {
     obj.grabbed = true; grabbed = obj; updateCrosshair();
   }
 }
 
 function release() {
-  if (megu && megu.clothGrabbed) {
-    megu.cloth.releaseGrab();
-    megu.clothGrabbed = false;
-    megu.recoverTimer = MEGU_RECOVER_DELAY;   // 離した後もしばらくラグドール（落下）してから復帰＝被弾と同様
-    updateCrosshair();
-    return;
-  }
-  if (megu && megu.grabbed) { releaseMegu(); return; }
+  const m = grabbedMegu();
+  if (m) { releaseMegu(m); return; }
   if (!grabbed) return;
   grabbed.grabbed = false;
   grabbed.vel.multiplyScalar(params.releaseBoost);
@@ -303,29 +300,30 @@ function dataURIToBlob(uri) {
   return new Blob([arr], { type: mime });
 }
 
-async function fetchMeguBundle() {
+// 出現させる NPC バンドル（public/npc/ の全員）
+const NPC_FILES = ['megu.npc.json', 'lily.npc.json', 'ayu.npc.json'];
+
+async function fetchBundle(filename) {
   const candidates = [];
   try {
     const base = import.meta.env && import.meta.env.BASE_URL;
-    if (base) candidates.push(base + 'npc/megu.npc.json');
+    if (base) candidates.push(base + 'npc/' + filename);
   } catch { /* import.meta.env 未定義の静的配信では無視 */ }
-  candidates.push(new URL('./npc/megu.npc.json', import.meta.url).href);
-  candidates.push(new URL('../npc/megu.npc.json', import.meta.url).href);
+  candidates.push(new URL('./npc/' + filename, import.meta.url).href);
+  candidates.push(new URL('../npc/' + filename, import.meta.url).href);
   for (const url of candidates) {
     try { const r = await fetch(url); if (r.ok) return await r.json(); } catch { /* 次の候補へ */ }
   }
   return null;
 }
 
-async function loadMegu() {
-  const bundle = await fetchMeguBundle();
-  if (!bundle || !bundle.vrm) { console.warn('megu.npc.json が見つかりません'); return; }
-
+// バンドルから NPC を1体生成して返す（VRM は個体ごとに別インスタンス）。
+async function createMegu(bundle, pos) {
   const loader = new GLTFLoader();
   loader.register(p => new VRMLoaderPlugin(p));
   const gltf = await loader.loadAsync(URL.createObjectURL(dataURIToBlob(bundle.vrm)));
   const vrm = gltf.userData.vrm;
-  if (!vrm) return;
+  if (!vrm) return null;
 
   let mixer = null, action = null;
   if (bundle.vrma) {
@@ -338,10 +336,10 @@ async function loadMegu() {
       mixer = new THREE.AnimationMixer(vrm.scene);
       action = mixer.clipAction(clip);
       action.setLoop(THREE.LoopRepeat, Infinity).play();
+      action.time = randRange(0, clip.duration || 1);   // 個体ごとにアニメ位相をずらす
     }
   }
 
-  const pos = new THREE.Vector3(randRange(-4, 4), randRange(1.5, ROOM.y - 2.5), randRange(-4, 4));
   vrm.scene.position.copy(pos);
   scene.add(vrm.scene);
   vrm.scene.updateMatrixWorld(true);
@@ -355,21 +353,34 @@ async function loadMegu() {
     catch (e) { console.warn('マント生成失敗:', e); }
   }
 
-  megu = {
+  return {
     vrm, ragdoll, mixer, action, cloth, pos,
     tlFps: bundle.timeline?.fps ?? 30,
+    tlDuration: bundle.timeline?.durationFrames ?? 0,
+    tlClock: 0,                              // アニメ無し(ayu等)用の手グリップ・タイムライン時計
     vel: randomDir().multiplyScalar(randRange(2, 4)),
     grabbed: false, clothGrabbed: false, grabOffset: new THREE.Vector3(), recoverTimer: 0,
   };
 }
 
-// 照準（カメラレイ）に最も近いマント頂点を CPU シャドウから探す。{ index, along } or null。
-function nearestClothVertex() {
-  if (!megu || !megu.cloth || !megu.cloth.cpuReady) return null;
-  const cp = megu.cloth.cpuPositions;
+async function loadMegus() {
+  // public/npc/ の全 NPC を1体ずつ出現させる
+  for (const filename of NPC_FILES) {
+    const bundle = await fetchBundle(filename);
+    if (!bundle || !bundle.vrm) { console.warn('NPC 読み込み失敗:', filename); continue; }
+    const pos = new THREE.Vector3(randRange(-5, 5), randRange(1.5, ROOM.y - 2.5), randRange(-5, 5));
+    const m = await createMegu(bundle, pos);
+    if (m) megus.push(m);
+  }
+}
+
+// 照準（カメラレイ）に最も近い m のマント頂点を CPU シャドウから探す。{ index, along } or null。
+function nearestClothVertex(m) {
+  if (!m.cloth || !m.cloth.cpuReady) return null;
+  const cp = m.cloth.cpuPositions;
   const orig = raycaster.ray.origin, dir = raycaster.ray.direction;
   let best = -1, bestAlong = Infinity;
-  for (let i = 0; i < megu.cloth.vertexCount; i++) {
+  for (let i = 0; i < m.cloth.vertexCount; i++) {
     _grabV.set(cp[i*3], cp[i*3+1], cp[i*3+2]).sub(orig);
     const along = _grabV.dot(dir);
     if (along < 0 || along > GRAB_RANGE) continue;
@@ -380,79 +391,105 @@ function nearestClothVertex() {
 }
 
 // 当たり/掴み判定の中心（飛行時 = root + 高さ、ラグドール時 = hips 粒子のワールド位置）
-function meguCenter(out) {
-  const rd = megu.ragdoll;
-  if (rd.active && rd.idxOf.hips != null) {
-    out.copy(rd.particles[rd.idxOf.hips].pos);
-  } else {
-    out.copy(megu.pos);
-    out.y += MEGU_CENTER_Y;
-  }
+function meguCenter(m, out) {
+  const rd = m.ragdoll;
+  if (rd.active && rd.idxOf.hips != null) out.copy(rd.particles[rd.idxOf.hips].pos);
+  else { out.copy(m.pos); out.y += MEGU_CENTER_Y; }
   return out;
 }
 
-function hitMegu(dir) {
-  if (!megu || megu.ragdoll.active) return;
-  setRagdollActive(megu.ragdoll, true);
-  applyRagdollImpulse(megu.ragdoll, dir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'chest');
-  megu.grabbed = false;
-  megu.recoverTimer = MEGU_RECOVER_DELAY;
+function hitMegu(m, dir) {
+  if (m.ragdoll.active) return;
+  setRagdollActive(m.ragdoll, true);
+  applyRagdollImpulse(m.ragdoll, dir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'chest');
+  m.grabbed = false;
+  m.recoverTimer = MEGU_RECOVER_DELAY;
 }
 
-function grabMegu() {
-  megu.grabbed = true;
-  if (!megu.ragdoll.active) setRagdollActive(megu.ragdoll, true);
+function grabMeguBody(m) {
+  m.grabbed = true;
+  if (!m.ragdoll.active) setRagdollActive(m.ragdoll, true);
   updateCrosshair();
 }
 
-function releaseMegu() {
-  megu.grabbed = false;
-  megu.recoverTimer = MEGU_RECOVER_DELAY;   // 離した後もしばらくラグドール（落下）してから復帰＝被弾と同様
+function grabMeguCloth(m, clothIdx) {
+  updateHandAnchor();
+  m.cloth.grab(clothIdx, handAnchor);                       // 掴んだマント点を手にピン
+  m.clothGrabbed = true;
+  if (!m.ragdoll.active) setRagdollActive(m.ragdoll, true); // 本体もラグドール化して吊り下げ
   updateCrosshair();
 }
 
-function onMeguRecovered() {
-  megu.vel.copy(randomDir()).multiplyScalar(randRange(2, 4));   // 新しい速度で飛行再開
+function releaseMegu(m) {
+  if (m.clothGrabbed) { m.cloth.releaseGrab(); m.clothGrabbed = false; }
+  m.grabbed = false;
+  m.recoverTimer = MEGU_RECOVER_DELAY;   // 離した後もしばらくラグドール（落下）してから復帰＝被弾と同様
+  updateCrosshair();
 }
 
-function updateMegu(dt) {
-  if (!megu) return;
-  const rd = megu.ragdoll;
+function onMeguRecovered(m) {
+  m.vel.copy(randomDir()).multiplyScalar(randRange(2, 4));   // 新しい速度で飛行再開
+}
+
+// 掴み中の NPC（1体）を返す。無ければ null。
+function grabbedMegu() {
+  for (const m of megus) if (m.grabbed || m.clothGrabbed) return m;
+  return null;
+}
+
+function updateMegu(m, dt) {
+  const rd = m.ragdoll;
   if (rd.active) {
     // 被弾/本体掴み/マント掴みいずれもラグドール。
     const env = { floorY: 0, bounds: ARENA_BOUNDS };
-    const held = megu.grabbed || megu.clothGrabbed;
-    if (megu.grabbed) {
+    const held = m.grabbed || m.clothGrabbed;
+    if (m.grabbed) {
       // 本体掴み：胸を手アンカーにハードピン（しっかり掴む）
       updateHandAnchor(); env.pinBone = 'chest'; env.pinPos = handAnchor;
-    } else if (megu.clothGrabbed) {
+    } else if (m.clothGrabbed) {
       // マント掴み：胸を手アンカーへ“緩く”引き寄せ → 本体は吊り下がってぶらぶら
       updateHandAnchor(); env.tetherBone = 'chest'; env.tetherPos = handAnchor; env.tetherStrength = 0.03;
     }
     updateRagdoll(rd, dt, env);
     if (!held) {
-      megu.recoverTimer -= dt;
-      if (megu.recoverTimer <= 0) setRagdollActive(rd, false);   // 復帰開始
+      m.recoverTimer -= dt;
+      if (m.recoverTimer <= 0) setRagdollActive(rd, false);   // 復帰開始
     }
   } else if (rd.recovering) {
-    if (megu.mixer) megu.mixer.update(dt);
+    if (m.mixer) m.mixer.update(dt);
     updateRagdollRecovery(rd, dt);
-    if (!rd.recovering) onMeguRecovered();
+    if (!rd.recovering) onMeguRecovered(m);
   } else {
-    if (megu.mixer) megu.mixer.update(dt);
-    megu.pos.addScaledVector(megu.vel, dt);
-    bounceAxis(megu, 'x', -ROOM.x / 2 + MEGU_RADIUS, ROOM.x / 2 - MEGU_RADIUS);
-    bounceAxis(megu, 'y', 0.2, ROOM.y - 1.8);
-    bounceAxis(megu, 'z', -ROOM.z / 2 + MEGU_RADIUS, ROOM.z / 2 - MEGU_RADIUS);
-    megu.vrm.scene.position.copy(megu.pos);
+    if (m.mixer) m.mixer.update(dt);
+    m.pos.addScaledVector(m.vel, dt);
+    bounceAxis(m, 'x', -ROOM.x / 2 + MEGU_RADIUS, ROOM.x / 2 - MEGU_RADIUS);
+    bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
+    bounceAxis(m, 'z', -ROOM.z / 2 + MEGU_RADIUS, ROOM.z / 2 - MEGU_RADIUS);
+    m.vrm.scene.position.copy(m.pos);
   }
-  megu.vrm.update(dt);
-  if (megu.cloth) {
-    if (megu.clothGrabbed) { updateHandAnchor(); megu.cloth.moveGrab(handAnchor); }
-    const frame = megu.action ? Math.floor(megu.action.time * megu.tlFps) : null;   // NPC 手グリップ用フレーム
-    megu.cloth.update(dt, frame);           // ボーン追従＋手グリップでマント更新（vrm.update の後）
-    if ((meguFrame++ % 4) === 0) megu.cloth.refresh();   // 掴み用 CPU シャドウを間引き更新
+  m.vrm.update(dt);
+  if (m.cloth) {
+    if (m.clothGrabbed) { updateHandAnchor(); m.cloth.moveGrab(handAnchor); }
+    // 手グリップ用フレーム：アニメがあれば action.time、無ければ独自クロック（ラグドール中は凍結）
+    let frame = null;
+    if (m.action) {
+      frame = Math.floor(m.action.time * m.tlFps);
+    } else if (m.tlDuration) {
+      if (!rd.active) m.tlClock += dt;
+      frame = Math.floor(m.tlClock * m.tlFps) % m.tlDuration;
+    }
+    m.cloth.update(dt, frame);              // ボーン追従＋手グリップでマント更新（vrm.update の後）
   }
+}
+
+function updateMegus(dt) {
+  for (const m of megus) updateMegu(m, dt);
+  // マント位置の CPU 読み戻しは負荷が高いので毎フレーム1体だけ（ラウンドロビン）
+  if (megus.length) {
+    const m = megus[meguFrame % megus.length];
+    if (m.cloth) m.cloth.refresh();
+  }
+  meguFrame++;
 }
 
 // ============================================================
@@ -510,14 +547,18 @@ function stepProjectiles(dt) {
       }
     }
 
-    // Megu 命中（未発動時のみラグドール発動）
-    if (!dead && megu && !megu.ragdoll.active) {
-      meguCenter(_meguC);
-      const rr = p.radius + MEGU_RADIUS;
-      if (p.pos.distanceToSquared(_meguC) <= rr * rr) {
-        _hitDir.copy(p.vel).normalize();
-        hitMegu(_hitDir);
-        dead = true;
+    // NPC 命中（未発動時のみラグドール発動）
+    if (!dead) {
+      for (const m of megus) {
+        if (m.ragdoll.active) continue;
+        meguCenter(m, _meguC);
+        const rr = p.radius + MEGU_RADIUS;
+        if (p.pos.distanceToSquared(_meguC) <= rr * rr) {
+          _hitDir.copy(p.vel).normalize();
+          hitMegu(m, _hitDir);
+          dead = true;
+          break;
+        }
       }
     }
 
@@ -605,7 +646,7 @@ function updatePlayer(dt) {
 
 function updateCrosshair() {
   const el = document.getElementById('crosshair');
-  if (el) el.classList.toggle('grabbing', !!grabbed || !!(megu && (megu.grabbed || megu.clothGrabbed)));
+  if (el) el.classList.toggle('grabbing', !!grabbed || !!grabbedMegu());
 }
 
 function setupControls() {
@@ -724,7 +765,7 @@ function render() {
   if (steps >= MAX_STEPS_FRAME) timeSinceLastStep = 0;
 
   syncObjectMeshes();
-  updateMegu(dt);
+  updateMegus(dt);
   renderer.render(scene, camera);
 }
 
@@ -745,24 +786,38 @@ async function init() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping         = THREE.NeutralToneMapping;
-  renderer.toneMappingExposure = 1.1;
+  renderer.toneMappingExposure = 1.0;
   app.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x12141f);
-  scene.fog = new THREE.FogExp2(0x12141f, 0.02);
+  scene.background = new THREE.Color(0xbcd8ef);       // 空の色（スカイドームの背後フォールバック）
+  scene.fog = new THREE.FogExp2(0xcfe3f5, 0.006);     // 薄い空気遠近
 
-  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 200);
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 250);
   camera.rotation.order = 'YXZ';
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-  const key = new THREE.DirectionalLight(0xfff4e0, 1.6);
-  key.position.set(4, 10, 6);
+  // 空：グラデーションのスカイドーム（天頂=青 → 地平=淡い）
+  const skyMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, fog: false });
+  const skyT = positionWorld.normalize().y.mul(0.5).add(0.5).clamp(0, 1);   // 0=地平, 1=天頂
+  skyMat.colorNode = mix(color(0xeaf4fb), color(0x3f86d4), skyT);
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(90, 32, 16), skyMat);
+  sky.frustumCulled = false;
+  scene.add(sky);
+
+  // ライティング：/cloth と同様に HDR 環境マップ(IBL)を主体に。VRM(MToon)用に弱い太陽光を併用。
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+  const key = new THREE.DirectionalLight(0xfff6e6, 1.5);
+  key.position.set(5, 12, 6);
   scene.add(key);
-  scene.add(new THREE.HemisphereLight(0x9fb4ff, 0x404050, 0.7));
-  const center = new THREE.PointLight(0xffffff, 1.2, 30);
-  center.position.set(0, ROOM.y - 1, 0);
-  scene.add(center);
+  try {
+    const hdr = await new UltraHDRLoader().loadAsync(
+      'https://threejs.org/examples/textures/equirectangular/royal_esplanade_2k.hdr.jpg',
+    );
+    hdr.mapping = THREE.EquirectangularReflectionMapping;
+    scene.environment = hdr;   // IBL（背景は空グラデーションのまま）
+  } catch (e) {
+    console.warn('HDR 環境マップ読み込み失敗（ライトのみで継続）:', e);
+  }
 
   buildArena();
 
@@ -776,7 +831,7 @@ async function init() {
   camera.rotation.set(playerPitch, playerYaw, 0, 'YXZ');
 
   setObjectCount(params.objectCount);
-  loadMegu().catch(e => console.warn('Megu 読み込み失敗:', e));
+  loadMegus().catch(e => console.warn('Megu 読み込み失敗:', e));
   setupUI();
   setupControls();
 
