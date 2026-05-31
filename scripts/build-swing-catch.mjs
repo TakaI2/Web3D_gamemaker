@@ -14,9 +14,10 @@ fs.mkdirSync(dest, { recursive: true });
 fs.copyFileSync(path.join(src, 'index.html'), path.join(dest, 'index.html'));
 console.log('copied: index.html');
 
-// swing-catch.js は共有 lib の import を dist 内ローカル参照に書き換えてコピー
+// swing-catch.js は lib import と models/ 参照を dist 内ローカルに書き換えてコピー
 const jsSrc = fs.readFileSync(path.join(src, 'swing-catch.js'), 'utf8')
-  .replace(/\.\.\/lib\//g, './');
+  .replace(/\.\.\/lib\//g, './')
+  .replace(/\.\.\/models\//g, './models/');
 fs.writeFileSync(path.join(dest, 'swing-catch.js'), jsSrc);
 console.log('copied: swing-catch.js (import rewritten)');
 
@@ -38,6 +39,13 @@ if (fs.existsSync(npcSrc)) {
       console.log(`copied: npc/${f}`);
     }
   }
+}
+
+// モデル(GLB)・selection.json・stage.json を同梱（./models/ で解決）
+const modelsSrc = path.join(root, 'public', 'models');
+if (fs.existsSync(modelsSrc)) {
+  fs.cpSync(modelsSrc, path.join(dest, 'models'), { recursive: true });
+  console.log('copied: models/');
 }
 
 console.log('\ndist-swing-catch/ ready for deployment to /htdocs/swing-catch/');

@@ -13,6 +13,7 @@
     "build:fps-cloth-vrm": "node scripts/build-fps-cloth-vrm.mjs",
     "build:fps-cloth-vrm-mobile": "node scripts/build-fps-cloth-vrm-mobile.mjs",
     "build:swing-catch": "node scripts/build-swing-catch.mjs",
+    "build:swing-catch-mobile": "node scripts/build-swing-catch-mobile.mjs",
     "build:character-editor": "node scripts/build-character-editor.mjs",
     "build:model-editor": "node scripts/build-model-editor.mjs",
     "build:stage-editor": "node scripts/build-stage-editor.mjs",

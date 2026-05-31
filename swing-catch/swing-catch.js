@@ -75,6 +75,11 @@ let   playerYaw   = Math.PI;
 let   playerPitch = 0;
 const keysDown    = {};
 let   isLocked    = false;
+let   touchMode   = false;                 // モバイル: タッチ操作（#joystick-base がある時に有効化）
+const joystickVec = { x: 0, y: 0 };
+const touchMoveT  = { active: false, id: -1, startX: 0, startY: 0 };
+const touchLookT  = { active: false, id: -1, prevX: 0, prevY: 0, downT: 0, moved: false, grabbed: false, timer: 0 };
+const JOYSTICK_MAX = 60;
 
 // ── ゲーム状態 ─────────────────────────────────────────────────
 const objects     = [];   // 飛行オブジェクト
@@ -901,7 +906,7 @@ function playerCollisions() {
 }
 
 function updatePlayer(dt) {
-  if (!isLocked) return;
+  if (!isLocked && !touchMode) return;
 
   const speedDelta = dt * (playerOnFloor ? PLAYER_SPEED : PLAYER_SPEED * 0.4);
   const fwd   = new THREE.Vector3(-Math.sin(playerYaw), 0, -Math.cos(playerYaw));
@@ -911,6 +916,11 @@ function updatePlayer(dt) {
   if (keysDown['KeyS'] || keysDown['ArrowDown'])  playerVel.addScaledVector(fwd,   -speedDelta);
   if (keysDown['KeyA'] || keysDown['ArrowLeft'])  playerVel.addScaledVector(right, -speedDelta);
   if (keysDown['KeyD'] || keysDown['ArrowRight']) playerVel.addScaledVector(right,  speedDelta);
+
+  if (touchMode) {   // 仮想ジョイスティック（上=前進）
+    playerVel.addScaledVector(fwd,  -joystickVec.y * speedDelta);
+    playerVel.addScaledVector(right, joystickVec.x * speedDelta);
+  }
 
   let damping = Math.exp(-4 * dt) - 1;
   if (!playerOnFloor) {
@@ -948,6 +958,7 @@ function setupControls() {
   const canvas = renderer.domElement;
 
   canvas.addEventListener('click', () => {
+    if (touchMode) return;
     if (!isLocked) canvas.requestPointerLock();
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -962,7 +973,7 @@ function setupControls() {
   });
 
   document.addEventListener('mousemove', (e) => {
-    if (!isLocked) return;
+    if (touchMode || !isLocked) return;
     const sens = 0.002;
     playerYaw   -= e.movementX * sens;
     playerPitch -= e.movementY * sens;
@@ -971,12 +982,13 @@ function setupControls() {
   });
 
   canvas.addEventListener('mousedown', (e) => {
-    if (!isLocked) return;       // 最初のクリックはロック取得のみ
+    if (touchMode || !isLocked) return;   // 最初のクリックはロック取得のみ
     if (e.button === 0)      tryGrab();
     else if (e.button === 2) fireProjectile();
   });
 
   window.addEventListener('mouseup', (e) => {
+    if (touchMode) return;
     if (e.button === 0) release();
   });
 
@@ -990,6 +1002,81 @@ function setupControls() {
   document.getElementById('ui')?.addEventListener('mousedown', () => {
     if (isLocked) document.exitPointerLock();
   });
+}
+
+// モバイル: タッチ操作（#joystick-base がある時だけ有効＝PC版では無害）
+// 左半分=移動ジョイスティック / 右半分=ドラッグで視点・短タップで発射・長押しでグラブ
+const TOUCH_GRAB_MS = 320;
+function setupTouchControls() {
+  const base  = document.getElementById('joystick-base');
+  const stick = document.getElementById('joystick-stick');
+  if (!base || !stick) return;   // PC（DOM無し）では何もしない
+  touchMode = true;
+  isLocked  = true;
+  const jump = document.getElementById('jump-btn');
+  if (jump) jump.style.display = 'flex';
+  const canvas = renderer.domElement;
+  canvas.style.touchAction = 'none';
+
+  canvas.addEventListener('pointerdown', (e) => {
+    const isLeft = e.clientX < window.innerWidth / 2;
+    if (isLeft) {
+      if (touchMoveT.active) return;
+      touchMoveT.active = true; touchMoveT.id = e.pointerId; touchMoveT.startX = e.clientX; touchMoveT.startY = e.clientY;
+      base.style.left = `${e.clientX - 70}px`; base.style.top = `${e.clientY - 70}px`; base.style.display = 'block';
+      stick.style.transform = 'translate(0px, 0px)';
+    } else {
+      if (touchLookT.active) return;
+      touchLookT.active = true; touchLookT.id = e.pointerId; touchLookT.prevX = e.clientX; touchLookT.prevY = e.clientY;
+      touchLookT.downT = performance.now(); touchLookT.moved = false; touchLookT.grabbed = false;
+      clearTimeout(touchLookT.timer);
+      touchLookT.timer = setTimeout(() => {            // 長押し → グラブ
+        if (!touchLookT.active) return;
+        tryGrab();
+        touchLookT.grabbed = !!grabbed || !!grabbedMegu();
+      }, TOUCH_GRAB_MS);
+    }
+    canvas.setPointerCapture(e.pointerId);
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (touchMoveT.active && e.pointerId === touchMoveT.id) {
+      const dx = e.clientX - touchMoveT.startX, dy = e.clientY - touchMoveT.startY;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0) {
+        const c = Math.min(dist, JOYSTICK_MAX), nx = dx / dist, ny = dy / dist;
+        joystickVec.x = nx * (c / JOYSTICK_MAX); joystickVec.y = ny * (c / JOYSTICK_MAX);
+        stick.style.transform = `translate(${nx * c}px, ${ny * c}px)`;
+      }
+    }
+    if (touchLookT.active && e.pointerId === touchLookT.id) {
+      const sens = 0.005;
+      const mdx = e.clientX - touchLookT.prevX, mdy = e.clientY - touchLookT.prevY;
+      if (Math.abs(mdx) + Math.abs(mdy) > 3) touchLookT.moved = true;
+      playerYaw   -= mdx * sens;
+      playerPitch -= mdy * sens;
+      playerPitch  = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, playerPitch));
+      camera.rotation.set(playerPitch, playerYaw, 0, 'YXZ');
+      touchLookT.prevX = e.clientX; touchLookT.prevY = e.clientY;
+    }
+  });
+
+  const endTouch = (e) => {
+    if (touchMoveT.active && e.pointerId === touchMoveT.id) {
+      touchMoveT.active = false; touchMoveT.id = -1; joystickVec.x = 0; joystickVec.y = 0;
+      base.style.display = 'none'; stick.style.transform = 'translate(0px, 0px)';
+    }
+    if (touchLookT.active && e.pointerId === touchLookT.id) {
+      clearTimeout(touchLookT.timer);
+      if (touchLookT.grabbed) release();                                              // グラブ中なら離す＝投擲/解除
+      else if (!touchLookT.moved && performance.now() - touchLookT.downT < TOUCH_GRAB_MS) fireProjectile();  // 短タップ＝発射
+      touchLookT.active = false; touchLookT.id = -1; touchLookT.grabbed = false; touchLookT.moved = false;
+    }
+  };
+  canvas.addEventListener('pointerup', endTouch);
+  canvas.addEventListener('pointercancel', endTouch);
+
+  jump?.addEventListener('pointerdown', (e) => { e.stopPropagation(); if (playerOnFloor) playerVel.y = JUMP_VEL; });
 }
 
 // ============================================================
@@ -1135,6 +1222,7 @@ async function init() {
   loadMegus().catch(e => console.warn('Megu 読み込み失敗:', e));
   setupUI();
   setupControls();
+  setupTouchControls();   // #joystick-base があれば（モバイル版ビルド）タッチ操作を有効化
 
   const lockOverlay = document.getElementById('lock-overlay');
   if (lockOverlay) lockOverlay.style.display = 'flex';
