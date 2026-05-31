@@ -31,7 +31,7 @@
     button.act:hover { background:#2a2a58; }
     button.prim { border-color:#6cf; color:#aef; }
     #topbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; gap: 8px; }
-    #topbar a, #topbar button { background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.25); color:#fff; padding:6px 12px; border-radius:4px; font-size:12px; cursor:pointer; text-decoration:none; }
+    #topbar a, #topbar button, #topbar select { background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.25); color:#fff; padding:6px 12px; border-radius:4px; font-size:12px; cursor:pointer; text-decoration:none; }
     #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: rgba(30,30,60,0.92); color:#eee; padding:6px 16px; border-radius:6px; font-size:12px; opacity:0; transition:opacity .3s; z-index:30; pointer-events:none; }
     #toast.show { opacity: 1; }
     .hint { color:#778; font-size:10px; margin-top:4px; line-height:1.5; }
@@ -42,7 +42,10 @@
 
   <div id="topbar">
     <a href="../hub/">← 一覧</a>
-    <button id="btn-load">NPC読込</button>
+    <select id="npc-select" title="public/npc/ から読込"></select>
+    <button id="btn-load">ファイル…</button>
+    <select id="motion-select" title="public/timeline/ のモーション"></select>
+    <button id="btn-play-motion">▶ モーション</button>
     <button id="btn-export" class="prim">.npc.json 書き出し</button>
     <input type="file" id="file-input" accept=".json,.npc.json" style="display:none">
   </div>

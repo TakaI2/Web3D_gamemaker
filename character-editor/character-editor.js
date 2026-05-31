@@ -333,22 +333,97 @@ function startSim(held) {
   recoverTimer = (characterDef.behavior.recoverDelaySec ?? 2.5) + LOOK_DURATION;
 }
 
-function exportBundle() {
+async function exportBundle() {
   if (!bundle) { toast('先に NPC を読み込んでください'); return; }
   const out = Object.assign({}, bundle);
   out.version = 2;
   out.character = characterDef;
+  const filename = `${bundle.name || 'character'}.npc.json`;
+
+  // 開発サーバーの public/npc/ へ保存を試みる（本番等でエンドポイントが無ければダウンロードへ）
+  try {
+    const r = await fetch('../api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: 'npc', filename, content: out }),
+    });
+    if (r.ok) { const j = await r.json(); toast(`保存しました: ${j.path}`); return; }
+  } catch { /* エンドポイント無し → ダウンロードへフォールバック */ }
+
   const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${bundle.name || 'character'}.npc.json`;
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(a.href);
-  toast('.npc.json (v2) を書き出しました');
+  toast('.npc.json をダウンロードしました（サーバー保存不可のため）');
+}
+
+// public/npc/ の一覧をドロップダウンに反映（manifest が無ければ既定リストにフォールバック）
+async function populateNpcSelect(current) {
+  const sel = document.getElementById('npc-select');
+  if (!sel) return;
+  let files = [];
+  try { const r = await fetch('../npc/manifest.json'); if (r.ok) files = await r.json(); } catch { /* noop */ }
+  if (!files.length) files = NPC_FILES.slice();
+  sel.innerHTML = '';
+  for (const f of files) {
+    const o = document.createElement('option');
+    o.value = f; o.textContent = f.replace(/\.npc\.json$/, '');
+    sel.appendChild(o);
+  }
+  if (current && files.includes(current)) sel.value = current;
+  sel.onchange = async () => {
+    const b = await fetchBundle(sel.value);
+    if (b) await loadBundleObject(b);
+  };
+}
+
+// public/timeline/ の VRMA モーション一覧をドロップダウンへ
+async function populateMotionSelect() {
+  const sel = document.getElementById('motion-select');
+  if (!sel) return;
+  let files = [];
+  try { const r = await fetch('../timeline/manifest.json'); if (r.ok) files = await r.json(); } catch { /* noop */ }
+  sel.innerHTML = '';
+  if (!files.length) { const o = document.createElement('option'); o.textContent = '(モーション無し)'; o.value = ''; sel.appendChild(o); return; }
+  for (const f of files) { const o = document.createElement('option'); o.value = f; o.textContent = f.replace(/\.vrma$/, ''); sel.appendChild(o); }
+}
+
+// 選択中の VRMA モーションを VRM に適用して1回再生（終了で idle へ戻す）
+async function playMotion(file) {
+  if (!vrm || !mixer || !file) return;
+  try {
+    const al = new GLTFLoader();
+    al.register(p => new VRMAnimationLoaderPlugin(p));
+    const url = new URL('../timeline/' + file, window.location.href).href;
+    const gltf = await al.loadAsync(url);
+    const anims = gltf.userData.vrmAnimations;
+    if (!anims || !anims.length) { toast('VRMA の読込に失敗'); return; }
+    const clip = createVRMAnimationClip(anims[0], vrm);
+    const act = mixer.clipAction(clip);
+    act.reset(); act.setLoop(THREE.LoopOnce, 1); act.clampWhenFinished = true;
+    if (action) action.stop();
+    mode = 'preview'; editorState = 'idle';
+    if (ragdoll && ragdoll.active) setRagdollActive(ragdoll, false);
+    act.play();
+    const onFin = (e) => {
+      if (e.action !== act) return;
+      mixer.removeEventListener('finished', onFin);
+      act.stop();
+      if (action) { action.reset(); action.play(); }
+    };
+    mixer.addEventListener('finished', onFin);
+    toast('モーション再生: ' + file.replace(/\.vrma$/, ''));
+  } catch (e) { console.error(e); toast('モーション再生失敗'); }
 }
 
 function setupUI() {
   buildStateList();
+  document.getElementById('btn-play-motion').onclick = () => {
+    const sel = document.getElementById('motion-select');
+    if (sel && sel.value) playMotion(sel.value);
+  };
   document.getElementById('btn-sim-hit').onclick = () => startSim(false);
   document.getElementById('btn-sim-grab').onclick = () => startSim(true);
   document.getElementById('btn-sim-release').onclick = () => { simHeld = false; if (ragdoll && ragdoll.active) { recoverTimer = (characterDef.behavior.recoverDelaySec ?? 2.5) + LOOK_DURATION; } };
@@ -390,9 +465,13 @@ async function init() {
 
   setupUI();
 
-  const b = await fetchBundle(NPC_FILES[0]);
+  await populateNpcSelect(null);
+  await populateMotionSelect();
+  const sel = document.getElementById('npc-select');
+  const first = (sel && sel.value) || NPC_FILES[0];
+  const b = await fetchBundle(first);
   if (b) await loadBundleObject(b);
-  else toast('npc/megu.npc.json が見つかりません。NPC読込で指定してください。');
+  else toast('npc/ の NPC が見つかりません。ファイル…で指定してください。');
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;

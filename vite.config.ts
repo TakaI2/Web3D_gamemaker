@@ -40,6 +40,52 @@ export default defineConfig({
       // 開発サーバー: 動的に返す
       configureServer(server) {
         const pub = path.resolve(__dirname, 'public');
+
+        // 開発用 保存エンドポイント: エディタ出力を public/<dir>/ に書き込む（dir は npc / timeline のみ許可）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (req.method !== 'POST' || !url.endsWith('/api/save')) return next();
+          let body = '';
+          req.on('data', (c) => { body += c; });
+          req.on('end', () => {
+            try {
+              const { dir, filename, content } = JSON.parse(body);
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline' };
+              const sub = allowed[dir];
+              const safe = path.basename(String(filename || ''));
+              if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
+              const outDir = path.join(pub, sub);
+              fs.mkdirSync(outDir, { recursive: true });
+              const text = typeof content === 'string' ? content : JSON.stringify(content);
+              fs.writeFileSync(path.join(outDir, safe), text);
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ ok: true, path: `public/${sub}/${safe}` }));
+            } catch (e) {
+              res.statusCode = 500; res.end(String(e));
+            }
+          });
+        });
+
+        // NPC バンドル一覧（base に依らずパス末尾で判定）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/npc/manifest.json')) return next();
+          const dir = path.join(pub, 'npc');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.npc.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // タイムライン(VRMA モーション)一覧
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/timeline/manifest.json')) return next();
+          const dir = path.join(pub, 'timeline');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.vrma')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
         server.middlewares.use('/vrm/manifest.json', (_req, res) => {
           const dir = path.join(pub, 'vrm');
           const files = fs.existsSync(dir)
