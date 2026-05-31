@@ -40,6 +40,8 @@ const MAX_STEPS_FRAME = 5;
 
 // ── Megu（VRM ラグドール）─────────────────────────────────────
 const MEGU_COUNT         = 3;      // 出現する NPC 数
+const TAUNT_APPROACH     = 18;     // 挑発時の接近加速
+const TAUNT_MAX          = 9;      // 挑発接近の最大速度
 const MEGU_RADIUS        = 0.55;   // 当たり/掴み判定の体半径
 const MEGU_CENTER_Y      = 1.0;    // 飛行時の判定中心の高さ（root からのオフセット）
 const MEGU_RECOVER_DELAY = 2.5;    // 被弾→ラグドール継続時間(秒)
@@ -189,6 +191,38 @@ function prepTemplate(gltfScene, scale) {
   group.add(gltfScene);
   group.scale.setScalar(s);
   return { group, radius: Math.max(0.3, maxDim * s * 0.5) };
+}
+
+// stage.json の置物を静的配置（飛ばない・物理なしの装飾）。底面中心が原点のテンプレートを clone。
+async function loadStage() {
+  let stageItems = [];
+  try { const r = await fetch('../models/stage.json'); if (r.ok) { const j = await r.json(); stageItems = j.items || []; } } catch { /* 無ければ空 */ }
+  if (!stageItems.length) return;
+  const loader = new GLTFLoader();
+  const cache = new Map();
+  const decor = new THREE.Group();
+  for (const it of stageItems) {
+    try {
+      let tpl = cache.get(it.model);
+      if (!tpl) {
+        const url = new URL('../models/' + it.model.split('/').map(encodeURIComponent).join('/'), window.location.href).href;
+        const gltf = await loader.loadAsync(url);
+        const obj = gltf.scene;
+        const box = new THREE.Box3().setFromObject(obj);
+        const c = box.getCenter(new THREE.Vector3());
+        obj.position.set(-c.x, -box.min.y, -c.z);   // 底面中心を原点へ
+        tpl = new THREE.Group(); tpl.add(obj);
+        cache.set(it.model, tpl);
+      }
+      const mesh = tpl.clone(true);
+      mesh.scale.setScalar(it.scale || 1);
+      mesh.position.set(it.x, it.y || 0, it.z);
+      mesh.rotation.y = it.ry || 0;
+      mesh.traverse(o => { if (o.isMesh) o.frustumCulled = true; });
+      decor.add(mesh);
+    } catch (e) { console.warn('ステージ置物の読込失敗:', it.model, e); }
+  }
+  scene.add(decor);
 }
 
 async function loadSelectedModels() {
@@ -608,6 +642,34 @@ function updateIdleMovement(m, dt) {
   }
 }
 
+// 挑発：プレイヤーの tauntRange(既定10m)以内へ飛来し、近づいたらゆっくり漂う
+function updateTauntMovement(m, dt) {
+  const range = m.sm.tauntDist || m.sm.behavior.tauntRangeMax || 10;   // 入場時に抽選した目標距離
+  _force.copy(camera.position).sub(m.pos);
+  const dist = _force.length() || 1;
+  if (dist > range) {
+    m.vel.addScaledVector(_force, (TAUNT_APPROACH * dt) / dist);
+    const sp = m.vel.length(); if (sp > TAUNT_MAX) m.vel.multiplyScalar(TAUNT_MAX / sp);
+  } else {
+    const k = 1 - Math.exp(-dt / 0.4);
+    m.vel.x += (0 - m.vel.x) * k;
+    m.vel.z += (0 - m.vel.z) * k;
+    m.bobPhase += dt;
+    m.vel.y += (Math.sin(m.bobPhase * 1.3) * 0.4 - m.vel.y) * k;   // ふわふわ
+  }
+}
+
+// プレイヤー（カメラ）の方へ体を向ける
+function faceToPlayer(m, dt) {
+  const dx = camera.position.x - m.pos.x, dz = camera.position.z - m.pos.z;
+  if (dx * dx + dz * dz < 0.04) return;
+  const targetYaw = Math.atan2(dx, dz);
+  let diff = targetYaw - m.vrm.scene.rotation.y;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  m.vrm.scene.rotation.y += diff * (1 - Math.exp(-dt / 0.4));
+}
+
 // 進行方向へ体を向ける（VRM 前方 +Z）。静止/低速時は向きを維持。
 function faceMove(m, dt) {
   const sp2 = m.vel.x * m.vel.x + m.vel.z * m.vel.z;
@@ -657,21 +719,25 @@ function updateMegu(m, dt) {
     if (!rd.recovering) onMeguRecovered(m);
   } else {
     if (m.mixer) m.mixer.update(dt);
-    if (m.dir && m.dir.attacking) {
+    const st = m.dir ? m.dir.state : 'idle';
+    if (st === 'attack') {
       // attack：プレイヤー方向へ接近加速
       _force.copy(camera.position).sub(m.pos);
       const d = _force.length() || 1;
       m.vel.addScaledVector(_force, (m.sm.behavior.approachAccel * dt) / d);
       clampSpeed(m.vel);
+    } else if (st === 'taunt') {
+      updateTauntMovement(m, dt);   // 10m以内へ飛来→ゆっくり
     } else {
-      updateIdleMovement(m, dt);   // float / drift / dash を3〜6秒で切替
+      updateIdleMovement(m, dt);    // float / drift / dash を3〜6秒で切替
     }
     m.pos.addScaledVector(m.vel, dt);
     bounceAxis(m, 'x', -ROOM.x / 2 + MEGU_RADIUS, ROOM.x / 2 - MEGU_RADIUS);
     bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
     bounceAxis(m, 'z', -ROOM.z / 2 + MEGU_RADIUS, ROOM.z / 2 - MEGU_RADIUS);
     m.vrm.scene.position.copy(m.pos);
-    faceMove(m, dt);               // 進行方向へ体を向ける（静止時は維持）
+    if (st === 'taunt' || st === 'attack') faceToPlayer(m, dt);   // 挑発/攻撃中はプレイヤーを向く
+    else faceMove(m, dt);                                          // それ以外は進行方向
   }
 
   // 表情・視線をステート出力から適用（vrm.update の前に設定）
@@ -890,6 +956,8 @@ function setupControls() {
     isLocked = document.pointerLockElement === canvas;
     const overlay = document.getElementById('lock-overlay');
     if (overlay) overlay.style.display = isLocked ? 'none' : 'flex';
+    const ui = document.getElementById('ui');
+    if (ui) ui.style.display = isLocked ? 'none' : 'flex';   // プレイ中はスライダーパネルを隠す
     if (!isLocked) release();   // ロック解除時は掴みも解放
   });
 
@@ -1063,6 +1131,7 @@ async function init() {
   // 選択モデル(GLB)を読み込んだら、プリミティブを選択モデルに置き換えて再生成
   loadSelectedModels().then(() => { if (modelTemplates.length) setObjectCount(params.objectCount); })
     .catch(e => console.warn('選択モデル読み込み失敗:', e));
+  loadStage().catch(e => console.warn('ステージ読み込み失敗:', e));
   loadMegus().catch(e => console.warn('Megu 読み込み失敗:', e));
   setupUI();
   setupControls();

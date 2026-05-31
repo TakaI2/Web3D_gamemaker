@@ -13,8 +13,8 @@ import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse }
   from '../lib/vrm-ragdoll.js';
 
-const STATES = ['idle', 'alert', 'attack', 'downed', 'recovering'];
-const STATE_LABEL = { idle: '通常 (idle)', alert: '警戒 (alert)', attack: '攻撃 (attack)', downed: 'ダウン (downed)', recovering: '復帰 (recovering)' };
+const STATES = ['idle', 'alert', 'attack', 'taunt', 'downed', 'recovering'];
+const STATE_LABEL = { idle: '通常 (idle)', alert: '警戒 (alert)', attack: '攻撃 (attack)', taunt: '挑発 (taunt)', downed: 'ダウン (downed)', recovering: '復帰 (recovering)' };
 const EXPR_PRESETS = ['neutral', 'happy', 'angry', 'sad', 'relaxed', 'surprised'];
 const BEHAVIOR_FIELDS = [
   { key: 'aggressiveOnRecover', label: '復帰後に攻撃', type: 'bool' },
@@ -23,6 +23,9 @@ const BEHAVIOR_FIELDS = [
   { key: 'detectChance', label: '検知確率/秒', type: 'num', step: 0.05 },
   { key: 'approachAccel', label: '接近加速', type: 'num', step: 0.5 },
   { key: 'recoverDelaySec', label: '崩れ時間(秒)', type: 'num', step: 0.5 },
+  { key: 'tauntChance', label: '挑発確率/秒', type: 'num', step: 0.02 },
+  { key: 'tauntRangeMin', label: '挑発接近 最小m', type: 'num', step: 0.5 },
+  { key: 'tauntRangeMax', label: '挑発接近 最大m', type: 'num', step: 0.5 },
 ];
 const LOOK_DURATION = 1.5;
 const HEAD_FWD = new THREE.Vector3(0, 0, 1);
@@ -34,12 +37,13 @@ function defaultCharacter() {
   return {
     schemaVersion: 1,
     displayName: '',
-    behavior: { aggressiveOnRecover: false, sightRange: 0, loseRange: 14, detectChance: 0.6, approachAccel: 5, recoverDelaySec: 2.5 },
+    behavior: { aggressiveOnRecover: false, sightRange: 0, loseRange: 14, detectChance: 0.6, approachAccel: 5, recoverDelaySec: 2.5, tauntChance: 0.12, tauntRangeMin: 5, tauntRangeMax: 10 },
     defaultState: 'idle',
     states: {
       idle:       { expression: {},                 lookAtEye: 1.0, lookAtHead: 0.35 },
       alert:      { expression: { surprised: 0.8 }, lookAtEye: 1.0, lookAtHead: 0.6 },
       attack:     { expression: { angry: 1.0 },     lookAtEye: 1.0, lookAtHead: 0.8 },
+      taunt:      { expression: { happy: 0.6 },     lookAtEye: 1.0, lookAtHead: 0.85 },
       downed:     { expression: { sad: 0.4 },       lookAtEye: 0.0, lookAtHead: 0.0 },
       recovering: { expression: {},                 lookAtEye: 1.0, lookAtHead: 0.3 },
     },
