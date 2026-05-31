@@ -43,6 +43,7 @@ const MEGU_COUNT         = 3;      // 出現する NPC 数
 const MEGU_RADIUS        = 0.55;   // 当たり/掴み判定の体半径
 const MEGU_CENTER_Y      = 1.0;    // 飛行時の判定中心の高さ（root からのオフセット）
 const MEGU_RECOVER_DELAY = 2.5;    // 被弾→ラグドール継続時間(秒)
+const LOOK_DURATION      = 1.5;    // 顔を向け始めてから復帰までの時間(秒)
 const RAGDOLL_IMPULSE    = 0.3;    // 命中時の速度キック
 const ARENA_BOUNDS = {
   min: new THREE.Vector3(-ROOM.x / 2, 0, -ROOM.z / 2),
@@ -94,6 +95,17 @@ const _force   = new THREE.Vector3();
 const _hitDir  = new THREE.Vector3();
 const _meguC   = new THREE.Vector3();
 const _grabV   = new THREE.Vector3();
+// 頭の向き追従用テンポラリ
+const _hPos    = new THREE.Vector3();
+const _hDir    = new THREE.Vector3();
+const _hFwd    = new THREE.Vector3();
+const _hqCur   = new THREE.Quaternion();
+const _hqPar   = new THREE.Quaternion();
+const _hqDelta = new THREE.Quaternion();
+const _hqDes   = new THREE.Quaternion();
+const HEAD_FWD       = new THREE.Vector3(0, 0, 1);   // VRM の顔正面（VRMLookAt.faceFront 既定 = +Z）
+const HEAD_MAX_ANGLE = Math.PI * 0.6;                // 顔を向ける最大角（後ろは向きすぎない）
+const HEAD_LOOK_TAU  = 0.6;                          // 顔追従の時定数(秒)。大きいほどゆっくり向く
 const raycaster = new THREE.Raycaster();
 let   meguFrame = 0;   // マント位置読み戻しのスロットル用
 const screenCenter = new THREE.Vector2(0, 0);
@@ -362,6 +374,7 @@ async function createMegu(bundle, pos) {
     sm: createNpcStateMachine(bundle.character),   // ステートマシン（character 省略時は既定＝検知無効）
     dir: null,                               // 直近のステート出力（表情/視線/attack）
     blinkT: randRange(1, 4), blinkDur: 0,    // 自動まばたき
+    headLookW: 0,                            // 顔追従の現在の重み（時定数で目標へ補間）
 
     vel: randomDir().multiplyScalar(randRange(2, 4)),
     grabbed: false, clothGrabbed: false, grabBone: 'chest', grabOffset: new THREE.Vector3(), recoverTimer: 0,
@@ -408,7 +421,7 @@ function hitMegu(m, dir) {
   setRagdollActive(m.ragdoll, true);
   applyRagdollImpulse(m.ragdoll, dir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'chest');
   m.grabbed = false;
-  m.recoverTimer = MEGU_RECOVER_DELAY;
+  m.recoverTimer = MEGU_RECOVER_DELAY + LOOK_DURATION;
 }
 
 // 照準レイに最も近い m の関節を探す。飛行中はボーンのワールド位置、ラグドール中は粒子位置を使う
@@ -452,7 +465,7 @@ function grabMeguCloth(m, clothIdx) {
 function releaseMegu(m) {
   if (m.clothGrabbed) { m.cloth.releaseGrab(); m.clothGrabbed = false; }
   m.grabbed = false;
-  m.recoverTimer = MEGU_RECOVER_DELAY;   // 離した後もしばらくラグドール（落下）してから復帰＝被弾と同様
+  m.recoverTimer = MEGU_RECOVER_DELAY + LOOK_DURATION;   // 離した後もしばらくラグドール（落下）→最後の1秒は見つめる→復帰
   updateCrosshair();
 }
 
@@ -466,6 +479,32 @@ function grabbedMegu() {
   return null;
 }
 
+// 頭ボーンをカメラ方向へ weight(0-1) で向ける（mixer/ラグドールが頭を設定した後・vrm.update の前に呼ぶ）
+function applyHeadLook(m, weight) {
+  if (weight <= 0) return;
+  const head = m.vrm.humanoid?.getNormalizedBoneNode('head');
+  if (!head) return;
+  head.updateWorldMatrix(true, false);
+  head.getWorldPosition(_hPos);
+  _hDir.copy(camera.position).sub(_hPos);
+  if (_hDir.lengthSq() < 1e-8) return;
+  _hDir.normalize();
+  head.getWorldQuaternion(_hqCur);
+  _hFwd.copy(HEAD_FWD).applyQuaternion(_hqCur).normalize();
+  const ang = _hFwd.angleTo(_hDir);
+  if (ang < 1e-4) return;
+  let w = weight;
+  if (ang > HEAD_MAX_ANGLE) w *= HEAD_MAX_ANGLE / ang;   // 後ろには向きすぎない
+  _hqDelta.setFromUnitVectors(_hFwd, _hDir);
+  _hqDes.identity().slerp(_hqDelta, w).multiply(_hqCur);  // delta を w 分 → 望ましいワールド回転
+  if (head.parent) {
+    head.parent.getWorldQuaternion(_hqPar);
+    head.quaternion.copy(_hqPar.invert().multiply(_hqDes));
+  } else {
+    head.quaternion.copy(_hqDes);
+  }
+}
+
 function updateMegu(m, dt) {
   const rd = m.ragdoll;
   // ステート更新（表情・視線・attack を決定）
@@ -475,6 +514,12 @@ function updateMegu(m, dt) {
     ragdollActive: rd.active, ragdollRecovering: rd.recovering,
     held, distanceToPlayer: camera.position.distanceTo(_meguC),
   }) : null;
+
+  // ダウン中、復帰直前の LOOK_DURATION 秒は倒れたまま目＋首でプレイヤーを見る
+  if (m.dir && m.dir.state === 'downed' && !held && m.recoverTimer <= LOOK_DURATION) {
+    m.dir.lookAtEye = 1.0;
+    m.dir.lookAtHead = 0.7;
+  }
 
   if (rd.active) {
     // 被弾/本体掴み/マント掴みいずれもラグドール。
@@ -524,7 +569,11 @@ function updateMegu(m, dt) {
       if (m.blinkDur > 0) { m.blinkDur -= dt; bw = Math.sin((1 - Math.max(0, m.blinkDur) / 0.12) * Math.PI); }
       em.setValue('blink', m.dir.state === 'downed' ? 0 : bw);
     }
-    if (m.vrm.lookAt) m.vrm.lookAt.target = m.dir.lookAtEye > 0.5 ? camera : null;
+    // 顔をプレイヤーへ。重みを時定数で滑らかに目標へ寄せる＝ゆっくり向く（急に向かない）
+    const targetHeadW = m.dir.lookAtHead || 0;
+    m.headLookW += (targetHeadW - m.headLookW) * (1 - Math.exp(-dt / HEAD_LOOK_TAU));
+    if (m.headLookW > 0.01) applyHeadLook(m, m.headLookW);
+    if (m.vrm.lookAt) m.vrm.lookAt.target = m.dir.lookAtEye > 0.5 ? camera : null;   // 視線をプレイヤーへ
   }
   m.vrm.update(dt);
   if (m.cloth) {
@@ -615,7 +664,7 @@ function stepProjectiles(dt) {
           _hitDir.copy(p.vel).normalize();
           if (m.ragdoll.active) {
             applyRagdollImpulse(m.ragdoll, _hitDir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'hips');
-            if (!m.grabbed && !m.clothGrabbed) m.recoverTimer = MEGU_RECOVER_DELAY;   // 倒れたまま延長
+            if (!m.grabbed && !m.clothGrabbed) m.recoverTimer = MEGU_RECOVER_DELAY + LOOK_DURATION;   // 倒れたまま延長
           } else {
             hitMegu(m, _hitDir);
           }
