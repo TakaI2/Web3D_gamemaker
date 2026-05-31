@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { copyUsedModels } from './_copy-used-models.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -41,11 +42,7 @@ if (fs.existsSync(npcSrc)) {
   }
 }
 
-// モデル(GLB)・selection.json・stage.json を同梱（./models/ で解決）
-const modelsSrc = path.join(root, 'public', 'models');
-if (fs.existsSync(modelsSrc)) {
-  fs.cpSync(modelsSrc, path.join(dest, 'models'), { recursive: true });
-  console.log('copied: models/');
-}
+// 実際に使う GLB（selection.json/stage.json）＋必要な colormap だけ同梱（./models/ で解決）
+copyUsedModels(root, dest);
 
 console.log('\ndist-swing-catch/ ready for deployment to /htdocs/swing-catch/');

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { copyUsedModels } from './_copy-used-models.mjs';
 
 // モバイル版は PC版と JS を共有し、index.html を派生：
 //  (1) 仮想ジョイスティック/ジャンプボタンの DOM・CSS を注入（JS は #joystick-base がある時タッチ操作を有効化）
@@ -60,8 +61,7 @@ if (fs.existsSync(npcSrc)) {
   }
 }
 
-// モデル(GLB)・selection.json・stage.json
-const modelsSrc = path.join(root, 'public', 'models');
-if (fs.existsSync(modelsSrc)) { fs.cpSync(modelsSrc, path.join(dest, 'models'), { recursive: true }); console.log('copied: models/'); }
+// 実際に使う GLB＋必要な colormap だけ同梱
+copyUsedModels(root, dest);
 
 console.log('\ndist-swing-catch-mobile/ ready for deployment to /htdocs/swing-catch-mobile/');
