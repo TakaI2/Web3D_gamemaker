@@ -17,7 +17,7 @@ import { positionWorld, mix, color } from 'https://esm.sh/three@0.184.0/tsl';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 
 // ── アリーナ ───────────────────────────────────────────────────
-const ROOM = { x: 14, y: 9, z: 14 };   // 内寸（床 y=0、天井 y=ROOM.y）
+const ROOM = { x: 30, y: 30, z: 30 };   // 内寸（床 y=0、天井 y=ROOM.y）
 
 // ── プレイヤー定数 ─────────────────────────────────────────────
 const PLAYER_SPEED  = 20;
@@ -164,6 +164,9 @@ const SHAPES = [
   { make: () => new THREE.DodecahedronGeometry(0.5, 0), radius: 0.5 },
 ];
 
+const modelTemplates = [];        // モデルエディタで選択した GLB の正規化テンプレート { group, radius }
+const MODEL_TARGET_SIZE = 1.4;    // 飛行体の標準サイズ（最大寸法 m）
+
 function randRange(min, max) { return min + Math.random() * (max - min); }
 
 function randomDir() {
@@ -174,7 +177,53 @@ function randomDir() {
   return new THREE.Vector3(s * Math.cos(a), u, s * Math.sin(a));
 }
 
+// GLB シーンを中心原点に揃え、指定スケール（モデルエディタ設定）or 既定正規化でテンプレート化
+function prepTemplate(gltfScene, scale) {
+  const box = new THREE.Box3().setFromObject(gltfScene);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const s = (scale && scale > 0) ? scale : (MODEL_TARGET_SIZE / maxDim);   // 未設定は従来正規化
+  gltfScene.position.sub(center);          // 中身を原点中心へ
+  const group = new THREE.Group();
+  group.add(gltfScene);
+  group.scale.setScalar(s);
+  return { group, radius: Math.max(0.3, maxDim * s * 0.5) };
+}
+
+async function loadSelectedModels() {
+  let list = [], scaleMap = {};
+  try { const r = await fetch('../models/selection.json'); if (r.ok) { const j = await r.json(); list = j.models || []; scaleMap = j.scales || {}; } } catch { /* 無ければ空 */ }
+  if (!list.length) return;
+  const loader = new GLTFLoader();
+  for (const file of list) {
+    try {
+      const url = new URL('../models/' + file.split('/').map(encodeURIComponent).join('/'), window.location.href).href;
+      const gltf = await loader.loadAsync(url);
+      modelTemplates.push(prepTemplate(gltf.scene, scaleMap[file]));
+    } catch (e) { console.warn('モデル読込失敗:', file, e); }
+  }
+}
+
+// 選択モデルから1体生成（テンプレートを clone）
+function spawnModelObject(idx) {
+  const tpl = (idx != null) ? modelTemplates[idx] : modelTemplates[Math.floor(Math.random() * modelTemplates.length)];
+  const mesh = tpl.group.clone(true);
+  const r = tpl.radius;
+  const hx = ROOM.x / 2 - r - 0.3, hz = ROOM.z / 2 - r - 0.3;
+  const pos = new THREE.Vector3(randRange(-hx, hx), randRange(r + 1, ROOM.y - r - 1), randRange(-hz, hz));
+  const vel = randomDir().multiplyScalar(randRange(3, 6));
+  const spin = randomDir().multiplyScalar(randRange(0.5, 1.5));
+  mesh.position.copy(pos);
+  scene.add(mesh);
+  const obj = { mesh, radius: r, pos, vel, spin, grabbed: false, isGLB: true };
+  mesh.userData.obj = obj;
+  objects.push(obj);
+  return obj;
+}
+
 function spawnObject() {
+  if (modelTemplates.length) return spawnModelObject();   // 選択モデルがあればそれを出す
   const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
   const geo   = shape.make();
   const color = new THREE.Color().setHSL(Math.random(), 0.72, 0.56);
@@ -204,8 +253,8 @@ function spawnObject() {
 function clearObjects() {
   for (const obj of objects) {
     scene.remove(obj.mesh);
-    obj.mesh.geometry.dispose();
-    obj.mesh.material.dispose();
+    // GLB はテンプレートと geometry/material を共有するので dispose しない
+    if (!obj.isGLB) { obj.mesh.geometry.dispose(); obj.mesh.material.dispose(); }
   }
   objects.length = 0;
   grabbed = null;
@@ -213,7 +262,12 @@ function clearObjects() {
 
 function setObjectCount(n) {
   clearObjects();
-  for (let i = 0; i < n; i++) spawnObject();
+  if (modelTemplates.length) {
+    for (let i = 0; i < modelTemplates.length; i++) spawnModelObject(i);   // 選択モデルを各1体ずつ（全部登場）
+    for (let i = modelTemplates.length; i < n; i++) spawnModelObject();     // n が多ければランダムで追加
+  } else {
+    for (let i = 0; i < n; i++) spawnObject();
+  }
 }
 
 // 軸ごとの壁反射（free モード）
@@ -249,15 +303,22 @@ function updateHandAnchor() {
   handAnchor.copy(camera.position).addScaledVector(_forward, GRAB_DISTANCE);
 }
 
+// レイのヒット対象（GLBの子メッシュ等）から親を辿って飛行オブジェクトを得る
+function resolveObj(o) {
+  let n = o;
+  while (n) { if (n.userData && n.userData.obj) return n.userData.obj; n = n.parent; }
+  return null;
+}
+
 function tryGrab() {
   if (grabbed || grabbedMegu()) return;
   raycaster.setFromCamera(screenCenter, camera);
   raycaster.far = GRAB_RANGE;
 
-  const hits = raycaster.intersectObjects(objects.map(o => o.mesh), false);
-  let kind = hits.length ? 'obj' : null;
-  let dist = hits.length ? hits[0].distance : Infinity;
-  const obj = hits.length ? hits[0].object.userData.obj : null;
+  const hits = raycaster.intersectObjects(objects.map(o => o.mesh), true);   // GLBは子メッシュにヒットするので再帰
+  const obj = hits.length ? resolveObj(hits[0].object) : null;
+  let kind = obj ? 'obj' : null;
+  let dist = obj ? hits[0].distance : Infinity;
   let target = null, clothIdx = -1, grabBone = null;
 
   // 全 NPC の本体（関節）/マントを判定し、最も手前を採用
@@ -375,6 +436,7 @@ async function createMegu(bundle, pos) {
     dir: null,                               // 直近のステート出力（表情/視線/attack）
     blinkT: randRange(1, 4), blinkDur: 0,    // 自動まばたき
     headLookW: 0,                            // 顔追従の現在の重み（時定数で目標へ補間）
+    idleMode: 'drift', idleTimer: randRange(3, 6), bobPhase: Math.random() * 10, dashTarget: new THREE.Vector3(),
 
     vel: randomDir().multiplyScalar(randRange(2, 4)),
     grabbed: false, clothGrabbed: false, grabBone: 'chest', grabOffset: new THREE.Vector3(), recoverTimer: 0,
@@ -471,6 +533,7 @@ function releaseMegu(m) {
 
 function onMeguRecovered(m) {
   m.vel.copy(randomDir()).multiplyScalar(randRange(2, 4));   // 新しい速度で飛行再開
+  m.idleMode = 'drift'; m.idleTimer = randRange(3, 6);
 }
 
 // 掴み中の NPC（1体）を返す。無ければ null。
@@ -503,6 +566,57 @@ function applyHeadLook(m, weight) {
   } else {
     head.quaternion.copy(_hqDes);
   }
+}
+
+// idle 中のサブ挙動を 3〜6秒でランダム切替：float(静止ふわふわ)/drift(緩い巡航)/dash(ランダム地点へ素早く移動)
+function updateIdleMovement(m, dt) {
+  m.idleTimer -= dt;
+  if (m.idleTimer <= 0) {
+    const modes = ['float', 'drift', 'dash'];
+    m.idleMode = modes[Math.floor(Math.random() * modes.length)];
+    m.idleTimer = randRange(3, 6);
+    if (m.idleMode === 'dash') {
+      m.dashTarget.set(
+        randRange(-ROOM.x / 2 + 1, ROOM.x / 2 - 1),
+        randRange(1.2, ROOM.y - 2),
+        randRange(-ROOM.z / 2 + 1, ROOM.z / 2 - 1),
+      );
+    } else if (m.idleMode === 'drift') {
+      const d = randomDir(); d.y *= 0.4;
+      m.vel.copy(d.normalize()).multiplyScalar(3);
+    }
+  }
+  const k = 1 - Math.exp(-dt / 0.6);
+  if (m.idleMode === 'float') {
+    m.vel.x += (0 - m.vel.x) * k;
+    m.vel.z += (0 - m.vel.z) * k;
+    m.bobPhase += dt;
+    m.vel.y = Math.sin(m.bobPhase * 1.6) * 0.35;        // ふわふわ上下
+  } else if (m.idleMode === 'dash') {
+    _force.copy(m.dashTarget).sub(m.pos);
+    const dist = _force.length();
+    if (dist < 0.6) {
+      m.vel.multiplyScalar(1 - k);                      // 到着で減速
+    } else {
+      _force.multiplyScalar(7 / dist);                  // 目標へ約7m/s
+      m.vel.x += (_force.x - m.vel.x) * k;
+      m.vel.y += (_force.y - m.vel.y) * k;
+      m.vel.z += (_force.z - m.vel.z) * k;
+    }
+  } else { // drift（緩い巡航。速度が落ちたら補充）
+    if (m.vel.lengthSq() < 1.0) { const d = randomDir(); d.y *= 0.4; m.vel.copy(d.normalize()).multiplyScalar(3); }
+  }
+}
+
+// 進行方向へ体を向ける（VRM 前方 +Z）。静止/低速時は向きを維持。
+function faceMove(m, dt) {
+  const sp2 = m.vel.x * m.vel.x + m.vel.z * m.vel.z;
+  if (sp2 < 0.09) return;
+  const targetYaw = Math.atan2(m.vel.x, m.vel.z);
+  let diff = targetYaw - m.vrm.scene.rotation.y;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  m.vrm.scene.rotation.y += diff * (1 - Math.exp(-dt / 0.4));
 }
 
 function updateMegu(m, dt) {
@@ -549,12 +663,15 @@ function updateMegu(m, dt) {
       const d = _force.length() || 1;
       m.vel.addScaledVector(_force, (m.sm.behavior.approachAccel * dt) / d);
       clampSpeed(m.vel);
+    } else {
+      updateIdleMovement(m, dt);   // float / drift / dash を3〜6秒で切替
     }
     m.pos.addScaledVector(m.vel, dt);
     bounceAxis(m, 'x', -ROOM.x / 2 + MEGU_RADIUS, ROOM.x / 2 - MEGU_RADIUS);
     bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
     bounceAxis(m, 'z', -ROOM.z / 2 + MEGU_RADIUS, ROOM.z / 2 - MEGU_RADIUS);
     m.vrm.scene.position.copy(m.pos);
+    faceMove(m, dt);               // 進行方向へ体を向ける（静止時は維持）
   }
 
   // 表情・視線をステート出力から適用（vrm.update の前に設定）
@@ -903,9 +1020,9 @@ async function init() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xbcd8ef);       // 空の色（スカイドームの背後フォールバック）
-  scene.fog = new THREE.FogExp2(0xcfe3f5, 0.006);     // 薄い空気遠近
+  scene.fog = new THREE.FogExp2(0xcfe3f5, 0.008);     // 薄い空気遠近
 
-  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 250);
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 600);
   camera.rotation.order = 'YXZ';
 
   // 空：グラデーションのスカイドーム（天頂=青 → 地平=淡い）
@@ -943,6 +1060,9 @@ async function init() {
   camera.rotation.set(playerPitch, playerYaw, 0, 'YXZ');
 
   setObjectCount(params.objectCount);
+  // 選択モデル(GLB)を読み込んだら、プリミティブを選択モデルに置き換えて再生成
+  loadSelectedModels().then(() => { if (modelTemplates.length) setObjectCount(params.objectCount); })
+    .catch(e => console.warn('選択モデル読み込み失敗:', e));
   loadMegus().catch(e => console.warn('Megu 読み込み失敗:', e));
   setupUI();
   setupControls();

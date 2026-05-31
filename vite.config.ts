@@ -50,7 +50,7 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
@@ -72,6 +72,19 @@ export default defineConfig({
           if (!url.endsWith('/npc/manifest.json')) return next();
           const dir = path.join(pub, 'npc');
           const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.npc.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // モデル(GLB)一覧（public/models/ 以下を再帰スキャン、相対パスで返す）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/models/manifest.json')) return next();
+          const dir = path.join(pub, 'models');
+          const all = findFilesRecursive(dir, '.glb', dir, 0, ['node_modules', '.git', 'gltf']);
+          // 自前 colormap を持つキット「*_GLB format」フォルダのみ採用（無印GLB format/kenney_car-kit 等の重複・無テクスチャを除外）
+          const kits = all.filter((f) => f.split('/')[0].endsWith('_GLB format'));
+          const files = kits.length ? kits : all;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
         });
