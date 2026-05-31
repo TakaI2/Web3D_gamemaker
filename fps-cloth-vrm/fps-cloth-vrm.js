@@ -17,7 +17,7 @@ import { UltraHDRLoader }         from 'https://esm.sh/three@0.184.0/examples/js
 import { VRMLoaderPlugin }        from 'https://esm.sh/@pixiv/three-vrm@3.4.0?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
   from 'https://esm.sh/@pixiv/three-vrm-animation?deps=three@0.184.0,@pixiv/three-vrm@3.4.0';
-import { createRagdoll, setRagdollActive, updateRagdoll, applyRagdollImpulse, disposeRagdoll }
+import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll }
   from '../lib/vrm-ragdoll.js';
 
 // ── Player constants ──────────────────────────────────────────
@@ -85,6 +85,7 @@ let simData    = null;
 let stiffnessUniform;
 let dampeningUniform;
 let windUniform;
+let floorYUniform;       // 布の床当たり判定の床 Y（ステージ床 = 0）
 
 // ── コライダー ───────────────────────────────────────────────
 const colliders       = [];
@@ -417,17 +418,33 @@ function fireProjectile() {
   projectiles.push({ mesh, pos, vel, radius: PROJECTILE_RADIUS, ttl: PROJECTILE_TTL });
 }
 
-function ragdollHit(boneName, dir) {
-  if (!npcRagdoll || npcRagdoll.active) return;
-  setRagdollActive(npcRagdoll, true);
-  applyRagdollImpulse(npcRagdoll, dir.clone().multiplyScalar(RAGDOLL_IMPULSE), boneName);
-  showToast('NPC ダウン！ R で復帰');
+// ラグドールへ命中処理：未発動なら発動、発動済みなら追加の撃力。戻り値＝今回ダウンしたか。
+function applyHitToRagdoll(ragdoll, boneName, dir) {
+  if (!ragdoll) return false;
+  const firstDown = !ragdoll.active;
+  if (firstDown) setRagdollActive(ragdoll, true);
+  applyRagdollImpulse(ragdoll, dir.clone().multiplyScalar(RAGDOLL_IMPULSE), boneName);
+  return firstDown;
 }
 
+// 発射体 p がコライダー群のいずれかに当たっていれば、そのコライダーを返す。
+function projectileHitCollider(p, colliderList) {
+  for (const c of colliderList) {
+    const rr = p.radius + c.r;
+    const dx = p.pos.x - c.x, dy = p.pos.y - c.y, dz = p.pos.z - c.z;
+    if (dx * dx + dy * dy + dz * dz <= rr * rr) return c;
+  }
+  return null;
+}
+
+// R：倒れている全 NPC（NPC#0＋群衆）を復帰させる。
 function recoverRagdoll() {
-  if (!npcRagdoll || !npcRagdoll.active) return;
-  setRagdollActive(npcRagdoll, false);
-  showToast('NPC 復帰');
+  let any = false;
+  if (npcRagdoll && npcRagdoll.active) { setRagdollActive(npcRagdoll, false); any = true; }
+  for (const n of crowdNPCs) {
+    if (n.ragdoll && n.ragdoll.active) { setRagdollActive(n.ragdoll, false); any = true; }
+  }
+  if (any) showToast('NPC 復帰');
 }
 
 function stepProjectiles(dt) {
@@ -437,18 +454,23 @@ function stepProjectiles(dt) {
     p.ttl -= dt;
     let dead = p.ttl <= 0;
 
-    // NPC#0 のボーンコライダーに命中：未発動ならラグドール化、発動済みなら追加の撃力で小突く
+    // NPC#0 への命中
     if (!dead && npcRagdoll) {
-      for (const c of colliders) {
-        const rr = p.radius + c.r;
-        const dx = p.pos.x - c.x, dy = p.pos.y - c.y, dz = p.pos.z - c.z;
-        if (dx * dx + dy * dy + dz * dz <= rr * rr) {
+      const c = projectileHitCollider(p, colliders);
+      if (c) {
+        _projDir.copy(p.vel).normalize();
+        if (applyHitToRagdoll(npcRagdoll, c.boneName, _projDir)) showToast('NPC ダウン！ R で復帰');
+        dead = true;
+      }
+    }
+    // 群衆NPCへの命中（各自の独立コライダー）
+    if (!dead) {
+      for (const n of crowdNPCs) {
+        if (!n.ragdoll) continue;
+        const c = projectileHitCollider(p, n.colliders);
+        if (c) {
           _projDir.copy(p.vel).normalize();
-          if (npcRagdoll.active) {
-            applyRagdollImpulse(npcRagdoll, _projDir.clone().multiplyScalar(RAGDOLL_IMPULSE), c.boneName);
-          } else {
-            ragdollHit(c.boneName, _projDir);
-          }
+          applyHitToRagdoll(n.ragdoll, c.boneName, _projDir);
           dead = true;
           break;
         }
@@ -906,6 +928,15 @@ function buildSimulation(analysis, ctx) {
         const pushDir = toVertex.div(dist.max(0.0001));
         force.addAssign(pushDir.mul(pen).mul(1.2));
       });
+    });
+
+    // 床との衝突：予測位置が床を割り込んだら押し戻し＋接地摩擦（マントの床抜け防止）
+    const predY    = position.y.add(force.y).toVar('predY');
+    const floorPen = floorYUniform.add(float(0.01)).sub(predY).toVar('floorPen');
+    If(floorPen.greaterThan(0.0), () => {
+      force.y.addAssign(floorPen);
+      force.x.mulAssign(float(0.6));
+      force.z.mulAssign(float(0.6));
     });
 
     vertexForceBuffer.element(instanceIndex).assign(force);
@@ -1465,12 +1496,17 @@ async function render() {
 
   // ラグドール物理（正規化ボーンを上書き）→ VRM update で実ボーンへ反映
   if (ragActive) updateRagdoll(npcRagdoll, dt, RAGDOLL_ENV);
+  // 復帰ブレンド（mixer がアニメ姿勢を書いた後に補間）
+  else if (npcRagdoll && npcRagdoll.recovering) updateRagdollRecovery(npcRagdoll, dt);
   // VRM update（表情・ボーン反映）
   if (currentVRM) currentVRM.update(dt);
 
-  // 追加NPC：ボディのアニメ更新（各自のミキサー）。NPC#0 と同じ dt で同期。
+  // 追加NPC：ボディのアニメ更新（各自のミキサー）。ラグドール中は物理/復帰ブレンドに切替。
   for (const n of crowdNPCs) {
-    if (n.mixer && vrmaPlaying) n.mixer.update(dt);
+    const rdActive = !!(n.ragdoll && n.ragdoll.active);
+    if (n.mixer && vrmaPlaying && !rdActive) n.mixer.update(dt);
+    if (rdActive) updateRagdoll(n.ragdoll, dt, RAGDOLL_ENV);
+    else if (n.ragdoll && n.ragdoll.recovering) updateRagdollRecovery(n.ragdoll, dt);
     n.vrm.update(dt);
   }
 
@@ -1738,6 +1774,7 @@ async function createCrowdNPC(bundle, position) {
     colliderDataArr: n.colliderDataArr,
     basePos:         n.basePos,
   });
+  n.ragdoll = createRagdoll(vrm);
   return n;
 }
 
@@ -1765,6 +1802,7 @@ async function fetchNPCBundle() {
 
 // 追加NPCを1体破棄（シーンから除去＋ジオメトリ/マテリアル解放）。
 function disposeCrowdNPC(n) {
+  if (n.ragdoll) disposeRagdoll(n.ragdoll);
   if (n.vrm) {
     scene.remove(n.vrm.scene);
     n.vrm.scene.traverse(o => {
@@ -1876,6 +1914,7 @@ async function init() {
   // 共有 uniform
   stiffnessUniform = uniform(0.2);
   dampeningUniform = uniform(0.99);
+  floorYUniform    = uniform(0);
   windUniform      = uniform(1.0);
 
   setupUI();
