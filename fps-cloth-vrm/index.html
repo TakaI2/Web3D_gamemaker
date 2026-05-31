@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>FPS VRM NPC + Cloth</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #1a1a2e;
+      font-family: sans-serif;
+    }
+    #app { width: 100%; height: 100%; }
+
+    #ui {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 30;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #ddd;
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 200px;
+      max-width: 220px;
+    }
+    #ui h3 { margin: 0 0 2px; font-size: 13px; color: #fff; }
+    .ui-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .ui-row label { flex-shrink: 0; color: #aaa; }
+    .ui-row input[type=range] { flex: 1; accent-color: #5580cc; }
+    .val { color: #adf; font-size: 11px; min-width: 32px; text-align: right; }
+    .ui-section { border-top: 1px solid rgba(255,255,255,0.1); padding-top: 6px; margin-top: 2px; }
+    .ui-section-title {
+      font-size: 10px; color: #888; text-transform: uppercase;
+      letter-spacing: 0.05em; margin-bottom: 5px; cursor: pointer;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .ui-section-title::after { content: '▾'; font-size: 10px; }
+    .ui-section-title.collapsed::after { content: '▸'; }
+    .ui-section-body { display: flex; flex-direction: column; gap: 5px; }
+    .ui-section-body.collapsed { display: none; }
+
+    .load-btn {
+      background: #202040; color: #ccd;
+      border: 1px solid #3a3a60; border-radius: 4px;
+      cursor: pointer; font-size: 11px; padding: 3px 8px;
+      width: 100%; text-align: left;
+    }
+    .load-btn:hover { background: #2a2a58; }
+    .load-btn.loaded { border-color: #44aa66; color: #88ffaa; }
+
+    .sim-row { display: flex; gap: 5px; }
+    .sim-btn {
+      flex: 1; background: #202040; color: #ccd;
+      border: 1px solid #3a3a60; border-radius: 4px;
+      cursor: pointer; font-size: 11px; padding: 3px 6px;
+    }
+    .sim-btn:hover { background: #2a2a58; }
+    .sim-btn:disabled { opacity: 0.38; cursor: default; }
+
+    #back-btn {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 30;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    #back-btn:hover { background: rgba(0,0,0,0.75); }
+
+    #fps-counter {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      z-index: 10;
+      color: rgba(255,255,255,0.8);
+      font-size: 14px;
+      font-family: monospace;
+      pointer-events: none;
+    }
+
+    #crosshair {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 10;
+      pointer-events: none;
+      color: rgba(255,255,255,0.9);
+      font-size: 20px;
+      line-height: 1;
+      text-shadow: 0 0 3px rgba(0,0,0,0.8);
+    }
+
+    #toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(30,30,60,0.92);
+      color: #eee;
+      padding: 6px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      opacity: 0;
+      transition: opacity .3s;
+      z-index: 200;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #toast.visible { opacity: 1; }
+    #toast.error   { background: rgba(90,20,20,0.95); color: #faa; }
+    #toast.warn    { background: rgba(90,60,0,0.95);  color: #fca; }
+
+    #lock-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      background: rgba(0,0,0,0.55);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: #fff;
+      pointer-events: none;
+    }
+    #lock-overlay h2 { margin: 0; font-size: 22px; }
+    #lock-overlay p  { margin: 0; color: #aaa; font-size: 13px; }
+    .key-hint {
+      display: inline-block;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-family: monospace;
+      font-size: 13px;
+    }
+
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: #1a1a2e;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      z-index: 50;
+      transition: opacity 0.4s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #load-bar {
+      width: 260px; max-width: 70vw; height: 8px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 4px; overflow: hidden;
+    }
+    #load-bar-fill {
+      width: 0%; height: 100%;
+      background: #6cf; border-radius: 4px;
+      transition: width 0.25s ease;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <a id="back-btn" href="../">← 戻る</a>
+
+  <!-- File inputs (hidden) -->
+  <input type="file" id="npc-file"    accept=".json,.npc.json" style="display:none">
+  <input type="file" id="vrm-file"    accept=".vrm"  style="display:none">
+  <input type="file" id="vrma-file"   accept=".vrma" style="display:none">
+  <input type="file" id="cloth-file"  accept=".json" style="display:none">
+  <input type="file" id="tl-file"     accept=".json" style="display:none">
+
+  <div id="ui">
+    <h3>FPS VRM NPC</h3>
+
+    <div class="ui-section">
+      <div class="ui-section-title" id="load-toggle">ファイル読み込み</div>
+      <div class="ui-section-body" id="load-body">
+        <button class="load-btn" id="btn-npc-load" style="font-weight:bold;border:1px solid #6cf;">★ NPC一括読込 (.npc.json)</button>
+        <div style="font-size:11px;opacity:.6;margin:4px 0 8px;">VRM+VRMA+Cloth+Timeline を1ファイルで読込</div>
+        <button class="load-btn" id="btn-vrm-load">VRM 読込 (NPC)</button>
+        <button class="load-btn" id="btn-vrma-load">VRMA 読込 (アニメ)</button>
+        <button class="load-btn" id="btn-cloth-load">Cloth.json 読込</button>
+        <button class="load-btn" id="btn-tl-load">Timeline.json 読込</button>
+      </div>
+    </div>
+
+    <div class="ui-section">
+      <div class="ui-section-title">NPC 数</div>
+      <div class="ui-section-body">
+        <div class="ui-row">
+          <label>体数</label>
+          <input type="range" id="npc-count" min="1" max="10" step="1" value="5">
+          <span class="val" id="npc-count-val">5</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ui-section">
+      <div class="ui-section-title" id="sim-toggle">布シミュレーション</div>
+      <div class="ui-section-body" id="sim-body">
+        <div class="sim-row">
+          <button class="sim-btn" id="btn-sim-start" disabled>▶ 開始</button>
+          <button class="sim-btn" id="btn-sim-stop"  disabled>■ 停止</button>
+        </div>
+        <div class="ui-row">
+          <label>Stiffness</label>
+          <input type="range" id="stiffness" min="0.01" max="0.5" step="0.01" value="0.2">
+          <span class="val" id="stiffness-val">0.20</span>
+        </div>
+        <div class="ui-row">
+          <label>Wind</label>
+          <input type="range" id="wind" min="0" max="5" step="0.1" value="1.0">
+          <span class="val" id="wind-val">1.0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="crosshair">+</div>
+  <div id="fps-counter">-- FPS</div>
+  <div id="toast"></div>
+
+  <div id="lock-overlay">
+    <h2>FPS VRM NPC + Cloth</h2>
+    <p>クリックしてマウスをキャプチャ &nbsp;|&nbsp; ESC で解放</p>
+    <p>
+      <span class="key-hint">W A S D</span> 移動 &nbsp;
+      <span class="key-hint">Space</span> ジャンプ &nbsp;
+      <span class="key-hint">マウス</span> 視点
+    </p>
+    <p>
+      <span class="key-hint">右クリック</span> 球を発射（NPC命中でラグドール） &nbsp;
+      <span class="key-hint">R</span> NPC復帰
+    </p>
+    <p style="font-size:11px;color:#666;">右パネルでファイルを読み込んでください（UI クリックで ESC 解放）</p>
+  </div>
+
+  <div id="loading">
+    <div id="load-status">読み込み中...</div>
+    <div id="load-bar"><div id="load-bar-fill"></div></div>
+  </div>
+
+  <script type="module" src="./fps-cloth-vrm.js"></script>
+</body>
+</html>
