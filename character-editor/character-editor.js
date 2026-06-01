@@ -12,6 +12,7 @@ import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
 import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse }
   from '../lib/vrm-ragdoll.js';
+import { createLipSync } from '../lib/lip-sync.js';
 
 const STATES = ['idle', 'alert', 'attack', 'taunt', 'downed', 'recovering'];
 const STATE_LABEL = { idle: '通常 (idle)', alert: '警戒 (alert)', attack: '攻撃 (attack)', taunt: '挑発 (taunt)', downed: 'ダウン (downed)', recovering: '復帰 (recovering)' };
@@ -47,6 +48,7 @@ function defaultCharacter() {
       downed:     { expression: { sad: 0.4 },       lookAtEye: 0.0, lookAtHead: 0.0 },
       recovering: { expression: {},                 lookAtEye: 1.0, lookAtHead: 0.3 },
     },
+    events: {},
   };
 }
 
@@ -58,6 +60,8 @@ let characterDef = defaultCharacter();
 let exprNames = [];            // この VRM が持つ表情プリセット名
 let editorState = 'idle';      // プレビュー中の状態
 let mode = 'preview';          // 'preview' | 'sim'
+let auditionLip = null;        // セリフ試聴用の口パク（lib/lip-sync）
+let auditionExpr = null;       // 試聴中の行表情 { name, weight }
 let simHeld = false;
 let recoverTimer = 0;
 let tlClock = 0, tlFps = 30, tlDuration = 0;
@@ -145,12 +149,14 @@ async function loadBundleObject(b) {
   controls.update();
   selectState('idle');
   buildBehaviorPanel();
+  buildEventSpeechPanel();
   toast(`${b.name || 'NPC'} を読み込みました`);
 }
 
 function mergeCharacter(c) {
   const d = defaultCharacter();
-  const out = { schemaVersion: 1, displayName: c.displayName || '', behavior: Object.assign(d.behavior, c.behavior), defaultState: c.defaultState || 'idle', states: {} };
+  const out = { schemaVersion: 1, displayName: c.displayName || '', behavior: Object.assign(d.behavior, c.behavior), defaultState: c.defaultState || 'idle', states: {}, events: c.events || {} };
+  // Object.assign で state ごとの speech もそのまま引き継がれる
   for (const s of STATES) out.states[s] = Object.assign({}, d.states[s], c.states && c.states[s]);
   return out;
 }
@@ -241,8 +247,25 @@ function update(dt) {
     applyVisual({ state: editorState, expression: st.expression, lookAtEye: st.lookAtEye, lookAtHead: st.lookAtHead }, dt);
   }
 
+  // セリフ試聴：口パク（viseme）＋行表情を applyVisual の後に上書き
+  if (auditionLip) {
+    auditionLip.update(dt * 1000);
+    const em = vrm.expressionManager;
+    if (em && auditionExpr) {
+      try { em.setValue(auditionExpr.name, auditionLip.playing ? auditionExpr.weight : 0); } catch { /* 未定義表情は無視 */ }
+      if (!auditionLip.playing) auditionExpr = null;   // 終了後は行表情を解除（状態表情へ戻す）
+    }
+  }
+
   vrm.update(dt);
   if (cloth) cloth.update(dt, clothFrame(dt));
+}
+
+function auditionLine(text, cps, exprName, weight) {
+  if (!vrm || !text) return;
+  if (!auditionLip) auditionLip = createLipSync(vrm);
+  auditionLip.play(text, cps || 8);
+  auditionExpr = exprName ? { name: exprName, weight: weight != null ? weight : 1 } : null;
 }
 
 function render() {
@@ -261,6 +284,7 @@ function selectState(name) {
   document.getElementById('state-title').textContent = STATE_LABEL[name];
   buildExprPanel();
   buildLookPanel();
+  buildSpeechPanel();
 }
 
 function buildStateList() {
@@ -309,6 +333,145 @@ function buildLookPanel() {
   el.appendChild(r2);
 }
 
+// ── セリフ編集 ─────────────────────────────────────────────
+// 行（line）を {text, expression, weight} の編集ビューへ
+function lineView(line) {
+  if (typeof line === 'string') return { text: line, expression: '', weight: 1 };
+  return { text: line.text || '', expression: line.expression || '', weight: line.weight != null ? line.weight : 1 };
+}
+// 編集ビューを最小表現（表情なし=文字列 / 表情あり=オブジェクト）で書き戻す
+function lineWrite(lines, i, v) {
+  if (v.expression) lines[i] = { text: v.text, expression: v.expression, weight: v.weight };
+  else lines[i] = v.text;
+}
+
+// lines 配列を行リストUIとして container に描画。refresh は再描画コールバック。cpsFn は試聴速度。
+function renderLineList(container, lines, refresh, cpsFn) {
+  lines.forEach((line, i) => {
+    const v = lineView(line);
+    const row = document.createElement('div');
+    row.style.cssText = 'border:1px solid #3a3a60;border-radius:4px;padding:5px;margin:4px 0;';
+
+    const txt = document.createElement('input');
+    txt.type = 'text'; txt.value = v.text; txt.placeholder = 'セリフ';
+    txt.style.cssText = 'width:100%;background:#222;color:#ddd;border:1px solid #3a3a60;border-radius:3px;padding:3px;';
+    txt.oninput = () => { v.text = txt.value; lineWrite(lines, i, v); };
+    row.appendChild(txt);
+
+    const ctl = document.createElement('div');
+    ctl.style.cssText = 'display:flex;align-items:center;gap:4px;margin-top:4px;';
+
+    const sel = document.createElement('select');
+    sel.style.cssText = 'background:#1a1a2e;color:#ccc;border:1px solid #3a3a60;border-radius:3px;font-size:11px;';
+    const optList = ['', ...EXPR_PRESETS.filter(n => !exprNames.length || exprNames.includes(n))];
+    for (const n of optList) { const o = document.createElement('option'); o.value = n; o.textContent = n || '(状態の表情)'; sel.appendChild(o); }
+    sel.value = v.expression;
+    sel.onchange = () => { v.expression = sel.value; lineWrite(lines, i, v); refresh(); };
+    ctl.appendChild(sel);
+
+    if (v.expression) {
+      const w = document.createElement('input');
+      w.type = 'range'; w.min = '0'; w.max = '1'; w.step = '0.05'; w.value = v.weight;
+      w.style.cssText = 'flex:1;accent-color:#5580cc;min-width:0;';
+      w.oninput = () => { v.weight = parseFloat(w.value); lineWrite(lines, i, v); };
+      ctl.appendChild(w);
+    }
+
+    const play = document.createElement('button');
+    play.textContent = '▶'; play.title = '試聴';
+    play.style.cssText = 'background:#202040;color:#aef;border:1px solid #3a3a60;border-radius:3px;cursor:pointer;';
+    play.onclick = () => auditionLine(v.text, cpsFn ? cpsFn() : 8, v.expression, v.weight);
+    ctl.appendChild(play);
+
+    const del = document.createElement('button');
+    del.textContent = '✕'; del.title = '削除';
+    del.style.cssText = 'background:#402024;color:#fbb;border:1px solid #603a3a;border-radius:3px;cursor:pointer;';
+    del.onclick = () => { lines.splice(i, 1); refresh(); };
+    ctl.appendChild(del);
+
+    row.appendChild(ctl);
+    container.appendChild(row);
+  });
+
+  const add = document.createElement('button');
+  add.className = 'act'; add.textContent = '＋ 行追加';
+  add.onclick = () => { lines.push(''); refresh(); };
+  container.appendChild(add);
+}
+
+function buildSpeechPanel() {
+  const el = document.getElementById('speech-panel');
+  if (!el) return;
+  el.innerHTML = '';
+  const st = characterDef.states[editorState];
+
+  if (!st.speech) {
+    const add = document.createElement('button');
+    add.className = 'act'; add.textContent = '＋ セリフを追加';
+    add.onclick = () => { st.speech = { mode: 'once', intervalMs: 1500, charsPerSecond: 8, lines: [''] }; buildSpeechPanel(); };
+    el.appendChild(add);
+    return;
+  }
+  const sp = st.speech;
+
+  // mode / intervalMs / charsPerSecond
+  const cfg = document.createElement('div');
+  cfg.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;';
+  const modeSel = document.createElement('select');
+  modeSel.style.cssText = 'background:#1a1a2e;color:#ccc;border:1px solid #3a3a60;border-radius:3px;font-size:11px;';
+  for (const [val, lbl] of [['once', '1回 (once)'], ['loop', 'ループ (loop)']]) { const o = document.createElement('option'); o.value = val; o.textContent = lbl; modeSel.appendChild(o); }
+  modeSel.value = sp.mode === 'loop' ? 'loop' : 'once';
+  modeSel.onchange = () => { sp.mode = modeSel.value; buildSpeechPanel(); };
+  cfg.appendChild(label('再生', modeSel));
+
+  if (sp.mode === 'loop') {
+    const iv = numInput(sp.intervalMs != null ? sp.intervalMs : 1500, 100, v => { sp.intervalMs = v; });
+    cfg.appendChild(label('間隔ms', iv));
+  }
+  const cps = numInput(sp.charsPerSecond || 8, 1, v => { sp.charsPerSecond = v; });
+  cfg.appendChild(label('字/秒', cps));
+  el.appendChild(cfg);
+
+  renderLineList(el, sp.lines, buildSpeechPanel, () => sp.charsPerSecond || 8);
+
+  const rm = document.createElement('button');
+  rm.className = 'act'; rm.textContent = '✕ セリフ設定を削除';
+  rm.onclick = () => { delete st.speech; buildSpeechPanel(); };
+  el.appendChild(rm);
+}
+
+function buildEventSpeechPanel() {
+  const el = document.getElementById('event-speech-panel');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!characterDef.events) characterDef.events = {};
+  const EVENTS = [['grabbed', '掴まれた'], ['thrown', '投げられた'], ['landed', '衝突 / 着地']];
+  for (const [key, lbl] of EVENTS) {
+    const h = document.createElement('div');
+    h.style.cssText = 'color:#ffd9a0;font-size:11px;font-weight:700;margin:8px 0 2px;';
+    h.textContent = `${lbl} (${key})`;
+    el.appendChild(h);
+    if (!characterDef.events[key]) characterDef.events[key] = { lines: [] };
+    renderLineList(el, characterDef.events[key].lines, buildEventSpeechPanel, () => 8);
+  }
+}
+
+// 小さな「ラベル＋要素」をまとめる
+function label(text, node) {
+  const wrap = document.createElement('span');
+  wrap.style.cssText = 'display:inline-flex;align-items:center;gap:3px;color:#aab;font-size:11px;';
+  wrap.appendChild(document.createTextNode(text));
+  wrap.appendChild(node);
+  return wrap;
+}
+function numInput(value, step, onChange) {
+  const n = document.createElement('input');
+  n.type = 'number'; n.step = String(step); n.value = value;
+  n.style.cssText = 'width:64px;background:#222;color:#ddd;border:1px solid #3a3a60;border-radius:3px;';
+  n.onchange = () => onChange(parseFloat(n.value));
+  return n;
+}
+
 function buildBehaviorPanel() {
   const el = document.getElementById('behavior-panel');
   el.innerHTML = '';
@@ -337,11 +500,33 @@ function startSim(held) {
   recoverTimer = (characterDef.behavior.recoverDelaySec ?? 2.5) + LOOK_DURATION;
 }
 
+// 保存前に空のセリフ行・空の speech/events を間引いた character を返す（元データは変更しない）
+function cleanCharacter(c) {
+  const lineNonEmpty = (l) => (typeof l === 'string' ? l.trim() : (l && l.text || '').trim());
+  const cleanLines = (lines) => (Array.isArray(lines) ? lines.filter(lineNonEmpty) : []);
+  const out = JSON.parse(JSON.stringify(c));
+  for (const s of Object.keys(out.states || {})) {
+    const sp = out.states[s].speech;
+    if (sp) {
+      sp.lines = cleanLines(sp.lines);
+      if (!sp.lines.length) delete out.states[s].speech;
+    }
+  }
+  if (out.events) {
+    for (const k of Object.keys(out.events)) {
+      out.events[k].lines = cleanLines(out.events[k].lines);
+      if (!out.events[k].lines.length) delete out.events[k];
+    }
+    if (!Object.keys(out.events).length) delete out.events;
+  }
+  return out;
+}
+
 async function exportBundle() {
   if (!bundle) { toast('先に NPC を読み込んでください'); return; }
   const out = Object.assign({}, bundle);
   out.version = 2;
-  out.character = characterDef;
+  out.character = cleanCharacter(characterDef);
   const filename = `${bundle.name || 'character'}.npc.json`;
 
   // 開発サーバーの public/npc/ へ保存を試みる（本番等でエンドポイントが無ければダウンロードへ）
