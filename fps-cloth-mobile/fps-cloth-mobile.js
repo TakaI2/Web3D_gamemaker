@@ -1,5 +1,4 @@
-// fps-cloth.js — FPS first-person view with hanging cloth simulation (PC only)
-// Three.js v0.184 via esm.sh CDN (WebGPU + TSL required)
+// fps-cloth-mobile.js — スマホ専用 FPS + 布シミュレーション
 
 import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import {
@@ -38,11 +37,16 @@ let timeSinceLastStep = 0;
 let timestamp         = 0;
 
 // ── Player state ──────────────────────────────────────────────────────────
-const playerVel = new THREE.Vector3();
+const playerVel  = new THREE.Vector3();
 let   playerYaw   = Math.PI;
 let   playerPitch = 0;
-const keysDown    = {};
-let   isLocked    = false;
+let   isLocked    = true; // タッチ版は常時操作可能
+
+// ── Touch controls ────────────────────────────────────────────────────────
+const JOYSTICK_MAX = 60;
+const touchMove    = { active: false, id: -1, startX: 0, startY: 0 };
+const touchLook    = { active: false, id: -1, prevX: 0, prevY: 0 };
+const joystickVec  = { x: 0, y: 0 };
 
 // ── FPS counter ───────────────────────────────────────────────────────────
 let fpsFrameCount = 0;
@@ -471,16 +475,12 @@ function playerCollisions() {
 }
 
 function updatePlayer(dt) {
-  if (!isLocked) return;
-
   const speedDelta = dt * (playerOnFloor ? PLAYER_SPEED : PLAYER_SPEED * 0.4);
   const fwd   = new THREE.Vector3(-Math.sin(playerYaw), 0, -Math.cos(playerYaw));
   const right  = new THREE.Vector3( Math.cos(playerYaw), 0, -Math.sin(playerYaw));
 
-  if (keysDown['KeyW'] || keysDown['ArrowUp'])    playerVel.addScaledVector(fwd,   speedDelta);
-  if (keysDown['KeyS'] || keysDown['ArrowDown'])  playerVel.addScaledVector(fwd,  -speedDelta);
-  if (keysDown['KeyA'] || keysDown['ArrowLeft'])  playerVel.addScaledVector(right, -speedDelta);
-  if (keysDown['KeyD'] || keysDown['ArrowRight']) playerVel.addScaledVector(right,  speedDelta);
+  playerVel.addScaledVector(fwd,  -joystickVec.y * speedDelta);
+  playerVel.addScaledVector(right,  joystickVec.x * speedDelta);
 
   let damping = Math.exp(-4 * dt) - 1;
   if (!playerOnFloor) {
@@ -506,36 +506,85 @@ function updatePlayer(dt) {
 }
 
 // ============================================================
-// PC controls (pointer lock + keyboard)
+// Touch controls
 // ============================================================
 
-function setupControls() {
-  const canvas = renderer.domElement;
-  canvas.addEventListener('click', () => canvas.requestPointerLock());
+function setupTouchControls() {
+  const jumpBtn       = document.getElementById('jump-btn');
+  const joystickBase  = document.getElementById('joystick-base');
+  const joystickStick = document.getElementById('joystick-stick');
+  const canvas        = renderer.domElement;
 
-  document.addEventListener('pointerlockchange', () => {
-    isLocked = document.pointerLockElement === canvas;
-    const overlay = document.getElementById('lock-overlay');
-    if (overlay) overlay.style.display = isLocked ? 'none' : 'flex';
+  if (jumpBtn) jumpBtn.style.display = 'flex';
+  canvas.style.touchAction = 'none';
+
+  canvas.addEventListener('pointerdown', (e) => {
+    const isLeft = e.clientX < window.innerWidth / 2;
+    if (isLeft) {
+      if (touchMove.active) return;
+      touchMove.active = true;
+      touchMove.id     = e.pointerId;
+      touchMove.startX = e.clientX;
+      touchMove.startY = e.clientY;
+      joystickBase.style.left    = `${e.clientX - 70}px`;
+      joystickBase.style.top     = `${e.clientY - 70}px`;
+      joystickBase.style.display = 'block';
+      joystickStick.style.transform = 'translate(0px, 0px)';
+    } else {
+      if (touchLook.active) return;
+      touchLook.active = true;
+      touchLook.id     = e.pointerId;
+      touchLook.prevX  = e.clientX;
+      touchLook.prevY  = e.clientY;
+    }
+    canvas.setPointerCapture(e.pointerId);
   });
 
-  document.addEventListener('mousemove', (e) => {
-    if (!isLocked) return;
-    const sens   = 0.002;
-    playerYaw   -= e.movementX * sens;
-    playerPitch -= e.movementY * sens;
-    playerPitch  = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, playerPitch));
-    camera.rotation.set(playerPitch, playerYaw, 0, 'YXZ');
+  canvas.addEventListener('pointermove', (e) => {
+    if (touchMove.active && e.pointerId === touchMove.id) {
+      const dx   = e.clientX - touchMove.startX;
+      const dy   = e.clientY - touchMove.startY;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0) {
+        const clamped = Math.min(dist, JOYSTICK_MAX);
+        const nx = dx / dist;
+        const ny = dy / dist;
+        joystickVec.x = nx * (clamped / JOYSTICK_MAX);
+        joystickVec.y = ny * (clamped / JOYSTICK_MAX);
+        joystickStick.style.transform = `translate(${nx * clamped}px, ${ny * clamped}px)`;
+      }
+    }
+    if (touchLook.active && e.pointerId === touchLook.id) {
+      const sens  = 0.005;
+      playerYaw   -= (e.clientX - touchLook.prevX) * sens;
+      playerPitch -= (e.clientY - touchLook.prevY) * sens;
+      playerPitch  = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, playerPitch));
+      camera.rotation.set(playerPitch, playerYaw, 0, 'YXZ');
+      touchLook.prevX = e.clientX;
+      touchLook.prevY = e.clientY;
+    }
   });
 
-  document.addEventListener('keydown', (e) => {
-    keysDown[e.code] = true;
-    if (e.code === 'Space' && playerOnFloor) playerVel.y = JUMP_VEL;
-  });
-  document.addEventListener('keyup', (e) => { keysDown[e.code] = false; });
+  const endTouch = (e) => {
+    if (touchMove.active && e.pointerId === touchMove.id) {
+      touchMove.active  = false;
+      touchMove.id      = -1;
+      joystickVec.x     = 0;
+      joystickVec.y     = 0;
+      joystickBase.style.display = 'none';
+      joystickStick.style.transform = 'translate(0px, 0px)';
+    }
+    if (touchLook.active && e.pointerId === touchLook.id) {
+      touchLook.active = false;
+      touchLook.id     = -1;
+    }
+  };
+  canvas.addEventListener('pointerup',     endTouch);
+  canvas.addEventListener('pointercancel', endTouch);
 
-  document.getElementById('ui')?.addEventListener('mousedown', () => {
-    if (isLocked) document.exitPointerLock();
+  jumpBtn?.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    if (playerOnFloor) playerVel.y = JUMP_VEL;
   });
 }
 
@@ -544,6 +593,20 @@ function setupControls() {
 // ============================================================
 
 function setupUI() {
+  // 設定パネル開閉
+  const settingsBtn = document.getElementById('settings-btn');
+  const uiCloseBtn  = document.getElementById('ui-close-btn');
+  const uiPanel     = document.getElementById('ui');
+
+  settingsBtn?.addEventListener('click', () => {
+    uiPanel.classList.remove('collapsed');
+    settingsBtn.style.display = 'none';
+  });
+  uiCloseBtn?.addEventListener('click', () => {
+    uiPanel.classList.add('collapsed');
+    settingsBtn.style.display = 'block';
+  });
+
   const countSlider = document.getElementById('count');
   const countVal    = document.getElementById('count-val');
   let   countTimer  = null;
@@ -714,8 +777,6 @@ async function init() {
   const app     = document.getElementById('app');
   const loading = document.getElementById('loading');
 
-  const hasWebGPU = !!navigator.gpu;
-
   renderer = new THREE.WebGPURenderer({
     antialias: true,
     requiredLimits: { maxStorageBuffersInVertexStage: 1 },
@@ -776,21 +837,7 @@ async function init() {
 
   setInstanceCount(instanceCount, clothNumSegments);
   setupUI();
-  setupControls();
-
-  const lockOverlay = document.getElementById('lock-overlay');
-  if (lockOverlay) lockOverlay.style.display = 'flex';
-
-  if (!hasWebGPU) {
-    const segsSlider  = document.getElementById('segments');
-    const countSlider = document.getElementById('count');
-    if (segsSlider)  { segsSlider.disabled  = true; segsSlider.title  = 'WebGPU必須'; }
-    if (countSlider) { countSlider.disabled = true; countSlider.title = 'WebGPU必須'; }
-    const warn = document.createElement('div');
-    warn.style.cssText = 'position:fixed;bottom:36px;left:50%;transform:translateX(-50%);background:rgba(180,120,0,0.85);color:#fff;padding:6px 14px;border-radius:4px;font-size:12px;pointer-events:none;z-index:30;white-space:nowrap;';
-    warn.textContent = '⚠ WebGL2モード: Count/Segment変更不可 (WebGPU推奨)';
-    document.body.appendChild(warn);
-  }
+  setupTouchControls();
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
