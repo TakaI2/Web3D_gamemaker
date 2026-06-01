@@ -15,8 +15,11 @@
   <button class="mode-btn stage-btn" on:click={() => appModeStore.toStageEditor()}>
     ステージ編集
   </button>
-  <a class="mode-btn cloth-btn" href="/cloth-editor/" target="_blank">
+  <a class="mode-btn cloth-btn" href="https://localhost:5174/htdocs/3d_game/cloth-editor/" target="_blank">
     布エディタ ↗
+  </a>
+  <a class="mode-btn npc-btn" href="https://localhost:5174/htdocs/3d_game/fps-cloth-vrm/" target="_blank">
+    VRM NPC ↗
   </a>
 </div>
 
@@ -50,4 +53,6 @@
   .stage-btn:hover { background: #668; }
   .cloth-btn { background: #466; text-decoration: none; text-align: center; }
   .cloth-btn:hover { background: #577; }
+  .npc-btn { background: #644; text-decoration: none; text-align: center; }
+  .npc-btn:hover { background: #755; }
 </style>

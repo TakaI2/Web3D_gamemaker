@@ -1,385 +1,502 @@
-# 設計書 - FPS ステージエディタ
+# 設計書 - Cloth Preview
 
-## 1. アーキテクチャ概観
+## 1. アーキテクチャ概要
 
-```
-既存 App.svelte
-  └─ AppMode: 'stage-editor' を追加
-       └─ StageEditorViewport.svelte（メインコンテナ）
-            ├─ StageEditorToolbar.svelte     ← 上部ツールバー
-            ├─ StageEditorShapePanel.svelte  ← 左パネル（図形選択・オブジェクト一覧）
-            ├─ <canvas>                      ← Three.js ビューポート
-            └─ StageEditorPropsPanel.svelte  ← 右パネル（位置・回転・スケール・マテリアル）
-```
-
-### 状態フロー
+### 1.1 ファイル構成
 
 ```
-stageEditorStore（Svelte writable）
-  ├─ objects: StageObjectDef[]      ← 正規データ（SSoT）
-  ├─ selectedId: string | null
-  ├─ toolMode: 'place' | 'select'
-  ├─ activeShape: ShapeType
-  ├─ snapSize: 0.5 | 1 | 2 | 4
-  └─ previewGlbUrl: string | null   ← FPS プレビュー用 Blob URL
-
-Three.js Scene（命令型）
-  └─ meshMap: Map<id, THREE.Mesh>   ← store の objects と 1:1 同期
+cloth-preview/
+  index.html          # UI レイアウト・スタイル
+  cloth-preview.js    # ロジック全体（ES Module）
 ```
 
-**UI → Store → Scene の一方向データフロー**を維持する。
-Svelte の `$: { ... }` リアクティブ文で store の変化を検知し、meshMap を同期する。
-
----
-
-## 2. ファイル構成
+### 1.2 モジュール構成（cloth-preview.js 内）
 
 ```
-src/
-  stage-editor/
-    types.ts                    # 型定義（ShapeType, StageObjectDef, SceneDef）
-    StageEditorScene.ts         # Three.js 初期化・グリッド・ライト・レンダーループ
-    StageEditorGizmo.ts         # ゴーストプレビュー + 選択ハイライト
-    StageEditorExporter.ts      # JSON 保存/読み込み + GLB エクスポート
-    StageEditorMeshSync.ts      # store.objects ↔ meshMap の同期ロジック
+┌─────────────────────────────────────────────────────────┐
+│  Init / Render Loop                                      │
+├──────────────┬──────────────┬───────────────────────────┤
+│  VRM Loader  │  Cloth Sim   │  VRMA Player               │
+│  (流用)      │  (流用)      │  (AnimationMixer)          │
+├──────────────┴──────────────┴───────────────────────────┤
+│  Hand Grab Points (流用)                                 │
+├─────────────────────────────────────────────────────────┤
+│  Timeline State                                          │
+│  ┌──────────────────┬──────────────────────────────┐   │
+│  │ Grip Event Tracks│ BlendShape Tracks             │   │
+│  │ (Set<frame> × 4) │ (Map<name, Map<frame,value>>) │   │
+│  └──────────────────┴──────────────────────────────┘   │
+├─────────────────────────────────────────────────────────┤
+│  Timeline Renderer (Canvas 2D)                          │
+├─────────────────────────────────────────────────────────┤
+│  Event Dispatcher (再生中フレーム監視 → clothAPI 呼び出し)│
+├─────────────────────────────────────────────────────────┤
+│  BlendShape Interpolator (線形補間 → expressionManager) │
+└─────────────────────────────────────────────────────────┘
+```
 
-  stores/
-    stageEditorStore.ts         # エディタ全体の Svelte writable store
+### 1.3 CDN 依存
 
-  components/
-    StageEditorViewport.svelte  # メインコンポーネント（canvas + イベント制御）
-    StageEditorToolbar.svelte   # モード切替・スナップ・保存・エクスポート・FPS プレビュー
-    StageEditorShapePanel.svelte # 図形パレット + オブジェクトリスト
-    StageEditorPropsPanel.svelte # 位置/回転/スケール + マテリアル設定
+```js
+import * as THREE          from 'https://esm.sh/three@0.184.0/webgpu';
+import { ... }             from 'https://esm.sh/three@0.184.0/tsl';
+import { OrbitControls }   from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader }      from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.4.0?deps=three@0.184.0';
+import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
+                           from 'https://esm.sh/@pixiv/three-vrm-animation@3.4.0?deps=three@0.184.0,@pixiv/three-vrm@3.4.0';
 ```
 
 ---
 
-## 3. データモデル（types.ts）
+## 2. 状態変数設計
 
-```typescript
-export type ShapeType = 'box' | 'sphere' | 'cylinder' | 'cone';
+### 2.1 流用する状態（cloth-editor.js から移植）
 
-export type ToolMode = 'place' | 'select';
+```js
+// シーン
+let renderer, scene, camera, controls;
+const timer = new THREE.Timer();
 
-export type SnapSize = 0.5 | 1 | 2 | 4;
+// VRM
+let currentVRM = null;
 
-export type MaterialDef = {
-  color: string;                 // CSS hex e.g. "#4488cc"
-  roughness: number;             // 0.0 - 1.0
-  metalness: number;             // 0.0 - 1.0
-  textureDataUrl: string | null; // data:image/... or null
-};
+// マント（cloth.json）
+let mantleData = null;
+let mantleOrigPos = null;
+const mantleTransform = { tx:0, ty:0, tz:0, ry:0, scale:1.0 };
 
-export type StageObjectDef = {
-  id: string;                        // crypto.randomUUID()
-  name: string;                      // 表示名 e.g. "Box_001"
-  shape: ShapeType;
-  position: readonly [number, number, number];  // world XYZ
-  rotation: readonly [number, number, number];  // degrees XYZ (Euler)
-  scale: readonly [number, number, number];      // XYZ
-  material: MaterialDef;
-};
+// 布シミュ
+let simRunning = false;
+let simData = null;
+let stiffnessUniform, dampeningUniform, windUniform;
 
-export type SceneDef = {
-  version: 1;
-  objects: StageObjectDef[];
-};
+// ピン・グリップセット（cloth.json から復元）
+const pinnedSet = new Set();
+const leftGripSet = new Set();
+const rightGripSet = new Set();
+
+// ハンドグラブポイント
+const handGrabPoints = { left: {...}, right: {...} };
 ```
 
-### デフォルトマテリアル
-```typescript
-export const DEFAULT_MATERIAL: MaterialDef = {
-  color: '#888888',
-  roughness: 0.7,
-  metalness: 0.0,
-  textureDataUrl: null,
+### 2.2 新規追加する状態
+
+```js
+// ── VRMA ──────────────────────────────────────────────
+let mixer = null;              // THREE.AnimationMixer
+let vrmaAction = null;         // THREE.AnimationAction
+let vrmaClip = null;           // THREE.AnimationClip
+let vrmaPlaying = false;
+let vrmaLoop = true;
+let vrmaSpeed = 1.0;
+
+// ── タイムライン ─────────────────────────────────────
+const TL_FPS = 30;             // デフォルト FPS
+
+const timeline = {
+  fps: TL_FPS,
+  durationFrames: 90,          // VRMA 読み込み時に上書き
+  currentFrame: 0,
+  // グリップイベント: type → Set<frameIndex>
+  grip: {
+    gripLeft:     new Set(),
+    gripRight:    new Set(),
+    releaseLeft:  new Set(),
+    releaseRight: new Set(),
+  },
+  // ブレンドシェイプ: exprName → Map<frameIndex, value(0-1)>
+  blendShape: new Map(),
+  // 選択中キーフレーム（ブレンドシェイプ編集用）
+  selected: null,  // { kind:'blendShape', name, frame } | null
 };
+
+// ── タイムライン Canvas ───────────────────────────────
+let tlCanvas, tlCtx;
+let tlPxPerFrame = 8;          // ズーム
+let tlScrollX = 0;             // 横スクロールオフセット (px)
+let tlDraggingPlayhead = false;
+
+// ── 直前フレーム（イベント二重発火防止）────────────────
+let _lastDispatchedFrame = -1;
 ```
 
 ---
 
-## 4. ストア設計（stageEditorStore.ts）
+## 3. モジュール設計
 
-```typescript
-type StageEditorState = {
-  objects: StageObjectDef[];
-  selectedId: string | null;
-  toolMode: ToolMode;
-  activeShape: ShapeType;
-  snapSize: SnapSize;
-  previewGlbUrl: string | null;
-};
+### 3.1 VRM Loader（cloth-editor.js から流用・軽量化）
 
-// writable + 操作関数を返すファクトリ
-export const stageEditorStore = createStageEditorStore();
-```
+cloth-editor.js の `loadVRM()` / `unloadVRM()` / `buildCollidersFromVRM()` / `initHandGrabPoints()` をほぼそのままコピー。
+差分：ピン・グリップ編集 UI は不要なので `updateMeshList()` / `selectMesh()` は削除。
 
-操作関数（ミューテーション）:
-- `addObject(def: Omit<StageObjectDef, 'id' | 'name'>): string` → id 返却
-- `updateObject(id: string, partial: Partial<StageObjectDef>): void`
-- `removeObject(id: string): void`
-- `setSelected(id: string | null): void`
-- `setToolMode(mode: ToolMode): void`
-- `setActiveShape(shape: ShapeType): void`
-- `setSnapSize(size: SnapSize): void`
-- `setPreviewGlbUrl(url: string | null): void`
+### 3.2 Mantle Loader（流用）
 
----
+`loadMantleJSON()` / `clearMantle()` / `applyMantleTransform()` をそのまま流用。
+cloth.json 内の `leftGripIndices` / `rightGripIndices` / `pinnedIndices` を復元する。
 
-## 5. Three.js シーン設計（StageEditorScene.ts）
+### 3.3 Cloth Simulator（流用）
 
-### 初期化
-```
-renderer: WebGLRenderer（antialias, shadows）
-scene: Scene
-  ├─ HemisphereLight (sky: #8dc1de, ground: #445544, intensity: 1.5)
-  ├─ DirectionalLight (castShadow, position: (10,20,10))
-  ├─ GridHelper (size: 100, divisions: 100, step: 1)  ← 補助グリッド
-  └─ [動的 Mesh 群]
-camera: PerspectiveCamera (fov: 60)
-  └─ 初期位置: (10, 15, 20), lookAt: (0, 0, 0)
-```
+`buildSimulation()` / `disposeSimulation()` / `scheduleReadbacks()` をそのまま流用。
+シミュ開始ボタンで `buildSimulation(mantleAnalysis)` を呼ぶ。
 
-### OrbitControls 設定
-```typescript
-// three/addons/controls/OrbitControls.js を直接使用
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.minDistance = 1;
-controls.maxDistance = 200;
-controls.maxPolarAngle = Math.PI * 0.49;  // 地面下まで回らない
-```
+### 3.4 Hand Grab Points（流用）
 
-`OrbitController.ts`（class 実装）は流用しない。
-ステージエディタ専用のファクトリ関数 `createStageEditorOrbit` として実装し、class 禁止規約に従う。
+`initHandGrabPoints()` / `updateHandGrabPoints()` / `disposeHandGrabPoints()` を流用。
+`updateHandGrabPoints()` は render ループ内で毎フレーム呼ぶ。
 
-### レンダーループ
-```typescript
-renderer.setAnimationLoop(() => {
-  controls.update();   // damping
-  ghost.update();      // ゴースト位置更新
-  renderer.render(scene, camera);
-});
-```
+### 3.5 VRMA Player（新規）
 
----
+```js
+// VRMA 読み込み
+async function loadVRMA(file) {
+  const loader = new GLTFLoader();
+  loader.register(p => new VRMAnimationLoaderPlugin(p));
+  const url = URL.createObjectURL(file);
+  const gltf = await loader.loadAsync(url);
+  URL.revokeObjectURL(url);
 
-## 6. グリッドスナップとレイキャスト（StageEditorScene.ts）
+  const vrmAnim = gltf.userData.vrmAnimations?.[0];
+  if (!vrmAnim) throw new Error('VRMA データが見つかりません');
 
-### XZ 平面への投影
-```typescript
-const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);  // y=0 平面
+  vrmaClip = createVRMAnimationClip(vrmAnim, currentVRM);
+  mixer = new THREE.AnimationMixer(currentVRM.scene);
+  vrmaAction = mixer.clipAction(vrmaClip);
+  vrmaAction.setLoop(vrmaLoop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+  vrmaAction.timeScale = vrmaSpeed;
 
-function getSnappedPosition(event: MouseEvent, snapSize: number): THREE.Vector3 | null {
-  raycaster.setFromCamera(ndc(event, canvas), camera);
-  const hit = new THREE.Vector3();
-  if (!raycaster.ray.intersectPlane(groundPlane, hit)) return null;
-  return new THREE.Vector3(
-    Math.round(hit.x / snapSize) * snapSize,
-    0,
-    Math.round(hit.z / snapSize) * snapSize,
-  );
+  // タイムライン尺を VRMA に合わせる
+  timeline.durationFrames = Math.round(vrmaClip.duration * timeline.fps);
+  timeline.currentFrame = 0;
+  _lastDispatchedFrame = -1;
+  renderTimeline();
+}
+
+// 再生 / 停止
+function vrmaPlay() { vrmaAction?.play(); vrmaPlaying = true; }
+function vrmaPause() { vrmaAction?.paused = true; vrmaPlaying = false; }
+
+// シーク（フレーム単位）
+function vrmaSeek(frame) {
+  if (!vrmaAction) return;
+  const t = frame / timeline.fps;
+  mixer.setTime(t);
+  timeline.currentFrame = frame;
+  _lastDispatchedFrame = frame - 1; // シーク後は再発火を許可
 }
 ```
 
-- **配置モード**: mousemove → `getSnappedPosition` → ゴーストを移動
-- **選択モード**: click → `raycaster.intersectObjects(meshes)` → 最近傍を選択
+### 3.6 Timeline Renderer（新規・Canvas 2D）
 
-### OrbitControls との競合回避
-- `mousemove` は常に処理（OrbitControls は dragstart/dragend で管理）
-- `click` は `mousedown` からのドラッグ距離 < 3px の場合のみ処理
+SVG より Canvas 2D の方がスクロール・ズーム実装が軽量なため Canvas を採用。
 
----
+```
+定数:
+  HEADER_W = 160    // トラック名エリア幅
+  ROW_H    = 22     // 行高さ
+  RULER_H  = 24     // ルーラー高さ
 
-## 7. ゴーストプレビュー（StageEditorGizmo.ts）
-
-```typescript
-type StageEditorGizmo = {
-  showGhost(shape: ShapeType, pos: THREE.Vector3): void;
-  hideGhost(): void;
-  setSelection(mesh: THREE.Mesh | null): void;
-  clearSelection(): void;
-  dispose(): void;
-};
+描画レイヤー:
+  1. 背景・グリッド線（10フレームごと）
+  2. ルーラー（フレーム番号）
+  3. トラック行（グリップ4行 + ブレンドシェイプ n行）
+  4. キーフレームマーカー（グリップ=ひし形、ブレンドシェイプ=丸、選択中=黄枠）
+  5. ブレンドシェイプ補間カーブ（折れ線）
+  6. プレイヘッド（赤縦線）
 ```
 
-### ゴーストメッシュ
-- 半透明マテリアル: `MeshStandardMaterial({ color: 0x4488ff, opacity: 0.4, transparent: true })`
-- shape が切り替わるたびに geometry を差し替え
-- シーンには常時 1 つだけ存在（配置確定時は `visible = false`）
+### 3.7 Timeline Interaction（新規）
 
-### 選択ハイライト
-- 選択時に対象 Mesh のマテリアルを clone し `emissive = 0x224422` を設定
-- 選択解除時に元のマテリアルに戻す
-
----
-
-## 8. Mesh 生成（StageEditorMeshSync.ts）
-
-### 図形 → Geometry マッピング
-```typescript
-function createGeometry(shape: ShapeType): THREE.BufferGeometry {
-  switch (shape) {
-    case 'box':      return new THREE.BoxGeometry(1, 1, 1);
-    case 'sphere':   return new THREE.SphereGeometry(0.5, 16, 12);
-    case 'cylinder': return new THREE.CylinderGeometry(0.5, 0.5, 1, 16);
-    case 'cone':     return new THREE.ConeGeometry(0.5, 1, 16);
+```js
+// クリック判定
+tlCanvas.addEventListener('click', e => {
+  const { row, frame } = screenToTrack(e.offsetX, e.offsetY);
+  if (row.kind === 'grip') {
+    toggleGripEvent(row.type, frame);
+  } else if (row.kind === 'blendShape') {
+    addOrSelectBlendShapeKF(row.name, frame);
   }
+  renderTimeline();
+});
+
+// 右クリック削除
+tlCanvas.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  const { row, frame } = screenToTrack(e.offsetX, e.offsetY);
+  if (row.kind === 'blendShape') removeBlendShapeKF(row.name, frame);
+  renderTimeline();
+});
+
+// ホイールズーム
+tlCanvas.addEventListener('wheel', e => {
+  tlPxPerFrame = clamp(tlPxPerFrame * (e.deltaY < 0 ? 1.15 : 0.87), 2, 60);
+  renderTimeline();
+});
+
+// プレイヘッドドラッグ
+// → mousedown on ルーラー → mousemove → mouseup
+```
+
+### 3.8 Event Dispatcher（新規）
+
+render ループ内でフレームが変わるたびに実行。
+
+```js
+function dispatchTimelineEvents(frame) {
+  if (frame === _lastDispatchedFrame) return;
+  _lastDispatchedFrame = frame;
+
+  // グリップイベント
+  for (const [type, frameSet] of Object.entries(timeline.grip)) {
+    if (!frameSet.has(frame)) continue;
+    const hp = handGrabPoints;
+    if (type === 'gripLeft'    && simData) simData.leftGripActiveUniform.value = 1;
+    if (type === 'gripRight'   && simData) simData.rightGripActiveUniform.value = 1;
+    if (type === 'releaseLeft' && simData) simData.leftGripActiveUniform.value = 0;
+    if (type === 'releaseRight'&& simData) simData.rightGripActiveUniform.value = 0;
+  }
+
+  // ブレンドシェイプ補間
+  applyBlendShapesAt(frame);
+}
+
+function applyBlendShapesAt(frame) {
+  if (!currentVRM?.expressionManager) return;
+  for (const [name, kfMap] of timeline.blendShape) {
+    const value = interpolateBlendShape(kfMap, frame);
+    currentVRM.expressionManager.setValue(name, value);
+  }
+  currentVRM.expressionManager.update();
+}
+
+// 線形補間
+function interpolateBlendShape(kfMap, frame) {
+  if (kfMap.size === 0) return 0;
+  const frames = [...kfMap.keys()].sort((a, b) => a - b);
+  if (frame <= frames[0]) return kfMap.get(frames[0]);
+  if (frame >= frames.at(-1)) return kfMap.get(frames.at(-1));
+  for (let i = 0; i < frames.length - 1; i++) {
+    const f0 = frames[i], f1 = frames[i + 1];
+    if (frame >= f0 && frame <= f1) {
+      const t = (frame - f0) / (f1 - f0);
+      return kfMap.get(f0) + t * (kfMap.get(f1) - kfMap.get(f0));
+    }
+  }
+  return 0;
 }
 ```
 
-### マテリアル → Three.js MeshStandardMaterial
-- `textureDataUrl` がある場合: `TextureLoader().load(dataUrl)` でテクスチャ生成
-- テクスチャは `Blob URL` ではなく `data: URL` で保持（JSON シリアライズ可能）
+### 3.9 Render Loop（新規）
 
-### store 変化 → meshMap 同期
-```typescript
-// 追加
-function syncAdd(def: StageObjectDef): void { ... }
+```js
+async function render() {
+  timer.update();
+  const dt = Math.min(timer.getDelta(), 1/60);
 
-// 更新（position/rotation/scale/material）
-function syncUpdate(def: StageObjectDef, mesh: THREE.Mesh): void { ... }
+  // VRMA 更新
+  if (mixer && vrmaPlaying) {
+    mixer.update(dt);
+    // 現在フレームを計算
+    const t = vrmaAction?.time ?? 0;
+    timeline.currentFrame = Math.min(
+      Math.round(t * timeline.fps),
+      timeline.durationFrames,
+    );
+    dispatchTimelineEvents(timeline.currentFrame);
+    renderTimelinePlayhead(); // プレイヘッドのみ再描画
+  }
 
-// 削除
-function syncRemove(id: string): void { mesh.geometry.dispose(); ... }
-```
+  // VRM 更新
+  currentVRM?.update(dt);
 
----
+  // ハンドグラブポイント追従
+  updateHandGrabPoints();
 
-## 9. エクスポート（StageEditorExporter.ts）
+  // 布シミュ
+  if (simRunning && simData) {
+    // ... compute (cloth-editor 流用)
+  }
 
-### JSON 保存
-```typescript
-function saveJson(objects: StageObjectDef[]): void {
-  const def: SceneDef = { version: 1, objects };
-  const blob = new Blob([JSON.stringify(def, null, 2)], { type: 'application/json' });
-  downloadBlob(blob, 'stage.json');
+  renderer.render(scene, camera);
 }
 ```
 
-### JSON 読み込み
-```typescript
-function loadJson(file: File): Promise<SceneDef>
-// → JSON.parse + バージョンチェック + 型バリデーション
-```
+### 3.10 Timeline JSON 入出力
 
-### GLB エクスポート
-```typescript
-import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+```js
+function exportTimeline() {
+  const tracks = [];
+  // グリップ
+  for (const [type, frameSet] of Object.entries(timeline.grip)) {
+    if (frameSet.size > 0)
+      tracks.push({ kind: 'grip', type, frames: [...frameSet].sort((a,b)=>a-b) });
+  }
+  // ブレンドシェイプ
+  for (const [name, kfMap] of timeline.blendShape) {
+    tracks.push({
+      kind: 'blendShape', name,
+      keyframes: [...kfMap.entries()]
+        .sort(([a],[b])=>a-b)
+        .map(([frame,value]) => ({ frame, value })),
+    });
+  }
+  return { version:1, fps: timeline.fps, durationFrames: timeline.durationFrames, tracks };
+}
 
-async function exportGlb(scene: THREE.Scene, meshMap: Map<string, THREE.Mesh>): Promise<ArrayBuffer> {
-  // グリッドヘルパー等を除いた Mesh だけのグループを作る
-  const exportGroup = new THREE.Group();
-  for (const mesh of meshMap.values()) exportGroup.add(mesh.clone());
-
-  return new Promise((resolve, reject) => {
-    const exporter = new GLTFExporter();
-    exporter.parse(exportGroup, (result) => resolve(result as ArrayBuffer), reject, { binary: true });
-  });
+function importTimeline(json) {
+  timeline.fps = json.fps ?? 30;
+  timeline.durationFrames = json.durationFrames ?? 90;
+  // grip リセット
+  for (const s of Object.values(timeline.grip)) s.clear();
+  timeline.blendShape.clear();
+  for (const track of json.tracks ?? []) {
+    if (track.kind === 'grip') {
+      for (const f of track.frames) timeline.grip[track.type]?.add(f);
+    } else if (track.kind === 'blendShape') {
+      const m = new Map();
+      for (const { frame, value } of track.keyframes) m.set(frame, value);
+      timeline.blendShape.set(track.name, m);
+    }
+    // kind === 'effect' は将来対応（無視してスキップ）
+  }
+  renderTimeline();
 }
 ```
 
-- `Octree.fromGraphNode()` は `THREE.Mesh` を再帰的に収集するので、エクスポートグループに Mesh が含まれていれば衝突が機能する
-- テクスチャは `binary: true` で GLB に埋め込まれる
+---
+
+## 4. UI レイアウト
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  [VRM読込] [VRMA読込] [マント読込] [TL読込] [TL保存]    FPS表示  │  ← 上部ツールバー
+├──────────────────────────────────────────┬──────────────────────┤
+│                                          │  右パネル             │
+│         3D ビューポート (WebGPU)          │  ▶ 再生 ⏹ 停止       │
+│                                          │  速度: [1.0x ▼]      │
+│                                          │  ────────────────    │
+│                                          │  布シミュ             │
+│                                          │  [シミュ開始/停止]    │
+│                                          │  Stiffness / Wind    │
+│                                          │  ────────────────    │
+│                                          │  ブレンドシェイプ追加 │
+│                                          │  [表情名 ▼] [追加]   │
+│                                          │  ────────────────    │
+│                                          │  選択KF値: [0.00]    │
+├──────────────────────────────────────────┴──────────────────────┤
+│  タイムライン (Canvas 2D)                                         │
+│  ┌─────────────┬──────────────────────────────────────────────┐ │
+│  │ gripLeft    │  ◆         ◆                                  │ │
+│  │ gripRight   │       ◆                                       │ │
+│  │ releaseLeft │               ◆                               │ │
+│  │ releaseRight│                    ◆                          │ │
+│  ├─────────────┼──────────────────────────────────────────────┤ │
+│  │ happy       │  ●─────●                                      │ │
+│  │ sad         │              ●─────●                          │ │
+│  └─────────────┴──────────────────────────────────────────────┘ │
+│  [←スクロール→]   ズーム: ホイール   プレイヘッド: ドラッグ         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**タイムラインパネル高さ**: 固定 240px（下部固定）
+**ビューポート高さ**: `calc(100vh - ツールバー高 - タイムライン高)`
 
 ---
 
-## 10. FPS プレビューモード
+## 5. タイムライン Canvas 詳細
 
-### フロー
-```
-[FPS でテスト] ボタン
-  → exportGlb() → ArrayBuffer
-  → Blob → URL.createObjectURL()
-  → stageEditorStore.setPreviewGlbUrl(url)
-  → appModeStore.toFps()
+### 5.1 座標変換
 
-FpsViewport.svelte
-  → previewGlbUrl が store にあれば collision-world.glb の代わりに使用
-  → 「エディタへ戻る」ボタン
-       → URL.revokeObjectURL(url)  ← メモリ解放
-       → stageEditorStore.setPreviewGlbUrl(null)
-       → appModeStore.toStageEditor()
-```
-
-### FpsViewport の改修
-```typescript
-// 既存の load 呼び出しを変更
-const mapUrl = get(stageEditorStore).previewGlbUrl
-  ?? `${base}models/gltf/collision-world.glb`;
-world.load(scene, mapUrl, ...);
+```js
+// フレーム → スクリーン X
+function frameToX(frame) {
+  return HEADER_W + frame * tlPxPerFrame - tlScrollX;
+}
+// スクリーン X → フレーム
+function xToFrame(x) {
+  return Math.round((x - HEADER_W + tlScrollX) / tlPxPerFrame);
+}
+// 行インデックス → スクリーン Y
+function rowToY(rowIdx) {
+  return RULER_H + rowIdx * ROW_H;
+}
 ```
 
-### AppMode の拡張
-```typescript
-// src/types/index.ts
-export type AppMode = 'editor' | 'game' | 'retarget' | 'anim-editor' | 'fps' | 'stage-editor';
+### 5.2 行構成
 
-// src/stores/appModeStore.ts
-toStageEditor(): void { set('stage-editor'); },
+```js
+const GRIP_ROWS = [
+  { kind: 'grip', type: 'gripLeft',     label: 'Grip L',     color: '#44aaff' },
+  { kind: 'grip', type: 'gripRight',    label: 'Grip R',     color: '#ff6644' },
+  { kind: 'grip', type: 'releaseLeft',  label: 'Release L',  color: '#88ccff' },
+  { kind: 'grip', type: 'releaseRight', label: 'Release R',  color: '#ffaa88' },
+];
+// ブレンドシェイプ行は timeline.blendShape.keys() から動的生成
+```
+
+### 5.3 キーフレームの当たり判定
+
+クリック座標からフレームと行を特定する `screenToTrack(offsetX, offsetY)` 関数。
+スナップ精度: ±4px 以内のフレームに吸着。
+
+---
+
+## 6. ブレンドシェイプ追加 UI
+
+1. 右パネルに VRM から取得した表情名のドロップダウン
+2. 「追加」ボタンでタイムラインに行を追加（`timeline.blendShape.set(name, new Map())`）
+3. タイムライン行をクリック → 選択フレームにキーフレーム配置（デフォルト値 1.0）
+4. 右パネルの「選択KF値」インプットで値を変更
+5. Delete キーで選択キーフレームを削除
+
+---
+
+## 7. データフロー
+
+```
+[VRM 読み込み]
+  └→ initHandGrabPoints()
+  └→ 表情一覧をドロップダウンに表示
+
+[Mantle 読み込み]
+  └→ loadMantleJSON()  ← cloth-editor 流用
+  └→ pinnedSet / leftGripSet / rightGripSet 復元
+
+[VRMA 読み込み]
+  └→ loadVRMA()
+  └→ mixer / vrmaAction 生成
+  └→ timeline.durationFrames = Math.round(duration * fps)
+
+[再生ボタン]
+  └→ vrmaPlay()
+  └→ render() で mixer.update(dt)
+  └→ currentFrame 更新
+  └→ dispatchTimelineEvents(frame)
+      └→ グリップ uniform 切替
+      └→ applyBlendShapesAt(frame)
+
+[タイムラインクリック]
+  └→ screenToTrack() でトラック/フレーム特定
+  └→ toggleGripEvent() or addOrSelectBlendShapeKF()
+  └→ renderTimeline()
 ```
 
 ---
 
-## 11. UI レイアウト
+## 8. 流用・非流用の整理
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ [← エディタ]  [Place|Select]  スナップ:[1▼]  [JSON保存][JSON読込]  │  ← Toolbar (48px)
-│                               [GLBエクスポート]  [🎮 FPSでテスト] │
-├──────────┬───────────────────────────────────┬───────────────────┤
-│          │                                   │ Properties        │
-│ 図形     │                                   │ ─────────────     │
-│ [Box]    │       3D Viewport (canvas)        │ 位置 X Y Z        │
-│ [Sphere] │                                   │ 回転 X Y Z        │
-│ [Cylind] │                                   │ スケール X Y Z    │
-│ [Cone]   │                                   │ ─────────────     │
-│ ─────    │                                   │ マテリアル        │
-│ Objects  │                                   │ Color [   ]       │
-│ Box_001  │                                   │ Roughness ─●──    │
-│ Box_002  │                                   │ Metalness ●────   │
-│ Sphere_1 │                                   │ Texture [upload]  │
-└──────────┴───────────────────────────────────┴───────────────────┘
-  220px            flex: 1                          240px
-```
-
----
-
-## 12. 既存コードへの統合変更
-
-| ファイル | 変更内容 |
-|---|---|
-| `src/types/index.ts` | `AppMode` に `'stage-editor'` を追加 |
-| `src/stores/appModeStore.ts` | `toStageEditor()` メソッドを追加 |
-| `src/components/ModeToggle.svelte` | ステージエディタへの遷移ボタンを追加 |
-| `src/components/FpsViewport.svelte` | `previewGlbUrl` を参照してマップ URL を切り替え |
-| `src/App.svelte`（または相当コンポーネント） | `mode === 'stage-editor'` で `StageEditorViewport` をレンダリング |
-
-**vite.config.ts の変更は不要**（既存アプリの AppMode として統合するため）。
-
----
-
-## 13. 技術リスクと対策
-
-| リスク | 詳細 | 対策 |
-|---|---|---|
-| Octree 互換性 | `fromGraphNode` は `Mesh` ノードが world transform を持つことを前提 | エクスポートグループに `clone()` を使い、`applyMatrix4` で transform を焼き込む |
-| data: URL サイズ | テクスチャを data URL で JSON に埋め込むと巨大になる | テクスチャは 1024px 上限でリサイズしてから格納 |
-| Blob URL リーク | FPS プレビュー後に URL が残る | `appModeStore` の subscribe で `fps → 他` の遷移を検知し自動 revoke |
-| OrbitControls + Raycaster 競合 | ドラッグ中に click 判定が誤発火 | `mousedown` 座標と `mouseup` 座標の距離が 4px 未満の場合のみ配置/選択を実行 |
-
----
-
-## 14. 実装順序（タスク分割の指針）
-
-1. `types.ts` + `stageEditorStore.ts` の型・ストア骨格
-2. `StageEditorScene.ts` — Three.js 初期化・グリッド・OrbitControls
-3. `StageEditorMeshSync.ts` — 図形生成・meshMap 管理
-4. `StageEditorGizmo.ts` — ゴーストプレビュー・選択ハイライト
-5. `StageEditorViewport.svelte` — canvas・イベント制御・store → scene 同期
-6. `StageEditorShapePanel.svelte` + `StageEditorPropsPanel.svelte`
-7. `StageEditorToolbar.svelte`
-8. `StageEditorExporter.ts` — JSON / GLB
-9. AppMode 統合（types, store, ModeToggle, App.svelte）
-10. FPS プレビュー連携（FpsViewport 改修）
+| 機能 | cloth-editor.js から | 変更点 |
+|------|---------------------|--------|
+| VRM 読み込み（MToon変換） | ✅ 流用 | なし |
+| buildCollidersFromVRM | ✅ 流用 | なし |
+| buildSimulation / disposeSimulation | ✅ 流用 | なし |
+| scheduleReadbacks | ✅ 流用 | なし |
+| initHandGrabPoints / updateHandGrabPoints | ✅ 流用 | なし |
+| setupGrabEvents（マウスグラブ） | ✅ 流用 | なし |
+| loadMantleJSON / applyMantleTransform | ✅ 流用 | なし |
+| ピン編集 UI（pinMode, togglePin） | ❌ 不要 | 削除 |
+| グリップ編集 UI（gripEditMode） | ❌ 不要 | cloth.json から自動復元 |
+| メッシュ選択 UI | ❌ 不要 | マントのみ |
+| マント変換スライダー | 🔶 簡略化 | 左パネルに最小限 |
+| VRMA 再生 | ❌ 新規 | 追加 |
+| タイムライン | ❌ 新規 | 追加 |

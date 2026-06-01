@@ -1,279 +1,227 @@
-# タスクリスト - FPS ステージエディタ
+# タスクリスト - Cloth Preview
 
 ## 概要
-
-- 総タスク数: 13
-- 優先度: 高
-- 実装方針: 設計書 `.tmp/design.md` に従い、ストア → Three.js コア → UI の順で積み上げる
+- 総タスク数: 9
+- 実装方式: スタンドアロン HTML/JS（`cloth-preview/` ディレクトリ新設）
+- 流用元: `cloth-editor/cloth-editor.js`
 
 ---
 
 ## タスク一覧
 
-### Phase 1: 基盤（型・ストア・AppMode 統合）
+### T1: HTML シェル + UI レイアウト
+**ファイル**: `cloth-preview/index.html`
 
-#### Task 1.1: 型定義の作成
-
-- [ ] `src/stage-editor/types.ts` を新規作成
-  - `ShapeType`, `ToolMode`, `SnapSize`, `MaterialDef`, `StageObjectDef`, `SceneDef` を定義
-  - `DEFAULT_MATERIAL` 定数を定義
-- [ ] `src/types/index.ts` に `AppMode` へ `'stage-editor'` を追加
-- **完了条件**: TypeScript コンパイルエラーなし
-- **依存**: なし
-- **推定時間**: 0.5h
-
-#### Task 1.2: Svelte ストアの実装
-
-- [ ] `src/stores/stageEditorStore.ts` を新規作成
-  - `StageEditorState` 型定義
-  - `createStageEditorStore()` ファクトリ関数
-  - `addObject`, `updateObject`, `removeObject`, `setSelected`, `setToolMode`, `setActiveShape`, `setSnapSize`, `setPreviewGlbUrl` を実装
-- [ ] `src/stage-editor/stageEditorStore.test.ts` を新規作成し T001–T203 の自動テストを実装
-- [ ] `npm test` で全テスト PASS を確認
-- **完了条件**: T001–T203 全 PASS
-- **依存**: Task 1.1
-- **推定時間**: 1.5h
-
-#### Task 1.3: AppMode 統合（ルーティング）
-
-- [ ] `src/stores/appModeStore.ts` に `toStageEditor()` を追加
-- [ ] `src/App.svelte` の mode 分岐に `'stage-editor'` → `StageEditorViewport` を追加（コンポーネントはスタブで OK）
-- [ ] `src/components/ModeToggle.svelte` に「ステージエディタ」ボタンを追加
-- **完了条件**: トップページからステージエディタ画面に遷移できる（中身は空でよい）
-- **依存**: Task 1.1
-- **推定時間**: 0.5h
+- 上部ツールバー: [VRM読込] [VRMA読込] [マント読込] [TL読込] [TL保存] ボタン
+- 左 70%: `<div id="app">` ビューポート
+- 右 30%: 右パネル（再生コントロール / 布シミュ / ブレンドシェイプ追加 / 選択KF値）
+- 下部 240px 固定: タイムライン `<canvas id="timeline">`
+- FPS カウンター、WebGPU 警告バナー、トースト、ローディングオーバーレイ
+- CSS: ビューポート高さ `calc(100vh - toolbar - timeline)`
 
 ---
 
-### Phase 2: Three.js コア
+### T2: VRM 読み込み + シーンセットアップ + ハンドグラブポイント
+**ファイル**: `cloth-preview/cloth-preview.js`
 
-#### Task 2.1: グリッドスナップ関数 + テスト
+cloth-editor.js から以下をコピー・流用:
+- `loadVRM()` / `unloadVRM()`（MToon→NodeMaterial 変換含む）
+- `buildCollidersFromVRM()` / `addCollider()` / `syncColliderDataArr()`
+- `initHandGrabPoints()` / `disposeHandGrabPoints()` / `updateHandGrabPoints()` / `_syncHgpOffsetUI()`
+- グラブポイントドラッグ（setupGrabEvents の HGP ドラッグ部分のみ）
 
-- [ ] `src/stage-editor/snapToGrid.ts` に `snapToGrid(value: number, snapSize: number): number` を実装
-- [ ] `src/stage-editor/snapToGrid.test.ts` に T301–T308 のテストを実装
-- [ ] `npm test` で全テスト PASS を確認
-- **完了条件**: T301–T308 全 PASS
-- **依存**: なし（Task 1.1 と並行可）
-- **推定時間**: 0.5h
+追加:
+- VRM 読み込み後に `expressionManager` から表情一覧を取得し、右パネルのドロップダウンに設定
 
-#### Task 2.2: Three.js シーン初期化
-
-- [ ] `src/stage-editor/StageEditorScene.ts` を新規作成
-  - `createStageEditorScene(canvas: HTMLCanvasElement)` ファクトリ関数
-  - WebGLRenderer（antialias, shadowMap）初期化
-  - PerspectiveCamera（fov:60）+ 初期位置 (10, 15, 20)、lookAt (0,0,0)
-  - HemisphereLight + DirectionalLight（castShadow）
-  - GridHelper（100×100、step:1）
-  - `OrbitControls`（three/addons、damping 有効、minDistance:1, maxDistance:200）
-  - `animate()` レンダーループ（controls.update + renderer.render）
-  - `resize(w, h)` / `dispose()` 関数
-- **完了条件**: `StageEditorViewport.svelte` に組み込んでグリッドが表示される
-- **依存**: Task 1.3
-- **推定時間**: 2h
-
-#### Task 2.3: Mesh 生成・同期ロジック
-
-- [ ] `src/stage-editor/StageEditorMeshSync.ts` を新規作成
-  - `createGeometry(shape: ShapeType): THREE.BufferGeometry`（box/sphere/cylinder/cone）
-  - `materialDefToThreeMaterial(def: MaterialDef): THREE.MeshStandardMaterial`
-    - `textureDataUrl` がある場合は `TextureLoader().load(dataUrl)` でテクスチャ生成
-  - `createMesh(def: StageObjectDef): THREE.Mesh`（geometry + material + transform 適用）
-  - `syncUpdate(def: StageObjectDef, mesh: THREE.Mesh): void`（transform + material 更新）
-  - `syncRemove(mesh: THREE.Mesh): void`（geometry/material/texture dispose）
-- [ ] `src/stage-editor/materialDef.test.ts` に T601–T604 の自動テストを実装
-- [ ] `npm test` で全テスト PASS を確認
-- **完了条件**: T601–T604 全 PASS、Box がシーンに追加されて表示される
-- **依存**: Task 2.2
-- **推定時間**: 2h
-
-#### Task 2.4: ゴーストプレビュー・選択ハイライト
-
-- [ ] `src/stage-editor/StageEditorGizmo.ts` を新規作成
-  - `createStageEditorGizmo(scene: THREE.Scene)` ファクトリ関数
-  - `showGhost(shape: ShapeType, pos: THREE.Vector3): void`
-    - 半透明マテリアル（color:#4488ff, opacity:0.4）
-    - shape 変更時に geometry を差し替え
-  - `hideGhost(): void`
-  - `setSelection(mesh: THREE.Mesh): void`（emissive ハイライト）
-  - `clearSelection(): void`（元マテリアルに戻す）
-  - `dispose(): void`
-- **完了条件**: マウスオーバーでゴーストが表示され、クリックで選択ハイライトが機能する
-- **依存**: Task 2.2
-- **推定時間**: 1.5h
+削除（不要）:
+- ピン編集 / グリップ編集 UI / メッシュ選択 UI / analyzeMesh / initMarkers
 
 ---
 
-### Phase 3: UI コンポーネント
+### T3: マント読み込み + 布シミュレーション
+**ファイル**: `cloth-preview/cloth-preview.js`
 
-#### Task 3.1: メインビューポート（canvas + イベント）
+cloth-editor.js から以下をコピー・流用:
+- `loadMantleJSON()` / `clearMantle()` / `applyMantleTransform()` / `updateMantleMarkers()`
+- `buildSimulation()` / `disposeSimulation()` / `scheduleReadbacks()`
+- `_buildMantleAnalysis()`
+- uniform 初期化（stiffness / dampening / wind）
 
-- [ ] `src/components/StageEditorViewport.svelte` を新規作成
-  - `onMount` で `createStageEditorScene` を初期化
-  - `mousemove` → `getSnappedPosition` → gizmo.showGhost（Place モード時）
-  - `click`（drag < 4px のみ）→ Place モード: `stageEditorStore.addObject`, Select モード: Raycaster で選択
-  - `keydown Delete` → 選択オブジェクト削除
-  - `$: { ... }` で `stageEditorStore.objects` の変化を監視し `meshMap` を同期
-  - `ResizeObserver` でリサイズ対応
-  - `onDestroy` でリソース全破棄
-- **完了条件**: Box を置けて選択・Delete 削除できる
-- **依存**: Task 2.3, Task 2.4, Task 1.2
-- **推定時間**: 3h
-
-#### Task 3.2: 図形パネル + オブジェクトリスト
-
-- [ ] `src/components/StageEditorShapePanel.svelte` を新規作成
-  - 図形ボタン 4 個（Box/Sphere/Cylinder/Cone）→ `setActiveShape`
-  - アクティブ図形をハイライト表示
-  - オブジェクトリスト: `$stageEditorStore.objects` を一覧表示
-    - リストアイテムクリック → `setSelected(id)` + Select モードに切替
-    - 削除ボタン（×）→ `removeObject(id)`
-- **完了条件**: 図形選択とオブジェクトリストが連動する
-- **依存**: Task 1.2, Task 3.1
-- **推定時間**: 1.5h
-
-#### Task 3.3: プロパティパネル（位置・回転・スケール・マテリアル）
-
-- [ ] `src/components/StageEditorPropsPanel.svelte` を新規作成
-  - 選択オブジェクトの position/rotation/scale を数値入力（各 X/Y/Z）
-  - 入力変更時に `updateObject` を呼ぶ
-  - カラーピッカー（`<input type="color">`）→ `material.color` 更新
-  - Roughness スライダー（0–1）→ `material.roughness` 更新
-  - Metalness スライダー（0–1）→ `material.metalness` 更新
-  - テクスチャアップロード（`<input type="file" accept="image/*">`）
-    - FileReader で data URL に変換 → `material.textureDataUrl` 更新
-  - 選択なし時はパネルを非アクティブ表示
-- **完了条件**: プロパティ変更がビューポートに即座に反映される
-- **依存**: Task 1.2, Task 3.1
-- **推定時間**: 2h
-
-#### Task 3.4: ツールバー
-
-- [ ] `src/components/StageEditorToolbar.svelte` を新規作成
-  - 「← エディタ」ボタン → `appModeStore.toEditor()`
-  - Place / Select トグルボタン → `setToolMode`
-  - スナップサイズセレクタ（0.5/1/2/4）→ `setSnapSize`
-  - 「JSON 保存」ボタン → Exporter の `saveJson`
-  - 「JSON 読み込み」ボタン → ファイル選択 → Exporter の `loadJson` → store に反映
-  - 「GLB エクスポート」ボタン → Exporter の `exportGlb` → ダウンロード
-  - 「🎮 FPS でテスト」ボタン → Exporter で GLB 生成 → Blob URL を store に保存 → `appModeStore.toFps()`
-- **完了条件**: 各ボタンが期待通りに動作する
-- **依存**: Task 3.1（Exporter は Task 4.1 完成後にフル動作）
-- **推定時間**: 1.5h
+UI:
+- シミュ開始 / 停止ボタン
+- Stiffness / Wind スライダー（右パネル）
 
 ---
 
-### Phase 4: エクスポート機能
+### T4: VRMA プレイヤー
+**ファイル**: `cloth-preview/cloth-preview.js`
 
-#### Task 4.1: JSON/GLB エクスポーター
+```js
+// 新規実装
+async function loadVRMA(file)      // GLTFLoader + VRMAnimationLoaderPlugin
+function vrmaPlay()
+function vrmaPause()
+function vrmaSeek(frame)           // mixer.setTime(frame / fps)
+function vrmaSetSpeed(speed)
+function vrmaSetLoop(enabled)
+function unloadVRMA()
+```
 
-- [ ] `src/stage-editor/StageEditorExporter.ts` を新規作成
-  - `serializeScene(objects: StageObjectDef[]): string`（JSON 文字列）
-  - `deserializeScene(json: string): SceneDef`（バージョンチェック + バリデーション）
-  - `saveJson(objects: StageObjectDef[]): void`（Blob ダウンロード）
-  - `loadJson(file: File): Promise<SceneDef>`
-  - `exportGlb(meshMap: Map<string, THREE.Mesh>): Promise<ArrayBuffer>`
-    - `GLTFExporter` を使い、Mesh を clone して transform を焼き込んでからエクスポート
-    - `{ binary: true }` でテクスチャを GLB に埋め込む
-  - `downloadBlob(blob: Blob, filename: string): void`（ヘルパー）
-- [ ] `src/stage-editor/StageEditorExporter.test.ts` に T401–T504 のテストを実装
-- [ ] `npm test` で全テスト PASS を確認
-- **完了条件**: T401–T504 全 PASS、JSON 保存・読み込みが往復で一致する
-- **依存**: Task 1.1
-- **推定時間**: 2.5h
-
----
-
-### Phase 5: FPS プレビュー連携
-
-#### Task 5.1: FpsViewport の改修
-
-- [ ] `src/components/FpsViewport.svelte` を改修
-  - `stageEditorStore` から `previewGlbUrl` を読み取る
-  - `previewGlbUrl` がある場合は `collision-world.glb` の代わりに Blob URL を使用
-  - 「エディタへ戻る」ボタンの処理に以下を追加:
-    - `URL.revokeObjectURL(previewGlbUrl)` でメモリ解放
-    - `stageEditorStore.setPreviewGlbUrl(null)`
-    - `appModeStore.toStageEditor()`
-- **完了条件**: シナリオ 4（FPS プレビューフロー）が手動テストで通る
-- **依存**: Task 3.4, Task 4.1
-- **推定時間**: 1h
+- `@pixiv/three-vrm-animation` を esm.sh CDN からインポート
+- VRMA 読み込み時に `timeline.durationFrames = Math.round(clip.duration * timeline.fps)`
+- 再生中は `mixer.update(dt)` → currentFrame 計算 → `dispatchTimelineEvents()` 呼び出し
+- アニメーション終端検出（LoopOnce + finished イベント）でプレイヘッド停止
 
 ---
 
-### Phase 6: 検証・仕上げ
+### T5: タイムライン状態管理
+**ファイル**: `cloth-preview/cloth-preview.js`
 
-#### Task 6.1: 自動テスト全実行
+```js
+const timeline = {
+  fps: 30,
+  durationFrames: 90,
+  currentFrame: 0,
+  grip: {
+    gripLeft: new Set(), gripRight: new Set(),
+    releaseLeft: new Set(), releaseRight: new Set(),
+  },
+  blendShape: new Map(),   // name → Map<frame, value>
+  selected: null,          // { kind, name, frame } | null
+};
 
-- [ ] `npm test` で全テストファイルを実行
-- [ ] カバレッジ確認（`npx vitest run --coverage`）
-- [ ] 失敗したテストを修正
-- **完了条件**: 全テスト PASS、ストア + エクスポーターのカバレッジ 80% 以上
-- **依存**: Task 1.2, Task 2.1, Task 2.3, Task 4.1
-- **推定時間**: 0.5h
+function toggleGripEvent(type, frame)
+function addBlendShapeTrack(name)         // 重複チェック付き
+function setBlendShapeKF(name, frame, value)
+function removeBlendShapeKF(name, frame)
+function selectBlendShapeKF(name, frame)
+function exportTimeline()                 // → JSON オブジェクト
+function importTimeline(json)
+```
 
-#### Task 6.2: 手動統合テスト
+---
 
-- [ ] シナリオ 1: 基本的なステージ作成フロー
-- [ ] シナリオ 2: JSON 保存 → 読み込みの往復
-- [ ] シナリオ 3: マテリアル適用 + GLB エクスポート
-- [ ] シナリオ 4: FPS プレビューフロー（Octree 衝突確認）
-- [ ] シナリオ 5: Delete キーによるオブジェクト削除
-- **完了条件**: 全シナリオが期待結果通りに動作する
-- **依存**: Task 5.1
-- **推定時間**: 1h
+### T6: タイムライン Canvas 描画
+**ファイル**: `cloth-preview/cloth-preview.js`
 
-#### Task 6.3: メモリリーク確認
+```js
+// 定数
+const HEADER_W = 160, ROW_H = 22, RULER_H = 24;
+const GRIP_ROWS = [
+  { kind:'grip', type:'gripLeft',     label:'Grip L',     color:'#44aaff' },
+  { kind:'grip', type:'gripRight',    label:'Grip R',     color:'#ff6644' },
+  { kind:'grip', type:'releaseLeft',  label:'Release L',  color:'#88ccff' },
+  { kind:'grip', type:'releaseRight', label:'Release R',  color:'#ffaa88' },
+];
 
-- [ ] Chrome DevTools → Performance → Memory で FPS プレビュー前後のヒープサイズを確認
-- [ ] `URL.revokeObjectURL` が正しく呼ばれていることをログで確認
-- [ ] コンポーネント destroy 後に Three.js リソースが解放されることを確認
-- **完了条件**: 明らかなメモリリークがない
-- **依存**: Task 6.2
-- **推定時間**: 0.5h
+function renderTimeline()              // 全体再描画（ユーザー操作時）
+function renderTimelinePlayhead()      // プレイヘッドのみ差分更新（毎フレーム）
+function frameToX(frame)
+function xToFrame(x)
+function rowToY(rowIdx)
+function allRows()                     // GRIP_ROWS + blendShape 行を結合
+```
+
+描画内容:
+- 背景・グリッド（10f ごと）・ルーラー（フレーム番号）
+- トラック行（グリップ=◆、ブレンドシェイプ=●）
+- ブレンドシェイプ補間折れ線
+- プレイヘッド（赤縦線）
+- 選択キーフレーム（黄枠）
+
+---
+
+### T7: タイムライン操作イベント
+**ファイル**: `cloth-preview/cloth-preview.js`
+
+```js
+function screenToTrack(offsetX, offsetY)  // → { row, frame } | null
+function setupTimelineEvents(canvas)
+```
+
+イベント:
+- `click`: グリップトグル / ブレンドシェイプKF配置・選択
+- `contextmenu`: ブレンドシェイプKF削除
+- `wheel`: tlPxPerFrame ズーム（2〜60px/f）
+- `mousedown` on ルーラー → `mousemove` → `mouseup`: プレイヘッドドラッグ
+- `scroll` (横): tlScrollX 更新
+- `keydown Delete`: 選択KF削除
+
+選択KF値の編集:
+- 右パネルの数値インプット（0〜1）で `setBlendShapeKF()` を呼ぶ
+
+---
+
+### T8: Event Dispatcher + ブレンドシェイプ補間
+**ファイル**: `cloth-preview/cloth-preview.js`
+
+```js
+let _lastDispatchedFrame = -1;
+
+function dispatchTimelineEvents(frame)
+function applyBlendShapesAt(frame)
+function interpolateBlendShape(kfMap, frame)   // 線形補間
+```
+
+グリップイベント発火順序: `gripLeft → gripRight → releaseLeft → releaseRight`
+ブレンドシェイプ: VRMA 再生中は VRMA 優先（expressionManager は VRMA の update 後に呼ぶ）
+
+エラー処理:
+- `simData` が null → グリップイベントをスキップ
+- `expressionManager.setValue` 例外 → try/catch でトーストを出す
+
+---
+
+### T9: UI Manager + Render Loop 統合
+**ファイル**: `cloth-preview/cloth-preview.js`
+
+```js
+function setupUI()    // ファイル入力・再生コントロール・スライダー・ブレンドシェイプ追加
+async function render()
+async function init()
+```
+
+render ループ:
+```
+1. timer.update() / updateFPS()
+2. if (mixer && vrmaPlaying) mixer.update(dt)
+3. currentFrame 更新 → dispatchTimelineEvents()
+4. renderTimelinePlayhead()
+5. currentVRM?.update(dt)
+6. updateHandGrabPoints()
+7. if (simRunning) compute spring + vertex forces
+8. scheduleReadbacks()
+9. renderer.render(scene, camera)
+```
+
+index.html のランディングページにリンク追加（`/cloth-preview/` へ）
 
 ---
 
 ## 実装順序
 
 ```
-Task 1.1（型定義）
-  ├─ Task 1.2（ストア）→ Task 3.1（Viewport）→ Task 3.2, 3.3（パネル類）
-  ├─ Task 1.3（AppMode 統合）
-  └─ Task 2.1（スナップ関数）← 並行可
-
-Task 2.2（Three.js シーン）
-  ├─ Task 2.3（MeshSync）→ Task 3.1
-  └─ Task 2.4（Gizmo）→ Task 3.1
-
-Task 4.1（Exporter）→ Task 3.4（Toolbar フル動作）→ Task 5.1（FPS 連携）
-
-Task 6.1（自動テスト）→ Task 6.2（手動テスト）→ Task 6.3（メモリ確認）
+T1 (HTML) → T2 (VRM+HGP) → T3 (マント+シミュ) → T4 (VRMA)
+         → T5 (TL状態)   → T6 (TL描画)         → T7 (TL操作)
+         → T8 (Dispatcher) → T9 (統合)
 ```
 
-**クリティカルパス**: 1.1 → 1.2 → 2.2 → 2.3 → 3.1 → 4.1 → 5.1 → 6.2
+T2 完了時点で VRM + グラブポイントが確認できる。
+T4 完了時点で VRMA 再生が確認できる。
+T6 完了時点でタイムラインの見た目が確認できる。
+T8〜T9 完了で全機能が揃う。
 
 ---
 
-## リスクと対策
+## 手動テスト対応表
 
-- **GLTFExporter + Octree 互換性**: Task 6.2 シナリオ 4 で最優先確認。Mesh の transform を `applyMatrix4` で焼き込むことで対処
-- **jsdom での `crypto.randomUUID` 未定義**: vitest setup ファイルで `vi.stubGlobal` を設定
-- **Blob URL メモリリーク**: Task 6.3 で Chrome DevTools を使い実測
-
----
-
-## 注意事項
-
-- `class` は使わない（既存コード規約）。すべてファクトリ関数パターンで実装
-- `any` / `unknown` 型禁止
-- 各タスク完了後に `npm test` を実行してリグレッションを防ぐ
-- Three.js オブジェクトは必ず `dispose()` を呼ぶ
-
----
-
-## 実装開始ガイド
-
-1. このタスクリストに従って順次実装を進めてください
-2. 各タスクの開始時に TodoWrite で `in_progress` に更新
-3. 完了時は `completed` に更新
-4. 問題発生時は速やかに報告してください
+| テスト | 対応タスク |
+|--------|-----------|
+| TF-01〜08 | T2, T3, T4, T9 |
+| TV-01〜06 | T2, T3, T9 |
+| TA-01〜07 | T4, T9 |
+| TT-01〜05 | T6, T7, T9 |
+| TG-01〜06 | T5, T7, T8 |
+| TB-01〜08 | T5, T7, T8 |
+| TJ-01〜04 | T5 |
+| TE-01〜04 | T8 |
