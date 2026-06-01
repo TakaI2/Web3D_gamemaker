@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Cloth Preview</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #1a1a2e; color: #ddd;
+      font-family: system-ui, sans-serif; font-size: 13px;
+    }
+    body { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      flex-shrink: 0; height: 44px;
+      background: #0e0e1e; border-bottom: 1px solid #2a2a44;
+      display: flex; align-items: center; gap: 6px; padding: 0 10px;
+    }
+    #toolbar .sep { width: 1px; height: 20px; background: #333; margin: 0 2px; }
+    #toolbar span.fps { font-size: 11px; color: #0f0; margin-left: auto; }
+
+    /* ── Main (viewport + panel) ── */
+    #main { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+
+    /* ── Viewport ── */
+    #app { flex: 0 0 70%; position: relative; overflow: hidden; }
+    #app canvas { display: block; }
+    #fps-counter {
+      position: absolute; top: 6px; left: 6px;
+      font-size: 11px; color: #0f0;
+      background: rgba(0,0,0,.6); padding: 2px 7px; border-radius: 3px;
+      pointer-events: none; z-index: 5;
+    }
+    #webgpu-warning {
+      display: none; position: absolute; top: 6px; left: 50%;
+      transform: translateX(-50%);
+      background: #604010; border: 1px solid #a06020; color: #ffc;
+      padding: 4px 14px; border-radius: 4px; font-size: 12px; z-index: 5;
+    }
+
+    /* ── Right Panel ── */
+    #right-panel {
+      flex: 0 0 30%; background: #111325;
+      border-left: 1px solid #2a2a44;
+      overflow-y: auto; padding: 8px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .sec {
+      background: #0d0f22; border: 1px solid #252540;
+      border-radius: 6px; padding: 8px;
+    }
+    .sec h3 {
+      font-size: 10px; color: #556; text-transform: uppercase;
+      letter-spacing: .07em; margin-bottom: 7px;
+    }
+    .row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .row label { font-size: 11px; color: #888; min-width: 58px; }
+    .row input[type=range] { flex: 1; cursor: pointer; accent-color: #5580cc; }
+    .row .val { font-size: 11px; color: #bbb; min-width: 36px; text-align: right; }
+    .row-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-bottom: 4px; }
+
+    button {
+      padding: 4px 9px; background: #202040; color: #ccd;
+      border: 1px solid #3a3a60; border-radius: 4px;
+      cursor: pointer; font-size: 12px; white-space: nowrap;
+    }
+    button:hover { background: #2a2a58; }
+    button:disabled { opacity: 0.38; cursor: default; }
+    select {
+      background: #16162c; color: #ccc; border: 1px solid #3a3a60;
+      border-radius: 3px; padding: 3px 6px; font-size: 12px;
+    }
+    input[type=number] {
+      background: #16162c; color: #ccc; border: 1px solid #3a3a60;
+      border-radius: 3px; padding: 3px 5px; font-size: 12px; width: 72px;
+    }
+    input[type=checkbox] { cursor: pointer; accent-color: #5580cc; }
+
+    /* ── Timeline ── */
+    #timeline-section {
+      flex-shrink: 0; height: 240px;
+      background: #08081a; border-top: 1px solid #2a2a44;
+    }
+    #timeline { display: block; cursor: crosshair; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 252px; left: 50%; transform: translateX(-50%);
+      background: #282844; color: #eee; padding: 6px 16px; border-radius: 6px;
+      font-size: 13px; opacity: 0; transition: opacity .3s;
+      z-index: 200; pointer-events: none; white-space: nowrap;
+    }
+    #toast.visible { opacity: 1; }
+    #toast.error { background: #581818; color: #faa; }
+    #toast.warn  { background: #583800; color: #fca; }
+
+    /* ── Loading ── */
+    #loading {
+      position: fixed; inset: 0; background: #1a1a2e;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; color: #99a; z-index: 300; transition: opacity .4s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+
+    #hgp-section { display: none; }
+    #kf-section   { display: none; }
+  </style>
+</head>
+<body>
+
+<!-- ── Toolbar ── -->
+<div id="toolbar">
+  <button id="btn-vrm-load">VRM読込</button>
+  <input type="file" id="vrm-file" accept=".vrm" style="display:none">
+  <button id="btn-vrma-load" disabled>VRMA読込</button>
+  <input type="file" id="vrma-file" accept=".vrma" style="display:none">
+  <div class="sep"></div>
+  <button id="btn-mantle-load">マント読込</button>
+  <input type="file" id="mantle-file" accept=".json" style="display:none">
+  <div class="sep"></div>
+  <button id="btn-tl-load">TL読込</button>
+  <input type="file" id="tl-file" accept=".json" style="display:none">
+  <button id="btn-tl-save">TL保存</button>
+  <div class="sep"></div>
+  <a href="../fps-cloth-vrm/" style="padding:4px 9px;background:#442028;color:#ffaaaa;border:1px solid #663040;border-radius:4px;text-decoration:none;font-size:12px;white-space:nowrap;">FPS NPC ↗</a>
+  <span class="fps" id="fps-toolbar">-- FPS</span>
+</div>
+
+<!-- ── Main ── -->
+<div id="main">
+
+  <!-- 3-D Viewport -->
+  <div id="app">
+    <div id="fps-counter">-- FPS</div>
+    <div id="webgpu-warning">⚠ WebGPU非対応 — 布シミュ無効</div>
+  </div>
+
+  <!-- Right Panel -->
+  <div id="right-panel">
+
+    <!-- Playback controls -->
+    <div class="sec">
+      <h3>再生コントロール</h3>
+      <div class="row-wrap">
+        <button id="btn-play" disabled>▶ 再生</button>
+        <button id="btn-pause" disabled>⏸ 停止</button>
+        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:3px;">
+          <input type="checkbox" id="cb-loop" checked> ループ
+        </label>
+        <select id="sel-speed">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1.0×</option>
+          <option value="2">2.0×</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:4px;">
+        <label>フレーム</label>
+        <span id="lbl-frame" style="color:#ccc;font-size:12px;font-variant-numeric:tabular-nums;">0</span>
+        <span style="color:#555;font-size:11px;">/</span>
+        <span id="lbl-duration" style="color:#666;font-size:12px;">90</span>
+      </div>
+    </div>
+
+    <!-- Cloth simulation -->
+    <div class="sec">
+      <h3>布シミュレーション</h3>
+      <div class="row">
+        <button id="btn-sim-start">開始</button>
+        <button id="btn-sim-stop" disabled>停止</button>
+      </div>
+      <div class="row">
+        <label>Stiffness</label>
+        <input type="range" id="stiffness" min="0.01" max="0.8" step="0.01" value="0.2">
+        <span class="val" id="stiffness-val">0.200</span>
+      </div>
+      <div class="row">
+        <label>Wind</label>
+        <input type="range" id="wind" min="0" max="5" step="0.1" value="1">
+        <span class="val" id="wind-val">1.0</span>
+      </div>
+    </div>
+
+    <!-- Hand grab points (hidden until VRM loaded) -->
+    <div class="sec" id="hgp-section">
+      <h3>ハンドグラブポイント</h3>
+      <div style="font-size:10px;color:#556;margin-bottom:5px;">球をドラッグしても微調整できます</div>
+
+      <div style="font-size:11px;color:#88aaff;margin-bottom:2px;">左手</div>
+      <div class="row"><label>X</label>
+        <input type="range" id="hgp-l-x" min="-0.3" max="0.3" step="0.005" value="0">
+        <span class="val" id="hgp-l-x-val">0.00</span></div>
+      <div class="row"><label>Y</label>
+        <input type="range" id="hgp-l-y" min="-0.3" max="0.3" step="0.005" value="0">
+        <span class="val" id="hgp-l-y-val">0.00</span></div>
+      <div class="row"><label>Z</label>
+        <input type="range" id="hgp-l-z" min="-0.3" max="0.3" step="0.005" value="0">
+        <span class="val" id="hgp-l-z-val">0.00</span></div>
+
+      <div style="font-size:11px;color:#ffaa88;margin-top:4px;margin-bottom:2px;">右手</div>
+      <div class="row"><label>X</label>
+        <input type="range" id="hgp-r-x" min="-0.3" max="0.3" step="0.005" value="0">
+        <span class="val" id="hgp-r-x-val">0.00</span></div>
+      <div class="row"><label>Y</label>
+        <input type="range" id="hgp-r-y" min="-0.3" max="0.3" step="0.005" value="0">
+        <span class="val" id="hgp-r-y-val">0.00</span></div>
+      <div class="row"><label>Z</label>
+        <input type="range" id="hgp-r-z" min="-0.3" max="0.3" step="0.005" value="0">
+        <span class="val" id="hgp-r-z-val">0.00</span></div>
+
+      <div class="row" style="margin-top:4px;">
+        <label style="min-width:0;">
+          <input type="checkbox" id="hgp-visible" checked style="margin-right:3px;">表示
+        </label>
+        <button id="btn-hgp-reset" style="font-size:11px;">オフセットリセット</button>
+      </div>
+    </div>
+
+    <!-- Blend shape add -->
+    <div class="sec">
+      <h3>ブレンドシェイプ</h3>
+      <div class="row">
+        <select id="bs-select" style="flex:1"><option value="">-- VRM読込後 --</option></select>
+        <button id="btn-bs-add">追加</button>
+      </div>
+    </div>
+
+    <!-- Selected KF value -->
+    <div class="sec" id="kf-section">
+      <h3>選択キーフレーム値</h3>
+      <div class="row">
+        <label id="kf-label" style="min-width:0;flex:1;color:#aaa;font-size:11px;">-</label>
+        <input type="number" id="kf-value" min="0" max="1" step="0.01" value="1">
+      </div>
+    </div>
+
+  </div><!-- /right-panel -->
+</div><!-- /main -->
+
+<!-- ── Timeline ── -->
+<div id="timeline-section">
+  <canvas id="timeline"></canvas>
+</div>
+
+<div id="toast"></div>
+<div id="loading">読み込み中…</div>
+
+<script type="module" src="./cloth-preview.js"></script>
+</body>
+</html>

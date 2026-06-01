@@ -7,14 +7,19 @@ import {
   instancedArray, instanceIndex, uniform,
   select, attribute, Loop, float, vec3,
   triNoise3D, time, frontFacing,
+  cross, transformNormalToView,
 } from 'https://esm.sh/three@0.184.0/tsl';
 import { OrbitControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader }    from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.4.0?deps=three@0.184.0';
+import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
+import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
+import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
+import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
+  from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 
 // ── 定数 ─────────────────────────────────────────────────────
 const GRAB_NONE           = -1;
-const GRAB_THRESHOLD_PX   = 22;
+const GRAB_THRESHOLD_PX   = 32;
 const PIN_THRESHOLD_PX    = 25;
 const MARKER_RADIUS       = 0.005;
 const MAX_VERTICES_WARN   = 2000;
@@ -25,6 +30,8 @@ const timer = new THREE.Timer();
 
 // ── VRM 状態 ──────────────────────────────────────────────────
 let currentVRM       = null;
+let currentVRMFile   = null;   // NPCバンドル書き出し用：アップロードしたVRMのFile（バイト保持）
+let currentVRMAName  = null;   // NPCバンドル書き出し用：選択中のVRMAファイル名
 let currentMeshes    = [];   // { name, mesh }[]
 let selectedMeshIdx  = -1;
 let analysisData     = null; // analyzeMesh() の結果
@@ -35,10 +42,19 @@ let pinMode    = false;
 const pinnedSet  = new Set();
 const markerMeshes = [];
 let markerGroup  = null;
+// ボーンアンカー: vertexIdx → { boneName, boneNode, offset: THREE.Vector3 }
+const anchorMap = new Map();
+let anchorEditMode = null; // string|null = アンカー編集中のボーン名
 
 // ── シミュレーション状態 ──────────────────────────────────────
 let simRunning = false;
 let simData    = null;
+
+// ── VRMA プレイヤー ───────────────────────────────────────────
+let mixer       = null;
+let vrmaAction  = null;
+let vrmaClip    = null;
+let vrmaPlaying = false;
 
 // ── マント状態 ────────────────────────────────────────────────
 let mantleData    = null;   // ロードした JSON
@@ -52,17 +68,30 @@ let windUniform;
 
 // ── コライダー（球）────────────────────────────────────────────
 const MAX_COLLIDERS = 8;
-// colliders[i] = { x, y, z, r, visible: bool, helperMesh }
+// colliders[i] = { x, y, z, r, boneNode, boneName, localOffset, helperMesh }
 const colliders = [];
 // GPU へ渡す Float32Array: [x,y,z,r, x,y,z,r, ...]  MAX_COLLIDERS 個
 const colliderDataArr = new Float32Array(MAX_COLLIDERS * 4);
 let   colliderCountUniform = null;  // buildSimulation 後に使用可
 let   colliderDataBuffer   = null;  // instancedArray
+// 読み込んだ cloth.json のコライダー設定 [{ boneName, r, offset:[x,y,z] }]。VRM読込時に半径・オフセットを復元する。
+let   savedColliderData    = null;
 
 // ── グリップ状態 ──────────────────────────────────────────────
 const leftGripSet  = new Set();  // 左手でつかめる頂点インデックス
 const rightGripSet = new Set();  // 右手でつかめる頂点インデックス
 let gripEditMode   = null;        // 'left' | 'right' | null
+
+// ── ハンドグラブポイント ─────────────────────────────────────
+// VRM手ボーンに追従するグラブポイント（オフセット微調整可能）
+const handGrabPoints = {
+  left:  { boneNode: null, offset: new THREE.Vector3(), worldPos: new THREE.Vector3(), markerMesh: null, active: false },
+  right: { boneNode: null, offset: new THREE.Vector3(), worldPos: new THREE.Vector3(), markerMesh: null, active: false },
+};
+// ハンドグラブポイントのドラッグ状態（マーカー球を直接ドラッグして微調整）
+let _hgpDragSide = null;
+const _hgpDragPlane    = new THREE.Plane();
+const _hgpDragRaycaster = new THREE.Raycaster();
 
 // ── グラブ状態 ────────────────────────────────────────────────
 const grab = {
@@ -72,8 +101,7 @@ const grab = {
   raycaster:       new THREE.Raycaster(),
   highlightMesh:   null,
   snapshot:        null,
-  snapshotPending: false,
-  snapshotAge:     999,
+  pendingDown:     false,  // pointerdown→readback完了までの保留中フラグ（途中でpointerupされたら掴みを中止）
 };
 
 // ── FPS カウンター ────────────────────────────────────────────
@@ -86,7 +114,12 @@ let fpsLastTime   = performance.now();
 
 async function loadVRM(file) {
   const loader = new GLTFLoader();
-  loader.register(parser => new VRMLoaderPlugin(parser));
+  // WebGPU 互換の MToonNodeMaterial を指定して、本来の MToon 見た目を保持する
+  loader.register(parser => new VRMLoaderPlugin(parser, {
+    mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, {
+      materialType: MToonNodeMaterial,
+    }),
+  }));
 
   const url = URL.createObjectURL(file);
   try {
@@ -96,31 +129,6 @@ async function loadVRM(file) {
 
     unloadVRM();
     currentVRM = vrm;
-
-    // ShaderMaterial (MToon v0) を MeshPhysicalNodeMaterial に変換してから追加
-    // → WebGPU NodeBuilder との互換性確保
-    vrm.scene.traverse(obj => {
-      if (!obj.isMesh && !obj.isSkinnedMesh) return;
-      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-      const converted = mats.map(m => {
-        if (!m || m.isNodeMaterial) return m;
-        const nm = new THREE.MeshPhysicalNodeMaterial({
-          side:        m.side        ?? THREE.FrontSide,
-          transparent: m.transparent ?? false,
-          opacity:     m.opacity     ?? 1.0,
-          roughness:   0.85,
-          alphaTest:   m.alphaTest   ?? 0,
-        });
-        if (m.map)            nm.map            = m.map;
-        if (m.color)          nm.color.copy(m.color);
-        if (m.normalMap)      nm.normalMap      = m.normalMap;
-        if (m.emissiveMap)    nm.emissiveMap    = m.emissiveMap;
-        if (m.emissive)       nm.emissive.copy(m.emissive);
-        m.dispose();
-        return nm;
-      });
-      obj.material = Array.isArray(obj.material) ? converted : converted[0];
-    });
 
     scene.add(vrm.scene);
     vrm.scene.updateMatrixWorld(true);
@@ -133,6 +141,7 @@ async function loadVRM(file) {
     });
 
     buildCollidersFromVRM(vrm);
+    initHandGrabPoints(vrm);
 
     return currentMeshes;
   } finally {
@@ -155,12 +164,20 @@ function unloadVRM() {
     }
   });
 
+  unloadVRMA();
   clearColliders();
+  disposeHandGrabPoints();
   currentVRM        = null;
   currentMeshes     = [];
   selectedMeshIdx   = -1;
   analysisData      = null;
   originalPositions = null;
+  anchorMap.clear();
+  anchorEditMode = null;
+  document.getElementById('anchor-section').style.display = 'none';
+  document.getElementById('anchor-section-placeholder').style.display = '';
+  const anchorBtn = document.getElementById('btn-anchor-mode');
+  if (anchorBtn) { anchorBtn.classList.remove('active'); anchorBtn.textContent = 'アンカー編集 OFF'; }
 }
 
 // ============================================================
@@ -181,19 +198,26 @@ const BONE_COLLIDER_DEFS = [
 
 function buildCollidersFromVRM(vrm) {
   clearColliders();
-  const tmp = new THREE.Vector3();
+  const tmp  = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
   for (const def of BONE_COLLIDER_DEFS) {
     const node = vrm.humanoid?.getNormalizedBoneNode(def.bone);
     if (!node) continue;
     node.getWorldPosition(tmp);
-    addCollider(tmp.x, tmp.y, tmp.z, def.r);
+    node.getWorldQuaternion(quat);
+    // 保存済み設定があれば半径・ボーンローカルオフセットを復元（無ければデフォルト）
+    const saved = savedColliderData?.find(s => s.boneName === def.bone);
+    const r           = saved ? saved.r : def.r;
+    const localOffset = (saved && saved.offset) ? new THREE.Vector3(...saved.offset) : new THREE.Vector3();
+    const world = tmp.clone().add(localOffset.clone().applyQuaternion(quat));
+    addCollider(world.x, world.y, world.z, r, node, def.bone, localOffset);
     if (colliders.length >= MAX_COLLIDERS) break;
   }
   updateColliderUI();
   syncColliderDataArr();
 }
 
-function addCollider(x, y, z, r) {
+function addCollider(x, y, z, r, boneNode = null, boneName = null, localOffset = null) {
   const geo  = new THREE.SphereGeometry(1, 12, 8);
   const mat  = new THREE.MeshBasicMaterial({
     color: 0x44aaff, wireframe: true, transparent: true, opacity: 0.35,
@@ -203,7 +227,7 @@ function addCollider(x, y, z, r) {
   mesh.scale.setScalar(r);
   mesh.renderOrder = 5;
   scene.add(mesh);
-  colliders.push({ x, y, z, r, helperMesh: mesh });
+  colliders.push({ x, y, z, r, boneNode, boneName, localOffset: localOffset ?? new THREE.Vector3(), helperMesh: mesh });
 }
 
 function clearColliders() {
@@ -270,10 +294,119 @@ function updateColliderUI() {
     if (!el.classList.contains('c-input')) return;
     const idx = parseInt(el.dataset.idx);
     const key = el.dataset.key;
-    colliders[idx][key] = parseFloat(el.value);
+    const c   = colliders[idx];
+    c[key] = parseFloat(el.value);
+    // 位置(X/Y/Z)編集時は、絶対座標からボーンローカルオフセットを再計算して永続化
+    // （毎フレームの updateBoneColliders がオフセットを保ったままボーン追従する）
+    if (key !== 'r' && c.boneNode) {
+      c.boneNode.getWorldPosition(_colliderTmp);
+      c.boneNode.getWorldQuaternion(_colliderQuat);
+      _colliderQuat.invert();
+      c.localOffset.set(c.x - _colliderTmp.x, c.y - _colliderTmp.y, c.z - _colliderTmp.z)
+                   .applyQuaternion(_colliderQuat);
+    }
     updateColliderHelper(idx);
     syncColliderDataArr();
   });
+}
+
+// ============================================================
+// Hand Grab Points（VRM手ボーン追従グラブポイント）
+// ============================================================
+
+function initHandGrabPoints(vrm) {
+  disposeHandGrabPoints();
+  const defs = [
+    { side: 'left',  boneName: 'leftHand',  color: 0x44aaff },
+    { side: 'right', boneName: 'rightHand', color: 0xff6644 },
+  ];
+  let found = 0;
+  for (const { side, boneName, color } of defs) {
+    const hp = handGrabPoints[side];
+    hp.boneNode = vrm.humanoid?.getNormalizedBoneNode(boneName) ?? null;
+    if (!hp.boneNode) continue;
+    found++;
+    hp.boneNode.getWorldPosition(hp.worldPos);
+    hp.offset.set(0, 0, 0);
+
+    const geo  = new THREE.SphereGeometry(0.025, 14, 10);
+    const mat  = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, depthTest: false });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(hp.worldPos);
+    mesh.renderOrder   = 12;
+    mesh.frustumCulled = false;
+    hp.markerMesh = mesh;
+    scene.add(mesh);
+  }
+  if (found > 0) {
+    document.getElementById('hand-grab-section').style.display = '';
+    _syncHgpOffsetUI('left');
+    _syncHgpOffsetUI('right');
+  }
+}
+
+function disposeHandGrabPoints() {
+  for (const side of ['left', 'right']) {
+    const hp = handGrabPoints[side];
+    if (hp.markerMesh) {
+      scene.remove(hp.markerMesh);
+      hp.markerMesh.geometry.dispose();
+      hp.markerMesh.material.dispose();
+      hp.markerMesh = null;
+    }
+    hp.boneNode = null;
+    hp.offset.set(0, 0, 0);
+    hp.active = false;
+  }
+  _hgpDragSide = null;
+  document.getElementById('hand-grab-section').style.display = 'none';
+}
+
+// 毎フレーム呼び出し：ボーン位置＋オフセットでmarkerを更新し、アクティブ時はgrip targetも更新
+function updateHandGrabPoints() {
+  for (const side of ['left', 'right']) {
+    const hp = handGrabPoints[side];
+    if (!hp.boneNode) continue;
+    hp.boneNode.getWorldPosition(hp.worldPos);
+    hp.worldPos.add(hp.offset);
+    if (hp.markerMesh) hp.markerMesh.position.copy(hp.worldPos);
+    if (simData && hp.active) {
+      if (side === 'left')  simData.leftGripTargetUniform.value.copy(hp.worldPos);
+      else                  simData.rightGripTargetUniform.value.copy(hp.worldPos);
+    }
+  }
+}
+
+function _syncHgpOffsetUI(side) {
+  const hp     = handGrabPoints[side];
+  const prefix = side === 'left' ? 'hgp-l' : 'hgp-r';
+  for (const axis of ['x', 'y', 'z']) {
+    const sl = document.getElementById(`${prefix}-${axis}`);
+    const vl = document.getElementById(`${prefix}-${axis}-val`);
+    if (sl) sl.value         = hp.offset[axis].toFixed(3);
+    if (vl) vl.textContent   = hp.offset[axis].toFixed(2);
+  }
+}
+
+// ボーンに紐づいたコライダーを毎フレーム追従させる
+const _colliderTmp  = new THREE.Vector3();
+const _colliderQuat = new THREE.Quaternion();
+const _colliderOff  = new THREE.Vector3();
+function updateBoneColliders() {
+  let changed = false;
+  for (const c of colliders) {
+    if (!c.boneNode) continue;
+    c.boneNode.getWorldPosition(_colliderTmp);
+    c.boneNode.getWorldQuaternion(_colliderQuat);
+    _colliderTmp.add(_colliderOff.copy(c.localOffset).applyQuaternion(_colliderQuat));
+    if (c.x === _colliderTmp.x && c.y === _colliderTmp.y && c.z === _colliderTmp.z) continue;
+    c.x = _colliderTmp.x;
+    c.y = _colliderTmp.y;
+    c.z = _colliderTmp.z;
+    c.helperMesh.position.copy(_colliderTmp);
+    changed = true;
+  }
+  if (changed) syncColliderDataArr();
 }
 
 // ============================================================
@@ -360,10 +493,36 @@ function loadMantleJSON(json) {
   mantleOrigPos = new Float32Array(json.positions);
 
   // ピン・グリップをJSONから復元
+  anchorMap.clear();
   for (const idx of json.pinnedIndices) pinnedSet.add(idx);
   leftGripSet.clear(); rightGripSet.clear();
   if (json.leftGripIndices)  for (const idx of json.leftGripIndices)  leftGripSet.add(idx);
   if (json.rightGripIndices) for (const idx of json.rightGripIndices) rightGripSet.add(idx);
+
+  // ボーンアンカー復元（VRM 読み込み済みの場合のみ boneNode を解決）
+  const anchorData = json.anchorAssignments ?? json.pinnedBoneAssignments;
+  if (anchorData && currentVRM) {
+    for (const entry of anchorData) {
+      const { vertexIdx, boneName } = entry;
+      const boneNode = currentVRM.humanoid?.getNormalizedBoneNode(boneName);
+      if (!boneNode) continue;
+      // localOffset（新形式）またはoffset（旧形式・ワールド空間）を処理
+      let localOffset;
+      if (entry.localOffset) {
+        localOffset = new THREE.Vector3(...entry.localOffset);
+      } else if (entry.offset) {
+        // 旧形式：ワールド空間オフセットをボーンローカル空間に変換
+        const boneQuat = new THREE.Quaternion();
+        boneNode.getWorldQuaternion(boneQuat);
+        localOffset = new THREE.Vector3(...entry.offset).applyQuaternion(boneQuat.invert());
+      } else { continue; }
+      anchorMap.set(vertexIdx, { boneName, boneNode, localOffset });
+    }
+  }
+
+  // 球コライダー設定を復元（VRM読込済みなら半径・オフセットを適用して再構築）
+  savedColliderData = json.colliders ?? null;
+  if (savedColliderData && currentVRM) buildCollidersFromVRM(currentVRM);
 
   // 初期変換を適用してマーカー表示（initMarkers内で全マーカーvisualを更新）
   const transformed = applyMantleTransform(mantleOrigPos, json.vertexCount, mantleTransform);
@@ -380,6 +539,7 @@ function clearMantle() {
   disposeSimulation();
   disposeMarkers();
   pinnedSet.clear();
+  anchorMap.clear();
   leftGripSet.clear();
   rightGripSet.clear();
   mantleData    = null;
@@ -400,11 +560,11 @@ function _resetMantleSliders() {
     const el = document.getElementById(id);
     if (el) el.value = val;
   }
-  document.getElementById('mt-tx-val').textContent    = '0.00';
-  document.getElementById('mt-ty-val').textContent    = '0.00';
-  document.getElementById('mt-tz-val').textContent    = '0.00';
-  document.getElementById('mt-ry-val').textContent    = '0°';
-  document.getElementById('mt-scale-val').textContent = '1.00';
+  document.getElementById('mt-tx-val').value    = '0.00';
+  document.getElementById('mt-ty-val').value    = '0.00';
+  document.getElementById('mt-tz-val').value    = '0.00';
+  document.getElementById('mt-ry-val').value    = '0';
+  document.getElementById('mt-scale-val').value = '1.00';
 }
 
 function updateMantleMarkers() {
@@ -449,11 +609,15 @@ function initMarkers(positions, vertexCount) {
   for (let i = 0; i < vertexCount; i++) _updateMarkerVisual(i);
 }
 
-// ピン・グリップ状態に応じてマーカーの見た目を更新（優先度: ピン > L手 > R手 > 通常）
+// ピン・グリップ状態に応じてマーカーの見た目を更新
+// 優先度: ボーンアンカー(マゼンタ) > 固定ピン(黄) > L手グリップ(青) > R手グリップ(橙) > 通常(白)
 function _updateMarkerVisual(idx) {
   if (idx < 0 || idx >= markerMeshes.length) return;
   const mat = markerMeshes[idx].material;
-  if (pinnedSet.has(idx)) {
+  if (anchorMap.has(idx)) {
+    mat.color.set(0xff44cc); mat.opacity = 1.0; mat.transparent = false;
+    markerMeshes[idx].scale.setScalar(1.8);
+  } else if (pinnedSet.has(idx)) {
     mat.color.set(0xffee00); mat.opacity = 1.0; mat.transparent = false;
     markerMeshes[idx].scale.setScalar(1.6);
   } else if (leftGripSet.has(idx)) {
@@ -508,6 +672,61 @@ function resetGrips() {
   for (let i = 0; i < markerMeshes.length; i++) _updateMarkerVisual(i);
 }
 
+function toggleAnchor(idx) {
+  if (!anchorEditMode || !currentVRM) return;
+  const boneNode = currentVRM.humanoid?.getNormalizedBoneNode(anchorEditMode);
+  if (!boneNode) { showToast(`ボーン "${anchorEditMode}" が見つかりません`, 'warn'); return; }
+
+  if (anchorMap.has(idx)) {
+    anchorMap.delete(idx);
+  } else {
+    // 頂点ワールド座標を取得してボーンローカル空間でのオフセットを算出
+    let snapshot;
+    if (mantleData && mantleOrigPos) {
+      snapshot = applyMantleTransform(mantleOrigPos, mantleData.vertexCount, mantleTransform);
+    } else if (analysisData) {
+      snapshot = analysisData.positions;
+    } else { return; }
+    const bonePos  = new THREE.Vector3();
+    const boneQuat = new THREE.Quaternion();
+    boneNode.getWorldPosition(bonePos);
+    boneNode.getWorldQuaternion(boneQuat);
+    // ワールド空間のオフセットをボーンローカル空間に変換（逆クォータニオンを適用）
+    const localOffset = new THREE.Vector3(
+      snapshot[idx*3]   - bonePos.x,
+      snapshot[idx*3+1] - bonePos.y,
+      snapshot[idx*3+2] - bonePos.z,
+    ).applyQuaternion(boneQuat.invert());
+    anchorMap.set(idx, { boneName: anchorEditMode, boneNode, localOffset });
+  }
+  _updateMarkerVisual(idx);
+}
+
+function clearAnchorMap() {
+  anchorMap.clear();
+  for (let i = 0; i < markerMeshes.length; i++) _updateMarkerVisual(i);
+  showToast('ボーンアンカーをリセットしました');
+}
+
+// シミュ中に毎フレーム呼ぶ：各アンカー頂点のターゲット座標 (boneWorldPos + rotate(localOffset)) を更新
+const _anchorTmp      = new THREE.Vector3();
+const _anchorBoneQuat = new THREE.Quaternion();
+const _anchorWorldOff = new THREE.Vector3();
+
+function updateAnchorPositions() {
+  if (!simData?.bonePinTargetBuffer || !anchorMap.size) return;
+  const arr = simData.bonePinTargetBuffer.value.array;
+  for (const [idx, { boneNode, localOffset }] of anchorMap) {
+    boneNode.getWorldPosition(_anchorTmp);
+    boneNode.getWorldQuaternion(_anchorBoneQuat);
+    _anchorWorldOff.copy(localOffset).applyQuaternion(_anchorBoneQuat);
+    arr[idx*3]   = _anchorTmp.x + _anchorWorldOff.x;
+    arr[idx*3+1] = _anchorTmp.y + _anchorWorldOff.y;
+    arr[idx*3+2] = _anchorTmp.z + _anchorWorldOff.z;
+  }
+  simData.bonePinTargetBuffer.value.needsUpdate = true;
+}
+
 function disposeMarkers() {
   if (!markerGroup) return;
   scene.remove(markerGroup);
@@ -532,14 +751,42 @@ function buildSimulation(analysis) {
   }
 
   // vertexParams: [isFixed, springCount, springPointer, gripCode]
-  // gripCode: 0=なし, 1=左手グリップ, 2=右手グリップ
+  // gripCode: 0=なし, 1=左手グリップ, 2=右手グリップ, 3+N=ボーンスロットN
   const springListArray = [];
   const vertexParamsArr = new Uint32Array(vertexCount * 4);
 
+  // ボーンアンカー：頂点ごとの初期ターゲット座標（boneWorldPos + rotate(localOffset) をCPUで事前計算）
+  // フレームごとに updateAnchorPositions() で更新される
+  const hasBonePins = anchorMap.size > 0;
+  const bonePinTargetArr = new Float32Array(vertexCount * 3);
+  if (hasBonePins) {
+    const tmp      = new THREE.Vector3();
+    const boneQuat = new THREE.Quaternion();
+    const worldOff = new THREE.Vector3();
+    for (const [idx, { boneNode, localOffset }] of anchorMap) {
+      boneNode.getWorldPosition(tmp);
+      boneNode.getWorldQuaternion(boneQuat);
+      worldOff.copy(localOffset).applyQuaternion(boneQuat);
+      bonePinTargetArr[idx*3]   = tmp.x + worldOff.x;
+      bonePinTargetArr[idx*3+1] = tmp.y + worldOff.y;
+      bonePinTargetArr[idx*3+2] = tmp.z + worldOff.z;
+    }
+  }
+
   for (let i = 0; i < vertexCount; i++) {
-    const isFixed = pinnedSet.has(i) ? 1 : 0;
+    const isAnchor = anchorMap.has(i);
+    // アンカー頂点は isFixed=0 にしてシェーダー内で gripCode==3 として処理
+    const isFixed = (!isAnchor && pinnedSet.has(i)) ? 1 : 0;
+    let gripCode = 0;
+    if (isAnchor) {
+      gripCode = 3;
+    } else if (leftGripSet.has(i)) {
+      gripCode = 1;
+    } else if (rightGripSet.has(i)) {
+      gripCode = 2;
+    }
     vertexParamsArr[i * 4]     = isFixed;
-    vertexParamsArr[i * 4 + 3] = leftGripSet.has(i) ? 1 : rightGripSet.has(i) ? 2 : 0;
+    vertexParamsArr[i * 4 + 3] = gripCode;
     if (!isFixed) {
       vertexParamsArr[i * 4 + 1] = vertexSpringIds[i].length;
       vertexParamsArr[i * 4 + 2] = springListArray.length;
@@ -578,6 +825,10 @@ function buildSimulation(analysis) {
   colliderDataBuffer   = instancedArray(colliderDataArr.slice(), 'vec4');
   colliderCountUniform = uniform(colliders.length);
 
+  // ── ボーンアンカーターゲットバッファ（アンカーがある場合のみ）──
+  // 1本のバッファに boneWorldPos+offset を事前計算して格納（スロット方式不要）
+  const bonePinTargetBuffer = hasBonePins ? instancedArray(bonePinTargetArr, 'vec3') : null;
+
   // ── グリップ uniform（マスクはvertexParamsの.wに格納済み）──
   const leftGripActiveUniform  = uniform(0);   // 1=アクティブ, 0=非アクティブ
   const rightGripActiveUniform = uniform(0);
@@ -602,7 +853,7 @@ function buildSimulation(analysis) {
     const isFixed       = vparams.x;
     const springCnt     = vparams.y;
     const springPointer = vparams.z;
-    const gripCode      = vparams.w;  // 0=なし, 1=左手グリップ, 2=右手グリップ
+    const gripCode      = vparams.w;  // 0=なし, 1=左手グリップ, 2=右手グリップ, 3=ボーンアンカー
 
     If(isFixed, () => { Return(); });
 
@@ -632,6 +883,15 @@ function buildSimulation(analysis) {
         Return();
       });
     });
+
+    // ボーンアンカー（gripCode == 3）: 事前計算済みターゲット座標へ直接セット
+    if (hasBonePins) {
+      If(gripCode.equal(3), () => {
+        vertexForceBuffer.element(instanceIndex).assign(vec3(0, 0, 0));
+        vertexPositionBuffer.element(instanceIndex).assign(bonePinTargetBuffer.element(instanceIndex));
+        Return();
+      });
+    }
 
     const position = vertexPositionBuffer.element(instanceIndex).toVar('pos');
     const force    = vertexForceBuffer.element(instanceIndex).toVar('force');
@@ -708,17 +968,52 @@ function buildSimulation(analysis) {
     });
     clothMat = clothMats.length === 1 ? clothMats[0] : clothMats;
   } else {
-    // マントモード: インデックスから geometry を構築
-    clothGeo = new THREE.BufferGeometry();
-    clothGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertexCount * 3), 3));
-    clothGeo.setAttribute('vertexId', new THREE.BufferAttribute(vidArr, 1));
-    clothGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(analysis.indices), 1));
+    // マントモード: quad メッシュ（新形式）or パーティクル直接メッシュ（旧形式フォールバック）
+    const useQuadMesh = !!(analysis.quadVertexIds);
+    const fc      = analysis.colorFront  ?? '#204080';
+    const bc      = analysis.colorBack   ?? '#803020';
+    const opacity = analysis.opacity     ?? 0.85;
+    const matOpts = {
+      side:           THREE.DoubleSide,
+      transparent:    opacity < 1.0,
+      opacity,
+      roughness:      analysis.roughness      ?? 1.0,
+      sheen:          analysis.sheen          ?? 1.0,
+      sheenRoughness: analysis.sheenRoughness ?? 0.5,
+      sheenColor:     analysis.sheenColor ? new THREE.Color(analysis.sheenColor) : undefined,
+    };
 
-    const fc = analysis.colorFront ?? '#204080';
-    const bc = analysis.colorBack  ?? '#803020';
-    clothMat = new THREE.MeshPhysicalNodeMaterial({ side: THREE.DoubleSide, roughness: 0.85, sheen: 0.8 });
-    clothMat.colorNode    = select(frontFacing, uniform(new THREE.Color(fc)), uniform(new THREE.Color(bc)));
-    clothMat.positionNode = posNode;
+    if (useQuadMesh) {
+      // /cloth と同一構造：レンダー頂点 = 4パーティクルのセル中心、法線もインライン計算
+      const rvc       = analysis.renderVertexCount;
+      const quadIdArr = new Uint32Array(analysis.quadVertexIds);
+      clothGeo = new THREE.BufferGeometry();
+      clothGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(rvc * 3), 3, false));
+      clothGeo.setAttribute('vertexIds', new THREE.BufferAttribute(quadIdArr, 4, false));
+      clothGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(analysis.renderIndices), 1));
+      clothMat = new THREE.MeshPhysicalNodeMaterial(matOpts);
+      clothMat.colorNode    = select(frontFacing, uniform(new THREE.Color(fc)), uniform(new THREE.Color(bc)));
+      clothMat.positionNode = Fn(({ material }) => {
+        const vids = attribute('vertexIds');
+        const v0 = vertexPositionBuffer.element(vids.x).toVar();
+        const v1 = vertexPositionBuffer.element(vids.y).toVar();
+        const v2 = vertexPositionBuffer.element(vids.z).toVar();
+        const v3 = vertexPositionBuffer.element(vids.w).toVar();
+        const tangent   = v1.add(v3).sub(v0.add(v2)).normalize();
+        const bitangent = v2.add(v3).sub(v0.add(v1)).normalize();
+        material.normalNode = transformNormalToView(cross(tangent, bitangent)).toVarying();
+        return v0.add(v1).add(v2).add(v3).mul(0.25);
+      })();
+    } else {
+      // 旧形式フォールバック: パーティクル直接メッシュ
+      clothGeo = new THREE.BufferGeometry();
+      clothGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertexCount * 3), 3));
+      clothGeo.setAttribute('vertexId', new THREE.BufferAttribute(vidArr, 1));
+      clothGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(analysis.indices), 1));
+      clothMat = new THREE.MeshPhysicalNodeMaterial(matOpts);
+      clothMat.colorNode    = select(frontFacing, uniform(new THREE.Color(fc)), uniform(new THREE.Color(bc)));
+      clothMat.positionNode = posNode;
+    }
   }
 
   const clothMesh = new THREE.Mesh(clothGeo, clothMat);
@@ -734,6 +1029,7 @@ function buildSimulation(analysis) {
     vertexCount,
     computeSpringForces,
     computeVertexForces,
+    bonePinTargetBuffer,
     clothMesh,
     clothGeo,
     clothMat: clothMat,
@@ -760,7 +1056,7 @@ function disposeSimulation() {
   colliderDataBuffer   = null;
   colliderCountUniform = null;
   grab.snapshot    = null;
-  grab.snapshotAge = 999;
+  grab.pendingDown = false;
   if (markerGroup) markerGroup.visible = true;
 }
 
@@ -809,31 +1105,56 @@ function applyGrabTarget(clientX, clientY) {
 
 function clearGrabState() {
   if (grab.active && simData) simData.grabbedIndexUniform.value = GRAB_NONE;
-  grab.active    = false;
-  grab.vertexIdx = -1;
+  grab.active      = false;
+  grab.pendingDown = false;
+  grab.vertexIdx   = -1;
   if (grab.highlightMesh) grab.highlightMesh.visible = false;
-  controls.enabled = !pinMode;
-}
-
-function scheduleReadbacks() {
-  if (!simData || grab.active) return;
-  grab.snapshotAge = (grab.snapshotAge ?? 999) + 1;
-  if (grab.snapshotAge < 30 || grab.snapshotPending) return;
-  grab.snapshotAge     = 0;
-  grab.snapshotPending = true;
-
-  renderer.getArrayBufferAsync(simData.vertexPositionBuffer.value)
-    .then(ab => {
-      grab.snapshot        = new Float32Array(ab);
-      simData.cpuPositions = grab.snapshot;
-      grab.snapshotPending = false;
-    })
-    .catch(() => { grab.snapshotPending = false; });
+  controls.enabled = !pinMode && !anchorEditMode && !gripEditMode;
 }
 
 function setupGrabEvents(canvas) {
   canvas.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
+
+    // ── ハンドグラブポイント マーカー球のドラッグ（優先度最高）──
+    if (!gripEditMode && !pinMode) {
+      for (const side of ['left', 'right']) {
+        const hp = handGrabPoints[side];
+        if (!hp.markerMesh) continue;
+        const p  = hp.worldPos.clone().project(camera);
+        if (p.z > 1) continue;
+        const sx = (p.x *  0.5 + 0.5) * window.innerWidth;
+        const sy = (p.y * -0.5 + 0.5) * window.innerHeight;
+        if (Math.hypot(sx - e.clientX, sy - e.clientY) < 22) {
+          // ドラッグ開始：カメラ向き法線でドラッグ平面を設定
+          _hgpDragSide = side;
+          const normal = hp.worldPos.clone().sub(camera.position).normalize();
+          _hgpDragPlane.setFromNormalAndCoplanarPoint(normal, hp.worldPos);
+          controls.enabled = false;
+          canvas.setPointerCapture(e.pointerId);
+          canvas.style.cursor = 'move';
+          e.stopPropagation();
+          return;
+        }
+      }
+    }
+
+    // アンカー編集モード：頂点クリックでアンカー指定
+    if (anchorEditMode) {
+      let snapshot, vertexCount;
+      if (mantleData && mantleOrigPos) {
+        snapshot    = applyMantleTransform(mantleOrigPos, mantleData.vertexCount, mantleTransform);
+        vertexCount = mantleData.vertexCount;
+      } else if (analysisData) {
+        snapshot    = analysisData.positions;
+        vertexCount = analysisData.vertexCount;
+      } else { return; }
+      const idx = pickNearestVertex(e.clientX, e.clientY, snapshot, vertexCount, PIN_THRESHOLD_PX);
+      if (idx < 0) return;
+      toggleAnchor(idx);
+      e.stopPropagation();
+      return;
+    }
 
     // グリップ編集モード：頂点クリックでグリップ指定（シミュ停止中のみ）
     if (gripEditMode && !simRunning) {
@@ -871,35 +1192,78 @@ function setupGrabEvents(canvas) {
 
     // グラブモード（シミュ実行中のみ）
     if (!simRunning || !simData) return;
-    const snapshot = grab.snapshot ?? simData.cpuPositions;
-    if (!snapshot) return;
+    if (grab.active || grab.pendingDown) return;
 
-    const idx = pickNearestVertex(e.clientX, e.clientY, snapshot, simData.vertexCount, GRAB_THRESHOLD_PX);
-    if (idx < 0) return;
-    if (simData.vertexParamsCPU[idx * 3] === 1) return; // ピン頂点はグラブ不可
+    // クリック時に最新の頂点座標を1回だけ readback → 揺れている布でも見た目どおりに掴める。
+    // 非同期のため stopPropagation はせず、掴み成立時に controls.enabled=false で OrbitControls を抑制する
+    // （布から外れたクリックはそのままカメラ回転に使える）。
+    const { clientX, clientY, pointerId } = e;
+    grab.pendingDown = true;
 
-    controls.enabled = false;
-    grab.active    = true;
-    grab.vertexIdx = idx;
-    simData.grabbedIndexUniform.value = idx;
+    renderer.getArrayBufferAsync(simData.vertexPositionBuffer.value)
+      .then(ab => {
+        // readback待ちの間に pointerup された場合は中止
+        if (!grab.pendingDown || !simRunning || !simData) { grab.pendingDown = false; return; }
+        grab.pendingDown = false;
 
-    const wx = snapshot[idx*3], wy = snapshot[idx*3+1], wz = snapshot[idx*3+2];
-    buildDragPlane(new THREE.Vector3(wx, wy, wz));
-    grab.highlightMesh.position.set(wx, wy, wz);
-    grab.highlightMesh.visible = true;
-    applyGrabTarget(e.clientX, e.clientY);
+        const snapshot = new Float32Array(ab);
+        grab.snapshot        = snapshot;
+        simData.cpuPositions = snapshot;
 
-    canvas.setPointerCapture(e.pointerId);
-    canvas.style.cursor = 'grabbing';
-    e.stopPropagation();
+        const idx = pickNearestVertex(clientX, clientY, snapshot, simData.vertexCount, GRAB_THRESHOLD_PX);
+        if (idx < 0) return;
+        if (simData.vertexParamsCPU[idx * 3] === 1) return; // ピン頂点はグラブ不可
+
+        controls.enabled = false;
+        grab.active    = true;
+        grab.vertexIdx = idx;
+        simData.grabbedIndexUniform.value = idx;
+
+        const wx = snapshot[idx*3], wy = snapshot[idx*3+1], wz = snapshot[idx*3+2];
+        buildDragPlane(new THREE.Vector3(wx, wy, wz));
+        grab.highlightMesh.position.set(wx, wy, wz);
+        grab.highlightMesh.visible = true;
+        applyGrabTarget(clientX, clientY);
+
+        canvas.setPointerCapture(pointerId);
+        canvas.style.cursor = 'grabbing';
+      })
+      .catch(() => { grab.pendingDown = false; });
   }, { capture: true });
 
   canvas.addEventListener('pointermove', e => {
+    // ハンドグラブポイントのオフセットドラッグ
+    if (_hgpDragSide) {
+      _hgpDragRaycaster.setFromCamera(
+        { x: (e.clientX / window.innerWidth) * 2 - 1, y: -(e.clientY / window.innerHeight) * 2 + 1 },
+        camera,
+      );
+      const hit = new THREE.Vector3();
+      if (_hgpDragRaycaster.ray.intersectPlane(_hgpDragPlane, hit)) {
+        const hp = handGrabPoints[_hgpDragSide];
+        const bonePos = new THREE.Vector3();
+        hp.boneNode.getWorldPosition(bonePos);
+        hp.offset.copy(hit).sub(bonePos);
+        // スライダー範囲にクランプ
+        hp.offset.clampScalar(-0.3, 0.3);
+        _syncHgpOffsetUI(_hgpDragSide);
+      }
+      return;
+    }
     if (!grab.active) return;
     applyGrabTarget(e.clientX, e.clientY);
   });
 
   canvas.addEventListener('pointerup', e => {
+    if (_hgpDragSide) {
+      if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+      _hgpDragSide     = null;
+      controls.enabled = !pinMode && !anchorEditMode && !gripEditMode;
+      canvas.style.cursor = '';
+      return;
+    }
+    // readback待ちの間にリリースされた場合は保留を解除して掴みを中止
+    grab.pendingDown = false;
     if (!grab.active) return;
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
     clearGrabState();
@@ -907,6 +1271,13 @@ function setupGrabEvents(canvas) {
   });
 
   canvas.addEventListener('pointercancel', () => {
+    if (_hgpDragSide) {
+      _hgpDragSide     = null;
+      controls.enabled = !pinMode && !anchorEditMode && !gripEditMode;
+      canvas.style.cursor = '';
+      return;
+    }
+    grab.pendingDown = false;
     if (!grab.active) return;
     clearGrabState();
     canvas.style.cursor = '';
@@ -914,39 +1285,10 @@ function setupGrabEvents(canvas) {
 }
 
 // ============================================================
-// Grip Key Test (L/R キー押下中グリップ動作テスト)
+// Grip Key Events (L/R キー → VRM手ボーン位置でグリップ)
 // ============================================================
 
-function setupGripKeyEvents(canvas) {
-  let mouseX = 0, mouseY = 0;
-  const leftDragPlane  = new THREE.Plane();
-  const rightDragPlane = new THREE.Plane();
-  const gripRaycaster  = new THREE.Raycaster();
-  const gripHitPoint   = new THREE.Vector3();
-  const keyState       = { left: false, right: false };
-
-  // マウス座標を常に追跡
-  canvas.addEventListener('pointermove', e => {
-    mouseX = e.clientX;
-    mouseY = e.clientY;
-    _updateGripTargets();
-  });
-
-  // グリップ重心を cpuPositions から計算
-  function _gripCentroid(side) {
-    const set = side === 'left' ? leftGripSet : rightGripSet;
-    if (set.size === 0) return null;
-    const src = simData?.cpuPositions;
-    if (!src) return null;
-    const c = new THREE.Vector3();
-    for (const idx of set) {
-      c.x += src[idx * 3];
-      c.y += src[idx * 3 + 1];
-      c.z += src[idx * 3 + 2];
-    }
-    return c.divideScalar(set.size);
-  }
-
+function setupGripKeyEvents() {
   function _activateGrip(side) {
     if (!simRunning || !simData) return;
     const set = side === 'left' ? leftGripSet : rightGripSet;
@@ -954,40 +1296,21 @@ function setupGripKeyEvents(canvas) {
       showToast(`${side === 'left' ? 'L' : 'R'}手グリップ頂点が未設定です`, 'warn');
       return;
     }
-    // ドラッグ平面をグリップ重心 + カメラ向き法線で設定
-    const origin = _gripCentroid(side) ?? controls.target.clone();
-    const normal = origin.clone().sub(camera.position).normalize();
-    const plane  = side === 'left' ? leftDragPlane : rightDragPlane;
-    plane.setFromNormalAndCoplanarPoint(normal, origin);
-
-    keyState[side] = true;
+    const hp = handGrabPoints[side];
+    if (!hp.boneNode) {
+      showToast(`VRMの${side === 'left' ? '左' : '右'}手ボーンが見つかりません`, 'warn');
+      return;
+    }
+    hp.active = true;
     if (side === 'left') simData.leftGripActiveUniform.value  = 1;
     else                 simData.rightGripActiveUniform.value = 1;
-    _updateGripTargets();
   }
 
   function _deactivateGrip(side) {
-    keyState[side] = false;
+    handGrabPoints[side].active = false;
     if (simData) {
       if (side === 'left') simData.leftGripActiveUniform.value  = 0;
       else                 simData.rightGripActiveUniform.value = 0;
-    }
-  }
-
-  function _updateGripTargets() {
-    if (!keyState.left && !keyState.right) return;
-    if (!simData) return;
-    gripRaycaster.setFromCamera(
-      { x: (mouseX / window.innerWidth) * 2 - 1, y: -(mouseY / window.innerHeight) * 2 + 1 },
-      camera,
-    );
-    if (keyState.left) {
-      if (gripRaycaster.ray.intersectPlane(leftDragPlane, gripHitPoint))
-        simData.leftGripTargetUniform.value.copy(gripHitPoint);
-    }
-    if (keyState.right) {
-      if (gripRaycaster.ray.intersectPlane(rightDragPlane, gripHitPoint))
-        simData.rightGripTargetUniform.value.copy(gripHitPoint);
     }
   }
 
@@ -1018,33 +1341,52 @@ function _setGripEditMode(mode) {
   gripLBtn.textContent = mode === 'left' ? 'L手グリップ編集 ON' : 'L手グリップ編集 OFF';
   gripRBtn.textContent = mode === 'right' ? 'R手グリップ編集 ON' : 'R手グリップ編集 OFF';
 
-  // グリップ編集モードON時はピンモードを解除
+  // グリップ編集モードON時はピン/アンカー編集を解除
   if (mode) {
     pinMode = false;
     const pinBtn = document.getElementById('btn-pin-mode');
-    if (pinBtn) {
-      pinBtn.classList.remove('active');
-      pinBtn.textContent = 'ピン編集 OFF [P]';
-    }
+    if (pinBtn) { pinBtn.classList.remove('active'); pinBtn.textContent = 'ピン編集 OFF [P]'; }
+    anchorEditMode = null;
+    const anchorBtn = document.getElementById('btn-anchor-mode');
+    if (anchorBtn) { anchorBtn.classList.remove('active'); anchorBtn.textContent = 'アンカー編集 OFF'; }
   }
-  controls.enabled = !mode && !pinMode;
+  controls.enabled = !mode && !pinMode && !anchorEditMode;
 }
 
 // ============================================================
 // Mantle Export (with grip data)
 // ============================================================
 
+// グリップ・アンカー込みの cloth.json オブジェクトを組み立てる（単体保存とバンドル両方で共用）
+function buildMantleExport() {
+  const anchorAssignments = [...anchorMap.entries()].map(([idx, { boneName, localOffset }]) => ({
+    vertexIdx: idx, boneName, localOffset: [localOffset.x, localOffset.y, localOffset.z],
+  }));
+  const handGrabOffsets = {
+    left:  [handGrabPoints.left.offset.x,  handGrabPoints.left.offset.y,  handGrabPoints.left.offset.z],
+    right: [handGrabPoints.right.offset.x, handGrabPoints.right.offset.y, handGrabPoints.right.offset.z],
+  };
+  // 球コライダー：ボーン相対オフセット + 半径で保存（ボーン名で再バインドするため絶対座標は保存しない）
+  const colliderData = colliders
+    .filter(c => c.boneName)
+    .map(c => ({ boneName: c.boneName, r: c.r, offset: [c.localOffset.x, c.localOffset.y, c.localOffset.z] }));
+  return {
+    ...mantleData,
+    leftGripIndices:  [...leftGripSet],
+    rightGripIndices: [...rightGripSet],
+    anchorAssignments,
+    handGrabOffsets,
+    editorTransform:  { ...mantleTransform },
+    colliders:        colliderData,
+  };
+}
+
 function exportMantleWithGrips() {
   if (!mantleData) {
     showToast('マントが読み込まれていません', 'error');
     return;
   }
-  const out = {
-    ...mantleData,
-    leftGripIndices:  [...leftGripSet],
-    rightGripIndices: [...rightGripSet],
-    editorTransform:  { ...mantleTransform },
-  };
+  const out = buildMantleExport();
   const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href     = URL.createObjectURL(blob);
@@ -1054,9 +1396,153 @@ function exportMantleWithGrips() {
   showToast(`エクスポート完了 (L手:${leftGripSet.size}頂点 / R手:${rightGripSet.size}頂点)`);
 }
 
+// ArrayBuffer → base64（大きいVRMでもスタック溢れしないようチャンク処理）
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+// NPCバンドル(.npc.json)書き出し：VRM + VRMA + cloth(+任意でtimeline) を1ファイルにまとめる。
+// fps-cloth-vrm の「NPC一括読込」で読める形式（format: "fps-npc-bundle"）。
+async function exportNPCBundle() {
+  if (!currentVRMFile) { showToast('先にVRMを読み込んでください', 'error'); return; }
+  if (!mantleData)     { showToast('マントが読み込まれていません', 'error'); return; }
+
+  showToast('NPCバンドル書き出し中…');
+  try {
+    const name = currentVRMFile.name.replace(/\.vrm$/i, '');
+
+    // VRM バイト（アップロードFileから）
+    const vrmB64 = arrayBufferToBase64(await currentVRMFile.arrayBuffer());
+
+    // VRMA バイト（選択中のものをサーバから取得）。未選択なら省略。
+    let vrmaDataURI = null;
+    if (currentVRMAName) {
+      const res = await fetch(`/vrma/${currentVRMAName}`);
+      if (res.ok) {
+        vrmaDataURI = 'data:application/octet-stream;base64,' + arrayBufferToBase64(await res.arrayBuffer());
+      } else {
+        showToast(`VRMA取得失敗（${currentVRMAName}）。VRMAなしで続行`, 'warn');
+      }
+    }
+
+    // 任意添付の timeline.json（cloth-editor にタイムラインは無いので外部ファイルを受け付ける）
+    let timeline = null;
+    const tlInput = document.getElementById('bundle-tl-file');
+    const tlFile  = tlInput?.files?.[0];
+    if (tlFile) {
+      timeline = JSON.parse(await tlFile.text());
+    }
+
+    const bundle = {
+      format: 'fps-npc-bundle',
+      version: 1,
+      name,
+      vrm:  'data:application/octet-stream;base64,' + vrmB64,
+      vrma: vrmaDataURI,
+      cloth: buildMantleExport(),
+      timeline,
+    };
+
+    const blob = new Blob([JSON.stringify(bundle)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = `${name}.npc.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+
+    const parts = ['VRM', vrmaDataURI ? 'VRMA' : null, 'Cloth', timeline ? 'Timeline' : null].filter(Boolean);
+    showToast(`NPCバンドル書き出し完了（${parts.join(' + ')}）`);
+  } catch (err) {
+    showToast(`バンドル書き出し失敗: ${err.message}`, 'error');
+    console.error(err);
+  }
+}
+
+// ============================================================
+// VRMA Player
+// ============================================================
+
+async function loadVRMA(filename) {
+  if (!currentVRM) { showToast('先にVRMを読み込んでください', 'error'); return; }
+  unloadVRMA();
+  const loader = new GLTFLoader();
+  loader.register(parser => new VRMAnimationLoaderPlugin(parser));
+  try {
+    const gltf = await loader.loadAsync(`/vrma/${filename}`);
+    const vrmAnims = gltf.userData.vrmAnimations;
+    if (!vrmAnims?.length) throw new Error('VRMAデータが見つかりません');
+    vrmaClip   = createVRMAnimationClip(vrmAnims[0], currentVRM);
+    mixer      = new THREE.AnimationMixer(currentVRM.scene);
+    vrmaAction = mixer.clipAction(vrmaClip);
+    vrmaAction.setLoop(THREE.LoopRepeat, Infinity);
+    vrmaAction.play();
+    vrmaAction.paused = true;
+    vrmaPlaying = false;
+    _updateVrmaButtons();
+    showToast(`VRMA 読み込み完了: ${filename}`);
+  } catch (err) {
+    showToast(`VRMA 読み込み失敗: ${err.message}`, 'error');
+    console.error(err);
+  }
+}
+
+function unloadVRMA() {
+  if (vrmaAction) vrmaAction.stop();
+  if (mixer)      mixer.stopAllAction();
+  mixer       = null;
+  vrmaAction  = null;
+  vrmaClip    = null;
+  vrmaPlaying = false;
+  _updateVrmaButtons();
+}
+
+function _updateVrmaButtons() {
+  const btnPlay  = document.getElementById('btn-vrma-play');
+  const btnPause = document.getElementById('btn-vrma-pause');
+  const btnStop  = document.getElementById('btn-vrma-stop');
+  if (!btnPlay) return;
+  btnPlay.disabled  = !vrmaAction || vrmaPlaying;
+  btnPause.disabled = !vrmaAction || !vrmaPlaying;
+  btnStop.disabled  = !vrmaAction;
+}
+
 // ============================================================
 // UI Manager
 // ============================================================
+
+// VRM読み込み後にアンカーボーン選択ドロップダウンを生成
+function _populateAnchorBoneDropdown(vrm) {
+  const sel = document.getElementById('anchor-bone-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">-- ボーンを選択 --</option>';
+  if (!vrm?.humanoid) {
+    document.getElementById('anchor-section').style.display = 'none';
+    document.getElementById('anchor-section-placeholder').style.display = '';
+    return;
+  }
+  // VRM humanoid の全ボーン名を列挙（存在するものだけ）
+  const boneNames = [
+    'hips','spine','chest','upperChest','neck','head',
+    'leftShoulder','leftUpperArm','leftLowerArm','leftHand',
+    'rightShoulder','rightUpperArm','rightLowerArm','rightHand',
+    'leftUpperLeg','leftLowerLeg','leftFoot','leftToes',
+    'rightUpperLeg','rightLowerLeg','rightFoot','rightToes',
+  ];
+  for (const name of boneNames) {
+    if (!vrm.humanoid.getNormalizedBoneNode(name)) continue;
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  document.getElementById('anchor-section').style.display = '';
+  document.getElementById('anchor-section-placeholder').style.display = 'none';
+}
 
 function showToast(msg, type = 'info') {
   const el = document.getElementById('toast');
@@ -1121,9 +1607,17 @@ function _buildMantleAnalysis() {
     springs,
     springCount: mantleData.springs.length / 2,
     indices:     mantleData.indices,
-    colorFront:  mantleData.material?.colorFront ?? '#204080',
-    colorBack:   mantleData.material?.colorBack  ?? '#803020',
-    mesh:        null,  // マントモード
+    colorFront:        mantleData.material?.colorFront      ?? '#204080',
+    colorBack:         mantleData.material?.colorBack       ?? '#803020',
+    roughness:         mantleData.material?.roughness       ?? 1.0,
+    sheen:             mantleData.material?.sheen           ?? 1.0,
+    sheenRoughness:    mantleData.material?.sheenRoughness  ?? 0.5,
+    sheenColor:        mantleData.material?.sheenColor      ?? null,
+    opacity:           mantleData.material?.opacity         ?? 0.85,
+    quadVertexIds:     mantleData.quadVertexIds     ?? null,
+    renderIndices:     mantleData.renderIndices     ?? null,
+    renderVertexCount: mantleData.renderVertexCount ?? null,
+    mesh:              null,  // マントモード
   };
 }
 
@@ -1172,7 +1666,9 @@ function setupUI() {
     showToast('読み込み中...');
     try {
       const meshes = await loadVRM(file);
+      currentVRMFile = file;
       updateMeshList();
+      _populateAnchorBoneDropdown(currentVRM);
       showToast(`VRM 読み込み完了 (${meshes.length} メッシュ)`);
     } catch (err) {
       showToast(`読み込み失敗: ${err.message}`, 'error');
@@ -1181,15 +1677,60 @@ function setupUI() {
   });
   document.getElementById('btn-vrm-load').addEventListener('click', () => fileInput.click());
 
+  // VRMA ドロップダウン + 再生コントロール
+  fetch('/vrma/manifest.json')
+    .then(r => r.json())
+    .then(files => {
+      const sel = document.getElementById('vrma-select');
+      for (const f of files) {
+        const opt = document.createElement('option');
+        opt.value = f; opt.textContent = f.replace('.vrma', '');
+        sel.appendChild(opt);
+      }
+    })
+    .catch(() => {});
+
+  document.getElementById('btn-vrma-load').addEventListener('click', () => {
+    const sel = document.getElementById('vrma-select');
+    if (!sel.value) { showToast('VRMAを選択してください', 'warn'); return; }
+    currentVRMAName = sel.value;
+    loadVRMA(sel.value);
+  });
+  document.getElementById('btn-vrma-play').addEventListener('click', () => {
+    if (!vrmaAction) return;
+    vrmaPlaying = true;
+    vrmaAction.paused = false;
+    _updateVrmaButtons();
+  });
+  document.getElementById('btn-vrma-pause').addEventListener('click', () => {
+    if (!vrmaAction) return;
+    vrmaPlaying = false;
+    vrmaAction.paused = true;
+    _updateVrmaButtons();
+  });
+  document.getElementById('btn-vrma-stop').addEventListener('click', () => {
+    unloadVRMA();
+    currentVRMAName = null;
+    document.getElementById('vrma-select').value = '';
+  });
+  document.getElementById('vrma-speed').addEventListener('change', e => {
+    if (vrmaAction) vrmaAction.timeScale = parseFloat(e.target.value);
+  });
+
   // ピンモード
   const pinBtn = document.getElementById('btn-pin-mode');
   pinBtn.addEventListener('click', () => {
     pinMode = !pinMode;
     pinBtn.classList.toggle('active', pinMode);
     pinBtn.textContent = pinMode ? 'ピン編集 ON  [P]' : 'ピン編集 OFF [P]';
-    // ピンモードON時はグリップ編集を解除
-    if (pinMode) _setGripEditMode(null);
-    controls.enabled = !pinMode && !gripEditMode;
+    // ピンモードON時はグリップ/アンカー編集を解除
+    if (pinMode) {
+      _setGripEditMode(null);
+      anchorEditMode = null;
+      const anchorBtn = document.getElementById('btn-anchor-mode');
+      if (anchorBtn) { anchorBtn.classList.remove('active'); anchorBtn.textContent = 'アンカー編集 OFF'; }
+    }
+    controls.enabled = !pinMode && !anchorEditMode && !gripEditMode;
   });
   window.addEventListener('keydown', e => {
     if (e.code === 'KeyP' && !e.ctrlKey && !e.altKey) pinBtn.click();
@@ -1199,6 +1740,26 @@ function setupUI() {
     resetPins();
     showToast('ピンをリセットしました');
   });
+
+  // ボーンアンカーUI
+  document.getElementById('btn-anchor-mode').addEventListener('click', () => {
+    const sel = document.getElementById('anchor-bone-select');
+    if (!sel.value) { showToast('ボーンを選択してください', 'warn'); return; }
+    // 同じボーンを再クリックまたはanchorEditModeがすでにONならOFF
+    anchorEditMode = anchorEditMode ? null : sel.value;
+    const btn = document.getElementById('btn-anchor-mode');
+    btn.classList.toggle('active', !!anchorEditMode);
+    btn.textContent = anchorEditMode ? `アンカー編集 ON: ${anchorEditMode}` : 'アンカー編集 OFF';
+    // アンカー編集ONのときはピン/グリップ編集を解除
+    if (anchorEditMode) {
+      pinMode = false;
+      const pinBtn = document.getElementById('btn-pin-mode');
+      if (pinBtn) { pinBtn.classList.remove('active'); pinBtn.textContent = 'ピン編集 OFF [P]'; }
+      _setGripEditMode(null);
+    }
+    controls.enabled = !anchorEditMode && !pinMode && !gripEditMode;
+  });
+  document.getElementById('btn-anchor-clear').addEventListener('click', clearAnchorMap);
 
   // グリップ編集モード
   const gripLBtn = document.getElementById('btn-grip-left-mode');
@@ -1220,6 +1781,7 @@ function setupUI() {
 
   // マントエクスポート（グリップ付き）
   document.getElementById('btn-export-grip').addEventListener('click', exportMantleWithGrips);
+  document.getElementById('btn-export-npc').addEventListener('click', exportNPCBundle);
 
   // シミュコントロール
   document.getElementById('btn-sim-start').addEventListener('click', startSim);
@@ -1245,22 +1807,60 @@ function setupUI() {
   document.getElementById('btn-mantle-load').addEventListener('click', () => mantleFileInput.click());
   document.getElementById('btn-mantle-clear').addEventListener('click', clearMantle);
 
-  // マント変換スライダー
-  const bindTransform = (id, valId, key, parse, fmt) => {
-    const sl = document.getElementById(id);
-    const vl = document.getElementById(valId);
-    sl.addEventListener('input', () => {
-      const v = parse(sl.value);
-      vl.textContent = fmt(v);
+  // マント変換スライダー + 数値直接入力（双方向同期）
+  const bindTransform = (id, valId, key, toNum, slFmt) => {
+    const sl  = document.getElementById(id);
+    const num = document.getElementById(valId);
+
+    const apply = v => {
       mantleTransform[key] = v;
+      sl.value   = Math.max(parseFloat(sl.min), Math.min(parseFloat(sl.max), v));
+      num.value  = slFmt(v);
       if (!simRunning) updateMantleMarkers();
+    };
+
+    // スライダー → 数値欄
+    sl.addEventListener('input', () => apply(toNum(sl.value)));
+
+    // 数値欄 → スライダー（Enter/Tab/フォーカスアウトで確定）
+    num.addEventListener('change', () => {
+      const v = toNum(num.value);
+      if (isNaN(v)) { num.value = slFmt(mantleTransform[key]); return; }
+      apply(v);
     });
   };
   bindTransform('mt-tx',    'mt-tx-val',    'tx',    parseFloat, v => v.toFixed(2));
   bindTransform('mt-ty',    'mt-ty-val',    'ty',    parseFloat, v => v.toFixed(2));
   bindTransform('mt-tz',    'mt-tz-val',    'tz',    parseFloat, v => v.toFixed(2));
-  bindTransform('mt-ry',    'mt-ry-val',    'ry',    parseFloat, v => `${Math.round(v)}°`);
+  bindTransform('mt-ry',    'mt-ry-val',    'ry',    parseFloat, v => String(Math.round(v)));
   bindTransform('mt-scale', 'mt-scale-val', 'scale', parseFloat, v => v.toFixed(2));
+
+  // ハンドグラブポイント オフセットスライダー
+  for (const side of ['left', 'right']) {
+    const prefix = side === 'left' ? 'hgp-l' : 'hgp-r';
+    for (const axis of ['x', 'y', 'z']) {
+      const sl = document.getElementById(`${prefix}-${axis}`);
+      const vl = document.getElementById(`${prefix}-${axis}-val`);
+      if (!sl) continue;
+      sl.addEventListener('input', () => {
+        handGrabPoints[side].offset[axis] = parseFloat(sl.value);
+        vl.textContent = parseFloat(sl.value).toFixed(2);
+      });
+    }
+  }
+  document.getElementById('hgp-visible')?.addEventListener('change', e => {
+    for (const side of ['left', 'right']) {
+      if (handGrabPoints[side].markerMesh)
+        handGrabPoints[side].markerMesh.visible = e.target.checked;
+    }
+  });
+  document.getElementById('btn-hgp-reset')?.addEventListener('click', () => {
+    for (const side of ['left', 'right']) {
+      handGrabPoints[side].offset.set(0, 0, 0);
+      _syncHgpOffsetUI(side);
+    }
+    showToast('グラブポイントオフセットをリセットしました');
+  });
 
   // コライダー表示切替
   document.getElementById('collider-visible').addEventListener('change', e => {
@@ -1308,18 +1908,28 @@ let timeSinceLastStep = 0;
 
 async function render() {
   timer.update();
+  const dt = Math.min(timer.getDelta(), 1 / 20);
   updateFPS();
 
+  // VRMA 再生
+  if (mixer && vrmaPlaying) {
+    mixer.update(dt);
+    currentVRM?.update(dt);
+  }
+
+  updateHandGrabPoints();
+  updateBoneColliders();
+
   if (simRunning && simData) {
-    const dt          = Math.min(timer.getDelta(), 1 / 60);
     const timePerStep = 1 / 360;
     timeSinceLastStep += dt;
+    // ボーンスロット座標を更新（ユニークボーン数×vec3、グリップuniform更新と同等のコスト）
+    updateAnchorPositions();
     while (timeSinceLastStep >= timePerStep) {
       timeSinceLastStep -= timePerStep;
       renderer.compute(simData.computeSpringForces);
       renderer.compute(simData.computeVertexForces);
     }
-    scheduleReadbacks();
   }
 
   renderer.render(scene, camera);
@@ -1343,7 +1953,7 @@ async function init() {
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping         = THREE.NeutralToneMapping;
-  renderer.toneMappingExposure = 1.2;
+  renderer.toneMappingExposure = 1.0;
   app.appendChild(renderer.domElement);
 
   scene  = new THREE.Scene();
@@ -1352,12 +1962,26 @@ async function init() {
   camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 100);
   camera.position.set(0, 1.2, 2.8);
 
-  // ライト
-  const ambient = new THREE.AmbientLight(0xffffff, 1.2);
+  // ライト（HDR 環境マップが主光源。アンビは控えめのフィル）
+  const ambient = new THREE.AmbientLight(0xffffff, 0.3);
   scene.add(ambient);
   const dir = new THREE.DirectionalLight(0xffffff, 2.0);
   dir.position.set(1, 3, 2);
   scene.add(dir);
+
+  // HDR 環境マップ：/cloth と同じ IBL を scene.environment に設定し、
+  // roughness=1.0 + sheen=1.0 の MeshPhysicalNodeMaterial にマント質感を与える。
+  // 背景はエディタ用に暗いまま維持（マントの見た目は scene.environment のみで決まる）。
+  try {
+    const hdrTexture = await new UltraHDRLoader().loadAsync(
+      'https://threejs.org/examples/textures/equirectangular/royal_esplanade_2k.hdr.jpg',
+    );
+    hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.environment  = hdrTexture;
+  } catch {
+    // オフライン時は従来のアンビ強度に戻す
+    ambient.intensity = 1.2;
+  }
 
   // グラブハイライト球
   grab.highlightMesh = new THREE.Mesh(
@@ -1382,7 +2006,7 @@ async function init() {
 
   setupUI();
   setupGrabEvents(renderer.domElement);
-  setupGripKeyEvents(renderer.domElement);
+  setupGripKeyEvents();
 
   // ゲームコードから呼び出せる公開 API
   window.clothAPI = {
