@@ -1,227 +1,111 @@
-# タスクリスト - Cloth Preview
+# タスクリスト - NPC セリフ（ダイアログ）システム
+
+要件: `.tmp/requirements.md` / 設計: `.tmp/design.md` / テスト: `.tmp/test_design.md`
 
 ## 概要
-- 総タスク数: 9
-- 実装方式: スタンドアロン HTML/JS（`cloth-preview/` ディレクトリ新設）
-- 流用元: `cloth-editor/cloth-editor.js`
+
+共通 lib（口パク・セリフ制御・UI）を素JSで実装し、swing-catch と Character Editor に統合する。
+原則: ステートマシンは無変更、後方互換維持、定数集約。
 
 ---
 
-## タスク一覧
+## フェーズ1: 共通ライブラリ（lib/）
 
-### T1: HTML シェル + UI レイアウト
-**ファイル**: `cloth-preview/index.html`
+- [ ] **T1-1**: `lib/lip-sync.js` 新規作成
+  - visemeMaps（JP/EN）・isJapanese・charToViseme を移植（内蔵）
+  - `createLipSync(vrm)`：play/stop/update(dtMs)/playing、dt駆動の文字送り＋viseme LERP
+  - viseme 非対応VRMの try/catch スキップ
+  - 検証: TC-LIP-01〜07
 
-- 上部ツールバー: [VRM読込] [VRMA読込] [マント読込] [TL読込] [TL保存] ボタン
-- 左 70%: `<div id="app">` ビューポート
-- 右 30%: 右パネル（再生コントロール / 布シミュ / ブレンドシェイプ追加 / 選択KF値）
-- 下部 240px 固定: タイムライン `<canvas id="timeline">`
-- FPS カウンター、WebGPU 警告バナー、トースト、ローディングオーバーレイ
-- CSS: ビューポート高さ `calc(100vh - toolbar - timeline)`
+- [ ] **T1-2**: `lib/npc-speech.js` 新規作成
+  - 行正規化（normalizeLine）、DEFAULT_CPS / BARK_COOLDOWN_MS 定数
+  - `createNpcSpeech(vrm, characterDef, hooks)`：onState / bark / update / speaking / stop
+  - once/loop 巡回、bark 割り込み＋CD、行表情の適用と復帰、downed 抑制
+  - 検証: TC-NORM, TC-BARK, TC-LOOP
 
----
-
-### T2: VRM 読み込み + シーンセットアップ + ハンドグラブポイント
-**ファイル**: `cloth-preview/cloth-preview.js`
-
-cloth-editor.js から以下をコピー・流用:
-- `loadVRM()` / `unloadVRM()`（MToon→NodeMaterial 変換含む）
-- `buildCollidersFromVRM()` / `addCollider()` / `syncColliderDataArr()`
-- `initHandGrabPoints()` / `disposeHandGrabPoints()` / `updateHandGrabPoints()` / `_syncHgpOffsetUI()`
-- グラブポイントドラッグ（setupGrabEvents の HGP ドラッグ部分のみ）
-
-追加:
-- VRM 読み込み後に `expressionManager` から表情一覧を取得し、右パネルのドロップダウンに設定
-
-削除（不要）:
-- ピン編集 / グリップ編集 UI / メッシュ選択 UI / analyzeMesh / initMarkers
+- [ ] **T1-3**: `lib/speech-ui.js` 新規作成
+  - CSS 動的注入、下部ウィンドウ（キュー＋タイピング＋hold＋フェード）
+  - 頭上吹き出しプール（Map<npc,el>）、project(camera) 追従、背面/画面外/距離フェード
+  - showBottom / setBubble / clearBubble / update(dt, npcs)
+  - 定数: BOTTOM_HOLD_MS, BUBBLE_MAX_DIST
+  - 検証: TC-UI（swing-catch 統合後）
 
 ---
 
-### T3: マント読み込み + 布シミュレーション
-**ファイル**: `cloth-preview/cloth-preview.js`
+## フェーズ2: swing-catch 統合
 
-cloth-editor.js から以下をコピー・流用:
-- `loadMantleJSON()` / `clearMantle()` / `applyMantleTransform()` / `updateMantleMarkers()`
-- `buildSimulation()` / `disposeSimulation()` / `scheduleReadbacks()`
-- `_buildMantleAnalysis()`
-- uniform 初期化（stiffness / dampening / wind）
+- [ ] **T2-1**: import 追加・megu 拡張
+  - `createNpcSpeech` を import、createMegu で `speech`/`prevState`/`prevCenterY`/`prevVy` を初期化
+  - `init()` で `createSpeechUI({camera, dom, getWorldCenter})` 生成、onLineStart 配線
 
-UI:
-- シミュ開始 / 停止ボタン
-- Stiffness / Wind スライダー（右パネル）
+- [ ] **T2-2**: ステート変化検知＋表情適用統合
+  - updateMegu の state 決定後に `onState` 呼出（変化時のみ）
+  - state表情・まばたき適用の後（vrm.update 前）に `m.speech.update(dt)`
+  - 検証: TC-SC-01〜04, TC-EXP-01〜04
 
----
+- [ ] **T2-3**: イベント bark フック
+  - grabMeguBody / grabMeguCloth → `bark('grabbed')`
+  - releaseMegu → `bark('thrown')`
+  - landed 検出ヒューリスティック（LANDED_SPEED_THRESHOLD/MARGIN、prevVy 追跡）→ `bark('landed')`
+  - 検証: TC-EV-01〜07
 
-### T4: VRMA プレイヤー
-**ファイル**: `cloth-preview/cloth-preview.js`
-
-```js
-// 新規実装
-async function loadVRMA(file)      // GLTFLoader + VRMAnimationLoaderPlugin
-function vrmaPlay()
-function vrmaPause()
-function vrmaSeek(frame)           // mixer.setTime(frame / fps)
-function vrmaSetSpeed(speed)
-function vrmaSetLoop(enabled)
-function unloadVRMA()
-```
-
-- `@pixiv/three-vrm-animation` を esm.sh CDN からインポート
-- VRMA 読み込み時に `timeline.durationFrames = Math.round(clip.duration * timeline.fps)`
-- 再生中は `mixer.update(dt)` → currentFrame 計算 → `dispatchTimelineEvents()` 呼び出し
-- アニメーション終端検出（LoopOnce + finished イベント）でプレイヘッド停止
+- [ ] **T2-4**: UI 毎フレーム更新
+  - animate ループに `speechUI.update(dt, megus)` を追加
+  - 検証: TC-UI-01〜05
 
 ---
 
-### T5: タイムライン状態管理
-**ファイル**: `cloth-preview/cloth-preview.js`
+## フェーズ3: Character Editor 統合
 
-```js
-const timeline = {
-  fps: 30,
-  durationFrames: 90,
-  currentFrame: 0,
-  grip: {
-    gripLeft: new Set(), gripRight: new Set(),
-    releaseLeft: new Set(), releaseRight: new Set(),
-  },
-  blendShape: new Map(),   // name → Map<frame, value>
-  selected: null,          // { kind, name, frame } | null
-};
+- [ ] **T3-1**: データ層拡張
+  - defaultCharacter に `events:{}`、mergeCharacter で speech/events 引継ぎ（後方互換）
+  - 検証: TC-CE-10, TC-REG-01
 
-function toggleGripEvent(type, frame)
-function addBlendShapeTrack(name)         // 重複チェック付き
-function setBlendShapeKF(name, frame, value)
-function removeBlendShapeKF(name, frame)
-function selectBlendShapeKF(name, frame)
-function exportTimeline()                 // → JSON オブジェクト
-function importTimeline(json)
-```
+- [ ] **T3-2**: セリフ編集パネル UI
+  - index.html にセクション DOM 追加（state用 speech 領域＋イベントセリフ常設セクション）
+  - `buildSpeechPanel()`：mode/intervalMs/cps、行リスト（text/表情/weight/削除/追加）
+  - selectState から呼出
+  - 検証: TC-CE-01〜06
+
+- [ ] **T3-3**: 試聴機能
+  - 行ごとの ▶試聴：プレビューVRMに createLipSync で play＋行表情
+  - editor update(dt) に試聴用 lip.update を組込
+  - 検証: TC-CE-07
+
+- [ ] **T3-4**: 保存クリーンアップ
+  - exportBundle 前に空の speech/events を間引く
+  - 検証: TC-CE-08, TC-CE-09
 
 ---
 
-### T6: タイムライン Canvas 描画
-**ファイル**: `cloth-preview/cloth-preview.js`
+## フェーズ4: サンプルデータ・検証
 
-```js
-// 定数
-const HEADER_W = 160, ROW_H = 22, RULER_H = 24;
-const GRIP_ROWS = [
-  { kind:'grip', type:'gripLeft',     label:'Grip L',     color:'#44aaff' },
-  { kind:'grip', type:'gripRight',    label:'Grip R',     color:'#ff6644' },
-  { kind:'grip', type:'releaseLeft',  label:'Release L',  color:'#88ccff' },
-  { kind:'grip', type:'releaseRight', label:'Release R',  color:'#ffaa88' },
-];
+- [ ] **T4-1**: 既存 NPC（lily/ayu/megu 等）の1体にセリフ例を付与
+  - 各ステート＋イベントに日本語セリフを設定し、Character Editor で保存
+  - 注意: *.npc.json は VRM 埋込で大容量＝コミット対象外（gitignore済の運用）。検証用のみ
 
-function renderTimeline()              // 全体再描画（ユーザー操作時）
-function renderTimelinePlayhead()      // プレイヘッドのみ差分更新（毎フレーム）
-function frameToX(frame)
-function xToFrame(x)
-function rowToY(rowIdx)
-function allRows()                     // GRIP_ROWS + blendShape 行を結合
-```
+- [ ] **T4-2**: swing-catch 実機検証
+  - TC-SC / TC-EV / TC-UI / TC-EXP を通し確認
+  - viseme 非対応VRM での挙動（TC-EXP-03）
 
-描画内容:
-- 背景・グリッド（10f ごと）・ルーラー（フレーム番号）
-- トラック行（グリップ=◆、ブレンドシェイプ=●）
-- ブレンドシェイプ補間折れ線
-- プレイヘッド（赤縦線）
-- 選択キーフレーム（黄枠）
+- [ ] **T4-3**: 回帰確認（TC-REG）
+  - 既存挙動・state-machine 無変更・体感フレームレート
 
 ---
 
-### T7: タイムライン操作イベント
-**ファイル**: `cloth-preview/cloth-preview.js`
+## 完了基準（DoD）
 
-```js
-function screenToTrack(offsetX, offsetY)  // → { row, frame } | null
-function setupTimelineEvents(canvas)
-```
-
-イベント:
-- `click`: グリップトグル / ブレンドシェイプKF配置・選択
-- `contextmenu`: ブレンドシェイプKF削除
-- `wheel`: tlPxPerFrame ズーム（2〜60px/f）
-- `mousedown` on ルーラー → `mousemove` → `mouseup`: プレイヘッドドラッグ
-- `scroll` (横): tlScrollX 更新
-- `keydown Delete`: 選択KF削除
-
-選択KF値の編集:
-- 右パネルの数値インプット（0〜1）で `setBlendShapeKF()` を呼ぶ
+- lib/ 3ファイルが素JS（class/TS不使用）で動作。
+- swing-catch でステート連動＋3イベント bark＋下部ウィンドウ＋頭上吹き出し＋口パク＋行表情が機能。
+- Character Editor で全ステート＋イベントのセリフ編集・試聴・保存・再読込が可能。
+- speech 無しの既存 NPC が従来通り動作（後方互換）。
+- 定数が定義箇所に集約され、ハードコード散在が無い。
 
 ---
 
-### T8: Event Dispatcher + ブレンドシェイプ補間
-**ファイル**: `cloth-preview/cloth-preview.js`
+## TodoWrite 管理単位（主要タスク）
 
-```js
-let _lastDispatchedFrame = -1;
-
-function dispatchTimelineEvents(frame)
-function applyBlendShapesAt(frame)
-function interpolateBlendShape(kfMap, frame)   // 線形補間
-```
-
-グリップイベント発火順序: `gripLeft → gripRight → releaseLeft → releaseRight`
-ブレンドシェイプ: VRMA 再生中は VRMA 優先（expressionManager は VRMA の update 後に呼ぶ）
-
-エラー処理:
-- `simData` が null → グリップイベントをスキップ
-- `expressionManager.setValue` 例外 → try/catch でトーストを出す
-
----
-
-### T9: UI Manager + Render Loop 統合
-**ファイル**: `cloth-preview/cloth-preview.js`
-
-```js
-function setupUI()    // ファイル入力・再生コントロール・スライダー・ブレンドシェイプ追加
-async function render()
-async function init()
-```
-
-render ループ:
-```
-1. timer.update() / updateFPS()
-2. if (mixer && vrmaPlaying) mixer.update(dt)
-3. currentFrame 更新 → dispatchTimelineEvents()
-4. renderTimelinePlayhead()
-5. currentVRM?.update(dt)
-6. updateHandGrabPoints()
-7. if (simRunning) compute spring + vertex forces
-8. scheduleReadbacks()
-9. renderer.render(scene, camera)
-```
-
-index.html のランディングページにリンク追加（`/cloth-preview/` へ）
-
----
-
-## 実装順序
-
-```
-T1 (HTML) → T2 (VRM+HGP) → T3 (マント+シミュ) → T4 (VRMA)
-         → T5 (TL状態)   → T6 (TL描画)         → T7 (TL操作)
-         → T8 (Dispatcher) → T9 (統合)
-```
-
-T2 完了時点で VRM + グラブポイントが確認できる。
-T4 完了時点で VRMA 再生が確認できる。
-T6 完了時点でタイムラインの見た目が確認できる。
-T8〜T9 完了で全機能が揃う。
-
----
-
-## 手動テスト対応表
-
-| テスト | 対応タスク |
-|--------|-----------|
-| TF-01〜08 | T2, T3, T4, T9 |
-| TV-01〜06 | T2, T3, T9 |
-| TA-01〜07 | T4, T9 |
-| TT-01〜05 | T6, T7, T9 |
-| TG-01〜06 | T5, T7, T8 |
-| TB-01〜08 | T5, T7, T8 |
-| TJ-01〜04 | T5 |
-| TE-01〜04 | T8 |
+1. lib 3ファイル実装（T1-1〜T1-3）
+2. swing-catch 統合（T2-1〜T2-4）
+3. Character Editor 統合（T3-1〜T3-4）
+4. サンプル投入・実機検証・回帰（T4-1〜T4-3）
