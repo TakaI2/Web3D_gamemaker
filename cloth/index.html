@@ -120,7 +120,7 @@
 </head>
 <body>
   <div id="app"></div>
-  <a id="back-btn" href="../">← 戻る</a>
+  <a id="back-btn" href="../hub/">← 戻る</a>
 
   <div id="ui">
     <h3>Settings</h3>
@@ -180,6 +180,11 @@
           <input type="range" id="shape-bottom-width" min="0.2" max="4.0" step="0.05" value="1.0">
           <span class="val" id="shape-bottom-width-val">1.00</span>
         </div>
+        <div class="ui-row" id="row-arc-angle" style="display:none">
+          <label>中心角</label>
+          <input type="range" id="shape-arc-angle" min="30" max="360" step="5" value="180">
+          <span class="val" id="shape-arc-angle-val">180°</span>
+        </div>
         <div class="ui-row">
           <label>高さ</label>
           <input type="range" id="shape-height" min="0.3" max="3.0" step="0.05" value="1.0">
@@ -228,6 +233,46 @@
           <label>Sheen Color</label>
           <input type="color" id="mat-sheen-color" value="#ffffff">
         </div>
+        <div class="ui-row">
+          <label>Opacity</label>
+          <input type="range" id="mat-opacity" min="0" max="1" step="0.01" value="0.85">
+          <span class="val" id="mat-opacity-val">0.85</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ui-section">
+      <div class="ui-section-title collapsed" id="collar-toggle">Collar（衿）</div>
+      <div class="ui-section-body collapsed" id="collar-body">
+        <div class="ui-row">
+          <label>衿を有効</label>
+          <input type="checkbox" id="collar-enable">
+        </div>
+        <div id="collar-sliders" style="display:none;flex-direction:column;gap:8px;">
+          <div class="ui-row">
+            <label>高さ</label>
+            <input type="range" id="collar-height" min="0.05" max="0.8" step="0.01" value="0.2">
+            <span class="val" id="collar-height-val">0.20</span>
+          </div>
+          <div class="ui-row">
+            <label>広がり</label>
+            <input type="range" id="collar-flare" min="-0.5" max="2.0" step="0.05" value="0.5">
+            <span class="val" id="collar-flare-val">0.50</span>
+          </div>
+          <div class="ui-row">
+            <label>上端カーブ</label>
+            <input type="range" id="collar-curve" min="-1.0" max="1.0" step="0.05" value="0.0">
+            <span class="val" id="collar-curve-val">0.00</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ui-section">
+      <div class="ui-section-title">Simulation</div>
+      <div class="ui-section-body" style="flex-direction:row;gap:6px;">
+        <button id="btn-sim-stop"  style="flex:1;padding:6px 0;background:rgba(255,100,80,0.2);border:1px solid rgba(255,120,80,0.4);color:#ebb;border-radius:4px;font-size:12px;cursor:pointer;">⏹ 停止</button>
+        <button id="btn-sim-reset" style="flex:1;padding:6px 0;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.2);color:#ccc;border-radius:4px;font-size:12px;cursor:pointer;">↺ リセット</button>
       </div>
     </div>
 

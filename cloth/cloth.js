@@ -15,21 +15,27 @@ const CLOTH_SPACING = 1.3; // インスタンス間隔 (m)
 
 // ---- Shape params (UI で変更可) ----
 const shapeParams = {
-  type:        'rect',  // 'rect' | 'trapezoid' | 'semicircle'
-  topWidth:    1.0,
-  bottomWidth: 1.0,
-  height:      1.0,
-  pinCount:    7,       // 上端に打つピン数
-  topCurve:    0.0,     // 上端曲率: + で中央が前へ（肩フィット）, - で後ろへ
+  type:         'rect',  // 'rect' | 'trapezoid' | 'semicircle'
+  topWidth:     1.0,
+  bottomWidth:  1.0,
+  height:       1.0,
+  pinCount:     7,       // 上端に打つピン数
+  topCurve:     0.0,     // 上端曲率: + で中央が前へ（肩フィット）, - で後ろへ
+  arcAngle:     180,     // semicircle の中心角（度）: 30〜360
+  collar:       false,   // 衿を有効にするか
+  collarHeight: 0.2,     // 衿の高さ
+  collarFlare:  0.5,     // 衿の広がり係数（0=直筒, 1=ラッパ状）
+  collarCurve:  0.0,     // 衿上端の前後カーブ（+ で前方へ, - で後方へ）
 };
 
 // ---- Picking constants ----
 const GRAB_NONE        = -1;      // grabbedIndexUniform の「掴みなし」値
-const GRAB_THRESHOLD_PX = 22;    // スクリーン上の最大ピッキング距離 (px)
+const GRAB_THRESHOLD_PX = 32;    // スクリーン上の最大ピッキング距離 (px)
 
 // ---- Mutable settings ----
 let clothNumSegments = 30;
 let instanceCount    = 1;
+let simRunning       = true;
 
 // ---- Scene ----
 let renderer, scene, camera, controls;
@@ -53,9 +59,6 @@ const instances = [];
 let fpsFrameCount = 0;
 let fpsLastTime   = performance.now();
 
-// ---- Frame counter for readback throttle ----
-let frameCounter = 0;
-
 // ---- Grab state ----
 const grab = {
   active:      false,
@@ -64,10 +67,9 @@ const grab = {
   dragPlane:   new THREE.Plane(),
   raycaster:   new THREE.Raycaster(),
   highlightMesh: null,
-  // Per-instance CPU position snapshots (updated async from GPU)
+  // クリック時に1回だけ readback する CPU 座標スナップショット（インスタンス毎）
   snapshots:       [],   // Float32Array[], indexed by instances index
-  snapshotPending: [],   // bool[]
-  snapshotAge:     [],   // number[] (frames since last readback)
+  pendingDown:     false, // pointerdown→readback完了までの保留中フラグ
 };
 
 // ---- Runtime params ----
@@ -83,6 +85,7 @@ const matParams = {
   sheen:          1.0,
   sheenRoughness: 0.5,
   sheenColor:     '#ffffff',
+  opacity:        0.85,
 };
 
 const timer = new THREE.Timer();
@@ -99,18 +102,25 @@ timer.connect(document);
 function calcVertexPos(xi, yi, segs, sp) {
   const t = yi / segs; // 0=上端, 1=下端
 
-  // X: 形状に応じて幅を変化させる
+  // X・Z: 形状に応じて計算
   let posX;
+  let posZArcFactor = 1.0; // Z = t * height * posZArcFactor (semicircle のみ変化)
+
   if (sp.type === 'trapezoid') {
     // 上から下へ topWidth→bottomWidth にリニア補間
     const halfW = (sp.topWidth + (sp.bottomWidth - sp.topWidth) * t) * 0.5;
     posX = (xi / segs) * 2 * halfW - halfW;
   } else if (sp.type === 'semicircle') {
-    // 上端は topWidth の直線、下端は bottomWidth の半円弧
+    // 上端は topWidth の直線、下端は arcAngle 度の円弧
+    // 両端が Z=0、中央が Z=height となるように正規化する
+    const halfArc   = (sp.arcAngle ?? 180) * Math.PI / 180 / 2;
+    const angle     = (xi / segs * 2 - 1) * halfArc; // -halfArc 〜 +halfArc
+    const cosHalf   = Math.cos(halfArc);
+    // (cos(angle) - cos(halfArc)) / (1 - cos(halfArc)) → 両端=0、中央=1
+    posZArcFactor   = (Math.cos(angle) - cosHalf) / (1 - cosHalf + 1e-9);
     const straightX = (xi / segs - 0.5) * sp.topWidth;
-    const angle     = Math.PI * (xi / segs) - Math.PI * 0.5; // -π/2 〜 π/2
-    const circleX   = Math.sin(angle) * sp.bottomWidth * 0.5;
-    posX = straightX + (circleX - straightX) * t;
+    const arcX      = Math.sin(angle) * sp.bottomWidth * 0.5;
+    posX = straightX + (arcX - straightX) * t;
   } else {
     // rect（デフォルト）
     posX = (xi / segs - 0.5) * sp.topWidth;
@@ -119,8 +129,28 @@ function calcVertexPos(xi, yi, segs, sp) {
   // 上端曲率: nx = -1〜+1 の放物線で Z オフセット、下へ向かいフェードアウト
   const nx          = (xi / segs) * 2 - 1;            // -1(左端) 〜 +1(右端)
   const curveOffset = sp.topCurve * (1 - nx * nx) * (1 - t); // 中央最大・下端0
-  const posZ = t * sp.height + curveOffset;
+  const posZ = t * sp.height * posZArcFactor + curveOffset;
   const posY = sp.height * 0.5;
+  return { posX, posY, posZ };
+}
+
+/**
+ * 衿頂点 (xi, collarYi) のワールド座標を返す。
+ * collarYi=0 がピン行（マント上端と共有）、collarYi=collarSegs が衿の自由端（上端）。
+ */
+function calcCollarPos(xi, collarYi, collarSegs, segs, sp) {
+  const tc  = collarYi / collarSegs;             // 0=ピン行, 1=衿上端
+  const nx  = (xi / segs) * 2 - 1;              // -1(左端) 〜 +1(右端)
+  // マント上端の X と同じ基準（t=0 時点）
+  const baseX = (xi / segs - 0.5) * sp.topWidth;
+  // ラッパ状の広がり: tc が大きいほど外側へ
+  const posX  = baseX * (1 + (sp.collarFlare ?? 0) * tc);
+  // Y: ピン行から上方へ延伸
+  const posY  = sp.height * 0.5 + (sp.collarHeight ?? 0.2) * tc;
+  // Z: ピン行の topCurve オフセットから始まり衿上端の collarCurve へ遷移
+  const pinZ  = sp.topCurve * (1 - nx * nx);
+  const topZ  = (sp.collarCurve ?? 0) * (1 - nx * nx);
+  const posZ  = pinZ + (topZ - pinZ) * tc;
   return { posX, posY, posZ };
 }
 
@@ -170,11 +200,43 @@ function buildVerletGeometry(segs, sp) {
     }
   }
 
-  return { verletVertices, verletSprings, verletVertexColumns };
+  // ---- 衿 ----
+  const collarColumns = [];
+  let   collarSegs    = 0;
+
+  if (sp.collar && (sp.collarHeight ?? 0) > 0) {
+    collarSegs = 2; // 静的メッシュなので縦2分割で十分
+
+    for (let x = 0; x <= segs; x++) {
+      const col = [verletVertexColumns[x][0]]; // ピン行の頂点を共有（cy=0）
+      for (let cy = 1; cy <= collarSegs; cy++) {
+        const { posX, posY, posZ } = calcCollarPos(x, cy, collarSegs, segs, sp);
+        col.push(addVertex(posX, posY, posZ, true)); // 衿は固定（静的メッシュ）
+      }
+      collarColumns.push(col);
+    }
+
+    // スプリング（縦・横・斜め）
+    for (let x = 0; x <= segs; x++) {
+      for (let cy = 0; cy < collarSegs; cy++) {
+        // 縦
+        addSpring(collarColumns[x][cy], collarColumns[x][cy + 1]);
+        if (x < segs) {
+          // 横（cy=0 はメイングリッドで追加済みのためスキップ）
+          if (cy + 1 > 0) addSpring(collarColumns[x][cy + 1], collarColumns[x + 1][cy + 1]);
+          // 斜め（全 cy で新規）
+          addSpring(collarColumns[x][cy],     collarColumns[x + 1][cy + 1]);
+          addSpring(collarColumns[x + 1][cy], collarColumns[x][cy + 1]);
+        }
+      }
+    }
+  }
+
+  return { verletVertices, verletSprings, verletVertexColumns, collarColumns, collarSegs };
 }
 
 function createInstance(segs, offsetX) {
-  const { verletVertices, verletSprings, verletVertexColumns } = buildVerletGeometry(segs, shapeParams);
+  const { verletVertices, verletSprings, verletVertexColumns, collarColumns, collarSegs } = buildVerletGeometry(segs, shapeParams);
 
   // ---- Vertex buffers ----
   const vertexCount     = verletVertices.length;
@@ -309,22 +371,48 @@ function createInstance(segs, offsetX) {
   scene.add(springWireframeObject);
 
   // ---- Cloth mesh ----
-  const meshVertexCount = segs * segs;
+  const mantleCells     = segs * segs;
+  const collarCells     = collarSegs > 0 ? segs * collarSegs : 0;
+  const meshVertexCount = mantleCells + collarCells;
   const clothGeo        = new THREE.BufferGeometry();
   const verletVertIdArr = new Uint32Array(meshVertexCount * 4);
   const indices         = [];
-  const getIndex        = (x, y) => y * segs + x;
+  const getMantleIndex  = (x, y)  => y * segs + x;
+  const getCollarIndex  = (x, cy) => mantleCells + cy * segs + x;
 
+  // マント本体セル
   for (let x = 0; x < segs; x++) {
     for (let y = 0; y < segs; y++) {
-      const idx = getIndex(x, y);
+      const idx = getMantleIndex(x, y);
       verletVertIdArr[idx*4]   = verletVertexColumns[x][y].id;
       verletVertIdArr[idx*4+1] = verletVertexColumns[x+1][y].id;
       verletVertIdArr[idx*4+2] = verletVertexColumns[x][y+1].id;
       verletVertIdArr[idx*4+3] = verletVertexColumns[x+1][y+1].id;
       if (x > 0 && y > 0) {
-        indices.push(getIndex(x,y), getIndex(x-1,y), getIndex(x-1,y-1));
-        indices.push(getIndex(x,y), getIndex(x-1,y-1), getIndex(x,y-1));
+        indices.push(getMantleIndex(x,y), getMantleIndex(x-1,y), getMantleIndex(x-1,y-1));
+        indices.push(getMantleIndex(x,y), getMantleIndex(x-1,y-1), getMantleIndex(x,y-1));
+      }
+    }
+  }
+
+  // 衿セル
+  for (let x = 0; x < segs; x++) {
+    for (let cy = 0; cy < collarSegs; cy++) {
+      const idx = getCollarIndex(x, cy);
+      verletVertIdArr[idx*4]   = collarColumns[x][cy].id;
+      verletVertIdArr[idx*4+1] = collarColumns[x+1][cy].id;
+      verletVertIdArr[idx*4+2] = collarColumns[x][cy+1].id;
+      verletVertIdArr[idx*4+3] = collarColumns[x+1][cy+1].id;
+      if (x > 0) {
+        if (cy > 0) {
+          // 衿内部の三角形（ワインディング逆）
+          indices.push(getCollarIndex(x-1,cy-1), getCollarIndex(x-1,cy), getCollarIndex(x,cy));
+          indices.push(getCollarIndex(x,cy-1), getCollarIndex(x-1,cy-1), getCollarIndex(x,cy));
+        } else {
+          // ピン行境界（ワインディング逆）
+          indices.push(getMantleIndex(x-1,0), getCollarIndex(x-1,0), getCollarIndex(x,0));
+          indices.push(getMantleIndex(x,0), getMantleIndex(x-1,0), getCollarIndex(x,0));
+        }
       }
     }
   }
@@ -335,8 +423,8 @@ function createInstance(segs, offsetX) {
 
   const clothMat = new THREE.MeshPhysicalNodeMaterial({
     side:           THREE.DoubleSide,
-    transparent:    true,
-    opacity:        0.85,
+    transparent:    matParams.opacity < 1.0,
+    opacity:        matParams.opacity,
     roughness:      matParams.roughness,
     sheen:          matParams.sheen,
     sheenRoughness: matParams.sheenRoughness,
@@ -407,6 +495,7 @@ function clearGrabState() {
     instances[grab.instanceIdx].grabbedIndexUniform.value = GRAB_NONE;
   }
   grab.active      = false;
+  grab.pendingDown = false;
   grab.instanceIdx = -1;
   grab.vertexIdx   = -1;
   if (grab.highlightMesh) grab.highlightMesh.visible = false;
@@ -415,9 +504,7 @@ function clearGrabState() {
 
 function setInstanceCount(n, segs) {
   clearGrabState();
-  grab.snapshots.length       = 0;
-  grab.snapshotPending.length = 0;
-  grab.snapshotAge.length     = 0;
+  grab.snapshots.length = 0;
 
   for (const inst of instances) teardownInstance(inst);
   instances.length = 0;
@@ -428,8 +515,6 @@ function setInstanceCount(n, segs) {
     const offsetX = (i - (n - 1) / 2) * CLOTH_SPACING;
     instances.push(createInstance(segs, offsetX));
     grab.snapshots.push(null);
-    grab.snapshotPending.push(false);
-    grab.snapshotAge.push(999); // 初回はすぐリードバック
   }
 
   applyVisibility();
@@ -539,36 +624,54 @@ function setupGrabEvents(canvas) {
   // キャプチャフェーズで受け取ることで OrbitControls より先に実行
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
+    if (!simRunning || grab.active || grab.pendingDown) return;
+    if (instances.length === 0) return;
 
-    const hit = pickNearestVertex(e.clientX, e.clientY);
-    if (!hit) return; // 布の近くでないクリックは OrbitControls に委ねる
+    // クリック時に全インスタンスの最新頂点座標を1回だけ readback
+    // → 揺れている布でも見た目どおりに掴める（OrbitControls 判定はその後に確定）
+    const { clientX, clientY, pointerId } = e;
+    grab.pendingDown = true;
 
-    // OrbitControls より先に grab 処理を実施
-    controls.enabled = false;
+    Promise.all(instances.map(inst =>
+      renderer.getArrayBufferAsync(inst.vertexPositionBuffer.value)
+        .then(ab => new Float32Array(ab))
+        .catch(() => null)
+    )).then((bufs) => {
+      // readback待ちの間に pointerup された場合は中止
+      if (!grab.pendingDown || !simRunning) { grab.pendingDown = false; return; }
+      grab.pendingDown = false;
 
-    grab.active      = true;
-    grab.instanceIdx = hit.instIdx;
-    grab.vertexIdx   = hit.vertIdx;
+      for (let i = 0; i < instances.length; i++) {
+        if (bufs[i]) { grab.snapshots[i] = bufs[i]; instances[i].cpuPositions = bufs[i]; }
+      }
 
-    const inst     = instances[hit.instIdx];
-    const snapshot = grab.snapshots[hit.instIdx] ?? inst.cpuPositions;
-    const wx = snapshot[hit.vertIdx * 3    ] + inst.offsetX;
-    const wy = snapshot[hit.vertIdx * 3 + 1];
-    const wz = snapshot[hit.vertIdx * 3 + 2];
+      const hit = pickNearestVertex(clientX, clientY);
+      if (!hit) return; // 布の近くでないクリックは何もしない（OrbitControls は既にこのpointerを開始済み）
 
-    buildDragPlane(new THREE.Vector3(wx, wy, wz));
-    inst.grabbedIndexUniform.value = hit.vertIdx;
+      controls.enabled = false;
+      grab.active      = true;
+      grab.instanceIdx = hit.instIdx;
+      grab.vertexIdx   = hit.vertIdx;
 
-    // ハイライト表示
-    grab.highlightMesh.position.set(wx, wy, wz);
-    grab.highlightMesh.visible = true;
+      const inst     = instances[hit.instIdx];
+      const snapshot = grab.snapshots[hit.instIdx] ?? inst.cpuPositions;
+      const wx = snapshot[hit.vertIdx * 3    ] + inst.offsetX;
+      const wy = snapshot[hit.vertIdx * 3 + 1];
+      const wz = snapshot[hit.vertIdx * 3 + 2];
 
-    applyGrabTarget(e.clientX, e.clientY);
+      buildDragPlane(new THREE.Vector3(wx, wy, wz));
+      inst.grabbedIndexUniform.value = hit.vertIdx;
 
-    // キャンバス外でも pointermove/pointerup を受け取る
-    canvas.setPointerCapture(e.pointerId);
-    canvas.style.cursor = 'grabbing';
-    e.stopPropagation();
+      // ハイライト表示
+      grab.highlightMesh.position.set(wx, wy, wz);
+      grab.highlightMesh.visible = true;
+
+      applyGrabTarget(clientX, clientY);
+
+      // キャンバス外でも pointermove/pointerup を受け取る
+      canvas.setPointerCapture(pointerId);
+      canvas.style.cursor = 'grabbing';
+    });
   }, { capture: true });
 
   canvas.addEventListener('pointermove', (e) => {
@@ -577,6 +680,7 @@ function setupGrabEvents(canvas) {
   });
 
   canvas.addEventListener('pointerup', (e) => {
+    grab.pendingDown = false;
     if (!grab.active) return;
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
     clearGrabState();
@@ -584,6 +688,7 @@ function setupGrabEvents(canvas) {
   });
 
   canvas.addEventListener('pointercancel', () => {
+    grab.pendingDown = false;
     if (!grab.active) return;
     clearGrabState();
     canvas.style.cursor = '';
@@ -692,6 +797,19 @@ function setupUI() {
     for (const inst of instances) inst.clothMat.sheenColor.set(matSheenColor.value);
   });
 
+  const matOpacity    = document.getElementById('mat-opacity');
+  const matOpacityVal = document.getElementById('mat-opacity-val');
+  matOpacity.addEventListener('input', () => {
+    const v = parseFloat(matOpacity.value);
+    matParams.opacity = v;
+    matOpacityVal.textContent = v.toFixed(2);
+    for (const inst of instances) {
+      inst.clothMat.opacity      = v;
+      inst.clothMat.transparent  = v < 1.0;
+      inst.clothMat.needsUpdate  = true;
+    }
+  });
+
   // Shape
   const shapeSelect = document.getElementById('shape-type');
   shapeSelect.addEventListener('change', () => {
@@ -716,20 +834,57 @@ function setupUI() {
   bindShape('shape-height',       'shape-height-val',       'height',      parseFloat, v => v.toFixed(2));
   bindShape('shape-pin-count',    'shape-pin-count-val',    'pinCount',    parseInt,   v => String(v));
   bindShape('shape-top-curve',    'shape-top-curve-val',    'topCurve',    parseFloat, v => v.toFixed(2));
+  bindShape('shape-arc-angle',    'shape-arc-angle-val',    'arcAngle',    parseInt,   v => `${v}°`);
+
+  // 衿パラメータ
+  const collarCheckbox = document.getElementById('collar-enable');
+  collarCheckbox.addEventListener('change', () => {
+    shapeParams.collar = collarCheckbox.checked;
+    _updateCollarVisibility();
+    setInstanceCount(instanceCount, clothNumSegments);
+  });
+  bindShape('collar-height', 'collar-height-val', 'collarHeight', parseFloat, v => v.toFixed(2));
+  bindShape('collar-flare',  'collar-flare-val',  'collarFlare',  parseFloat, v => v.toFixed(2));
+  bindShape('collar-curve',  'collar-curve-val',  'collarCurve',  parseFloat, v => v.toFixed(2));
+
+  function _updateCollarVisibility() {
+    const show = shapeParams.collar;
+    document.getElementById('collar-sliders').style.display = show ? 'flex' : 'none';
+  }
+  _updateCollarVisibility();
 
   function _updateShapeVisibility() {
     const isTrap = shapeParams.type === 'trapezoid';
     const isSemi = shapeParams.type === 'semicircle';
     document.getElementById('row-bottom-width').style.display =
       (isTrap || isSemi) ? '' : 'none';
+    document.getElementById('row-arc-angle').style.display =
+      isSemi ? '' : 'none';
   }
   _updateShapeVisibility();
+
+  // シミュ停止 / リセット
+  const btnStop  = document.getElementById('btn-sim-stop');
+  const btnReset = document.getElementById('btn-sim-reset');
+  btnStop.addEventListener('click', () => {
+    simRunning = !simRunning;
+    btnStop.textContent  = simRunning ? '⏹ 停止' : '▶ 再開';
+    btnStop.style.color  = simRunning ? '#ebb' : '#9eb';
+  });
+  btnReset.addEventListener('click', () => {
+    setInstanceCount(instanceCount, clothNumSegments);
+    // 停止状態は維持（simRunning を変えない）
+    if (!simRunning) {
+      btnStop.textContent = '▶ 再開';
+      btnStop.style.color = '#9eb';
+    }
+  });
 
   // マント出力
   document.getElementById('btn-export-mantle').addEventListener('click', exportMantle);
 
   // セクション折りたたみ
-  for (const id of ['mat-toggle', 'mesh-toggle', 'shape-toggle']) {
+  for (const id of ['mat-toggle', 'mesh-toggle', 'shape-toggle', 'collar-toggle']) {
     const toggle = document.getElementById(id);
     const body   = document.getElementById(id.replace('toggle', 'body'));
     if (toggle && body) {
@@ -746,7 +901,7 @@ function setupUI() {
 // ============================================================
 function exportMantle() {
   const segs = clothNumSegments;
-  const { verletVertices, verletSprings, verletVertexColumns } = buildVerletGeometry(segs, shapeParams);
+  const { verletVertices, verletSprings, verletVertexColumns, collarColumns, collarSegs } = buildVerletGeometry(segs, shapeParams);
 
   const vertexCount   = verletVertices.length;
   const positions     = [];
@@ -773,6 +928,60 @@ function exportMantle() {
       indices.push(v10, v11, v01);
     }
   }
+  // 衿のトライアングルインデックス（ワインディング逆）
+  for (let x = 0; x < segs; x++) {
+    for (let cy = 0; cy < collarSegs; cy++) {
+      const v00 = collarColumns[x][cy].id;
+      const v10 = collarColumns[x + 1][cy].id;
+      const v01 = collarColumns[x][cy + 1].id;
+      const v11 = collarColumns[x + 1][cy + 1].id;
+      indices.push(v01, v10, v00);
+      indices.push(v01, v11, v10);
+    }
+  }
+
+  // Quad レンダーメッシュ（/cloth の createInstance と同一構造）
+  const mantleCells       = segs * segs;
+  const collarCells       = collarSegs > 0 ? segs * collarSegs : 0;
+  const renderVertexCount = mantleCells + collarCells;
+  const quadVertexIds     = new Array(renderVertexCount * 4);
+  const renderIndices     = [];
+  const getMantleRIdx = (x, y)  => y * segs + x;
+  const getCollarRIdx = (x, cy) => mantleCells + cy * segs + x;
+
+  for (let x = 0; x < segs; x++) {
+    for (let y = 0; y < segs; y++) {
+      const idx = getMantleRIdx(x, y);
+      quadVertexIds[idx*4]   = verletVertexColumns[x][y].id;
+      quadVertexIds[idx*4+1] = verletVertexColumns[x+1][y].id;
+      quadVertexIds[idx*4+2] = verletVertexColumns[x][y+1].id;
+      quadVertexIds[idx*4+3] = verletVertexColumns[x+1][y+1].id;
+      if (x > 0 && y > 0) {
+        renderIndices.push(getMantleRIdx(x,y), getMantleRIdx(x-1,y), getMantleRIdx(x-1,y-1));
+        renderIndices.push(getMantleRIdx(x,y), getMantleRIdx(x-1,y-1), getMantleRIdx(x,y-1));
+      }
+    }
+  }
+  if (collarSegs > 0) {
+    for (let x = 0; x < segs; x++) {
+      for (let cy = 0; cy < collarSegs; cy++) {
+        const idx = getCollarRIdx(x, cy);
+        quadVertexIds[idx*4]   = collarColumns[x][cy].id;
+        quadVertexIds[idx*4+1] = collarColumns[x+1][cy].id;
+        quadVertexIds[idx*4+2] = collarColumns[x][cy+1].id;
+        quadVertexIds[idx*4+3] = collarColumns[x+1][cy+1].id;
+        if (x > 0) {
+          if (cy > 0) {
+            renderIndices.push(getCollarRIdx(x-1,cy-1), getCollarRIdx(x-1,cy), getCollarRIdx(x,cy));
+            renderIndices.push(getCollarRIdx(x,cy-1), getCollarRIdx(x-1,cy-1), getCollarRIdx(x,cy));
+          } else {
+            renderIndices.push(getMantleRIdx(x-1,0), getCollarRIdx(x-1,0), getCollarRIdx(x,0));
+            renderIndices.push(getMantleRIdx(x,0), getMantleRIdx(x-1,0), getCollarRIdx(x,0));
+          }
+        }
+      }
+    }
+  }
 
   const data = {
     version:      1,
@@ -783,7 +992,18 @@ function exportMantle() {
     springs,
     pinnedIndices,
     indices,
-    material: { colorFront: matParams.colorFront, colorBack: matParams.colorBack },
+    renderVertexCount,
+    quadVertexIds,
+    renderIndices,
+    material: {
+      colorFront:     matParams.colorFront,
+      colorBack:      matParams.colorBack,
+      roughness:      matParams.roughness,
+      sheen:          matParams.sheen,
+      sheenRoughness: matParams.sheenRoughness,
+      sheenColor:     matParams.sheenColor,
+      opacity:        matParams.opacity,
+    },
   };
 
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -826,29 +1046,6 @@ function updateFPS() {
  * GPU バッファ → CPU スナップショットの非同期リードバック（ピッキング用）
  * グラブ中はスキップして競合を防ぐ
  */
-function scheduleReadbacks() {
-  if (grab.active) return; // グラブ中はスキップ
-
-  for (let i = 0; i < instances.length; i++) {
-    grab.snapshotAge[i] = (grab.snapshotAge[i] ?? 999) + 1;
-    if (grab.snapshotAge[i] < 30 || grab.snapshotPending[i]) continue;
-
-    grab.snapshotAge[i]     = 0;
-    grab.snapshotPending[i] = true;
-    const inst = instances[i];
-
-    renderer.getArrayBufferAsync(inst.vertexPositionBuffer.value)
-      .then((ab) => {
-        grab.snapshots[i]       = new Float32Array(ab);
-        inst.cpuPositions       = grab.snapshots[i];
-        grab.snapshotPending[i] = false;
-      })
-      .catch(() => {
-        grab.snapshotPending[i] = false; // エラー時は次フレームでリトライ
-      });
-  }
-}
-
 async function render() {
   timer.update();
   updateFPS();
@@ -860,19 +1057,18 @@ async function render() {
   const stepsPerSec = 360;
   const timePerStep = 1 / stepsPerSec;
 
-  timeSinceLastStep += deltaTime;
-  while (timeSinceLastStep >= timePerStep) {
-    timestamp         += timePerStep;
-    timeSinceLastStep -= timePerStep;
-    updateSpheres();
-    for (const inst of instances) {
-      renderer.compute(inst.computeSpringForces);
-      renderer.compute(inst.computeVertexForces);
+  if (simRunning) {
+    timeSinceLastStep += deltaTime;
+    while (timeSinceLastStep >= timePerStep) {
+      timestamp         += timePerStep;
+      timeSinceLastStep -= timePerStep;
+      updateSpheres();
+      for (const inst of instances) {
+        renderer.compute(inst.computeSpringForces);
+        renderer.compute(inst.computeVertexForces);
+      }
     }
   }
-
-  frameCounter++;
-  if (frameCounter % 4 === 0) scheduleReadbacks();
 
   renderer.render(scene, camera);
 }
