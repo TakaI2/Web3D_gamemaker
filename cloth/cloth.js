@@ -22,6 +22,8 @@ const shapeParams = {
   pinCount:     7,       // 上端に打つピン数
   topCurve:     0.0,     // 上端曲率: + で中央が前へ（肩フィット）, - で後ろへ
   arcAngle:     180,     // semicircle の中心角（度）: 30〜360
+  hemJag:       0.0,     // 下端ギザギザの深さ(m): 0=なし
+  hemTeeth:     6,       // 下端ギザギザの歯数
   collar:       false,   // 衿を有効にするか
   collarHeight: 0.2,     // 衿の高さ
   collarFlare:  0.5,     // 衿の広がり係数（0=直筒, 1=ラッパ状）
@@ -129,7 +131,17 @@ function calcVertexPos(xi, yi, segs, sp) {
   // 上端曲率: nx = -1〜+1 の放物線で Z オフセット、下へ向かいフェードアウト
   const nx          = (xi / segs) * 2 - 1;            // -1(左端) 〜 +1(右端)
   const curveOffset = sp.topCurve * (1 - nx * nx) * (1 - t); // 中央最大・下端0
-  const posZ = t * sp.height * posZArcFactor + curveOffset;
+  let posZ = t * sp.height * posZArcFactor + curveOffset;
+
+  // 下端ギザギザ: 列ごとの三角波を Z(=裾の長さ)方向に加算。下端付近のみ作用させる。
+  if ((sp.hemJag ?? 0) > 0 && (sp.hemTeeth ?? 0) > 0) {
+    const phase = (xi / segs) * sp.hemTeeth;
+    const frac  = phase - Math.floor(phase);
+    const tri   = 1 - Math.abs(frac * 2 - 1);          // 歯の谷=0, 歯先=1 の三角波
+    const ramp  = Math.max(0, (t - 0.6) / 0.4);        // t>0.6 で徐々に効かせる（下端で最大）
+    posZ += sp.hemJag * tri * ramp;
+  }
+
   const posY = sp.height * 0.5;
   return { posX, posY, posZ };
 }
@@ -835,6 +847,8 @@ function setupUI() {
   bindShape('shape-pin-count',    'shape-pin-count-val',    'pinCount',    parseInt,   v => String(v));
   bindShape('shape-top-curve',    'shape-top-curve-val',    'topCurve',    parseFloat, v => v.toFixed(2));
   bindShape('shape-arc-angle',    'shape-arc-angle-val',    'arcAngle',    parseInt,   v => `${v}°`);
+  bindShape('shape-hem-jag',      'shape-hem-jag-val',      'hemJag',      parseFloat, v => v.toFixed(2));
+  bindShape('shape-hem-teeth',    'shape-hem-teeth-val',    'hemTeeth',    parseInt,   v => String(v));
 
   // 衿パラメータ
   const collarCheckbox = document.getElementById('collar-enable');
