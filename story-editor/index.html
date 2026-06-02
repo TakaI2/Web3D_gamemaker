@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Story Editor — 3D ストーリー編集</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; font-family: system-ui, sans-serif; color: #ddd; font-size: 12px; }
+    #topbar { position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 30; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+      background: rgba(12,14,22,0.95); border-bottom: 1px solid rgba(255,255,255,0.12); }
+    #topbar a, #topbar button, #topbar select, #topbar input { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.22); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; text-decoration: none; }
+    #topbar input { cursor: text; }
+    #topbar .prim { border-color: #6cf; color: #aef; }
+    #topbar .spacer { flex: 1; }
+    #main { position: fixed; top: 44px; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 270px 1fr 260px; }
+    .col { overflow-y: auto; padding: 10px; }
+    #left { border-right: 1px solid rgba(255,255,255,0.12); }
+    #center { position: relative; background: #0a0c14; overflow: hidden; padding: 0; }
+    #preview { position: absolute; inset: 0; }
+    #preview-bar { position: absolute; top: 8px; left: 8px; z-index: 20; display: flex; gap: 6px; }
+    #preview-bar button { background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    #right { border-left: 1px solid rgba(255,255,255,0.12); }
+    h4 { margin: 12px 0 6px; font-size: 11px; color: #9fd0ff; text-transform: uppercase; letter-spacing: .05em; }
+    h4:first-child { margin-top: 0; }
+    .cmd { display: flex; align-items: center; gap: 4px; padding: 5px 6px; margin: 3px 0; border: 1px solid #3a3a60; border-radius: 4px; background: #202040; cursor: pointer; }
+    .cmd.active { border-color: #6cf; background: #243; }
+    .cmd .idx { color: #778; min-width: 18px; text-align: right; }
+    .cmd .op { color: #aef; font-weight: 700; }
+    .cmd .sum { color: #bbc; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cmd .mini { background: #1a1a2e; border: 1px solid #3a3a60; color: #ccd; border-radius: 3px; cursor: pointer; padding: 1px 5px; }
+    .row { display: flex; align-items: center; gap: 6px; margin: 5px 0; }
+    .row label { color: #aab; min-width: 70px; }
+    .row input[type=text], .row input[type=number], .row select { flex: 1; min-width: 0; background: #222; color: #ddd; border: 1px solid #3a3a60; border-radius: 3px; padding: 3px 5px; }
+    .row.vec input { width: 33%; flex: none; }
+    .actor-row { display: flex; gap: 4px; margin: 4px 0; }
+    .actor-row input { width: 70px; background: #222; color: #ddd; border: 1px solid #3a3a60; border-radius: 3px; padding: 3px; }
+    .actor-row select { flex: 1; min-width: 0; background: #222; color: #ddd; border: 1px solid #3a3a60; border-radius: 3px; }
+    button.act { background: #202040; color: #ccd; border: 1px solid #3a3a60; border-radius: 4px; cursor: pointer; padding: 5px 8px; width: 100%; margin: 4px 0; }
+    button.act:hover { background: #2a2a58; }
+    .line-row { border: 1px solid #3a3a60; border-radius: 4px; padding: 5px; margin: 4px 0; }
+    #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: rgba(30,30,60,0.92); color: #eee; padding: 6px 16px; border-radius: 6px; z-index: 50; opacity: 0; transition: opacity .3s; pointer-events: none; }
+    #toast.show { opacity: 1; }
+    .hint { color: #778; font-size: 10px; margin-top: 4px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <a href="../hub/">← 一覧</a>
+    <select id="story-select" title="public/story/ から読込"></select>
+    <button id="btn-new">新規</button>
+    <span style="color:#778">ID</span><input id="story-id" type="text" style="width:90px" placeholder="id">
+    <span style="color:#778">タイトル</span><input id="story-title" type="text" style="width:140px" placeholder="タイトル">
+    <span style="color:#778">ステージ</span><select id="story-stage" title="ステージ(任意)"></select>
+    <span class="spacer"></span>
+    <a href="../story-player/" title="プレイヤーで開く">▶ プレイヤー</a>
+    <button id="btn-save" class="prim">保存</button>
+  </div>
+
+  <div id="main">
+    <div id="left" class="col">
+      <h4>コマンド</h4>
+      <div id="cmd-list"></div>
+      <div class="row"><select id="op-picker" style="flex:1"></select><button class="mini" id="btn-add">＋追加</button></div>
+
+      <h4>アクター</h4>
+      <div id="actor-list"></div>
+      <button class="act" id="btn-add-actor">＋ アクター追加</button>
+      <div class="hint">id とモデル(npc.json)を対応づけ。コマンドの「登場」等で id を選びます。</div>
+    </div>
+
+    <div id="center">
+      <div id="preview"></div>
+      <div id="preview-bar">
+        <button id="btn-play-all">▶ 最初から</button>
+        <button id="btn-play-here">▶ ここから</button>
+        <button id="btn-stop">⏹ 停止</button>
+      </div>
+    </div>
+
+    <div id="right" class="col">
+      <h4 id="form-title">コマンド未選択</h4>
+      <div id="form-panel"></div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <script type="module" src="./story-editor.js"></script>
+</body>
+</html>
