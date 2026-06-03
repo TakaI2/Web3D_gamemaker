@@ -57,10 +57,16 @@ const LANDED_MARGIN          = 0.5;   // 床近傍とみなす高さ(m)
 // ── フロー戦闘モード（flow-player から ?flow=1 で埋め込み。非フロー時は一切作動しない）──
 const FLOW = new URLSearchParams(location.search).get('flow') === '1';
 const PLAYER_MAX_HP   = 10;    // 既定の最大HP（battle.lose.hp で上書き）
-const HIT_DAMAGE      = 1;     // 攻撃NPC接触の1回ダメージ
-const HIT_COOLDOWN    = 1.0;   // 被ダメ間隔(秒)
-const ATTACK_HIT_RANGE = 2.5;  // 攻撃NPCがこの距離内でプレイヤーに当たる(m)
 const DEFEAT_COOLDOWN = 0.5;   // 同一NPCの撃破カウント間隔(秒)
+// 敵の攻撃（フェーズ2a）
+const MELEE_DMG = 3, BALL_DMG = 1, THROW_DMG = 2, TOUCH_DMG = 1;
+const TELEGRAPH_TIME = 1.0, LUNGE_TIME = 0.7;          // 近接：予備動作/踏み込みの時間(秒)
+const MELEE_TRIGGER_DIST = 7, MELEE_HIT_RADIUS = 1.6;  // 近接を始める距離 / 命中半径(m)
+const TELEGRAPH_SPEED = 4, LUNGE_SPEED = 14;           // 予備動作/踏み込みの速度(m/s)
+const MELEE_CD = 3.0, RANGED_CD_MIN = 2.5, RANGED_CD_MAX = 4.0;
+const ENEMY_BALL_SPEED = 16, ENEMY_PROJ_TTL = 4, ENEMY_PROJ_RADIUS = 0.18;
+const THROW_SPEED = 22, THROW_REACH = 8, HAZARD_TIME = 2.0;
+const INVULN = 0.8, PLAYER_HIT_R = 0.5;                // 無敵時間(秒) / プレイヤー被弾半径(m)
 const ARENA_BOUNDS = {
   min: new THREE.Vector3(-ROOM.x / 2, 0, -ROOM.z / 2),
   max: new THREE.Vector3( ROOM.x / 2, ROOM.y, ROOM.z / 2),
@@ -86,7 +92,9 @@ let playerHp    = 0, playerMaxHp = 0;
 let defeatCount = 0, defeatTarget = 0;
 let battleTime  = 0, lastHitT = -999;
 let battleOver  = false;
-let battleHud   = null, battleBgm = null;
+let battleHud   = null, battleBgm = null, battleVfx = null;
+let shakeT      = 0;
+const enemyProjectiles = [];   // 敵の弾（プレイヤーのみ対象）
 let worldOctree    = null;
 let playerCollider = null;
 let playerOnFloor  = false;
@@ -538,7 +546,9 @@ function startBattle(cfg) {
   playerMaxHp = (cfg && cfg.lose && cfg.lose.hp) || PLAYER_MAX_HP;
   playerHp = playerMaxHp;
   defeatTarget = (cfg && cfg.win && cfg.win.count) || 5;
-  defeatCount = 0; battleOver = false; battleTime = 0; lastHitT = -999;
+  defeatCount = 0; battleOver = false; battleTime = 0; lastHitT = -999; shakeT = 0;
+  for (const p of enemyProjectiles) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); }
+  enemyProjectiles.length = 0;
   if (cfg && cfg.bgm) { try { battleBgm = new Audio(new URL('../assets/' + cfg.bgm, import.meta.url).href); battleBgm.loop = true; battleBgm.volume = 0.6; battleBgm.play().catch(() => {}); } catch { /* noop */ } }
   buildBattleHud();
   const enemies = (cfg && Array.isArray(cfg.enemies) && cfg.enemies.length) ? cfg.enemies : NPC_FILES;
@@ -554,32 +564,133 @@ function onDefeat(m) {
   if (defeatTarget > 0 && defeatCount >= defeatTarget) endBattle('win');
 }
 
-function onPlayerHit() {
+// プレイヤー被弾（src=当てたNPC or null）。無敵時間・HP・演出・被弾セリフ・敗北判定。
+function onPlayerDamaged(amount, src) {
   if (!FLOW || battleOver) return;
-  if (battleTime - lastHitT < HIT_COOLDOWN) return;
+  if (battleTime - lastHitT < INVULN) return;
   lastHitT = battleTime;
-  playerHp = Math.max(0, playerHp - HIT_DAMAGE);
+  playerHp = Math.max(0, playerHp - amount);
   updateBattleHud();
-  if (battleHud) { battleHud.style.boxShadow = 'inset 0 0 60px rgba(255,0,0,0.6)'; setTimeout(() => { if (battleHud) battleHud.style.boxShadow = 'none'; }, 120); }
+  if (battleVfx) { battleVfx.style.opacity = '1'; setTimeout(() => { if (battleVfx) battleVfx.style.opacity = '0'; }, 60); }
+  shakeT = 0.25;
+  if (src && src.speech) src.speech.bark('attackHit');   // 当てたNPCがしゃべる
   if (playerHp <= 0) endBattle('lose');
 }
 
-// 攻撃ステートのNPCがプレイヤー(カメラ)に近接していたら被ダメ
-function updateBattleDamage() {
-  if (!FLOW || battleOver) return;
-  for (const m of megus) {
-    if (!m.dir || m.dir.state !== 'attack' || m.ragdoll.active) continue;
-    meguCenter(m, _meguC);
-    if (camera.position.distanceTo(_meguC) < ATTACK_HIT_RANGE) { onPlayerHit(); break; }
+// 敵の戦闘コントローラ（FLOW時・移動を担うときtrueを返す）
+function updateEnemyCombat(m, dt) {
+  const rd = m.ragdoll;
+  const held = m.grabbed || m.clothGrabbed;
+  if (rd.active || held || (m.dir && m.dir.state === 'downed')) { if (m.combat) m.combat.mode = 'idle'; return false; }
+  if (!m.combat) m.combat = { mode: 'idle', t: 0, cd: randRange(1.5, 3.5) };
+  const c = m.combat;
+  meguCenter(m, _meguC);
+  const dist = camera.position.distanceTo(_meguC);
+
+  if (c.mode === 'idle') {
+    c.cd -= dt;
+    if (c.cd <= 0) {
+      if (dist < MELEE_TRIGGER_DIST) { c.mode = 'telegraph'; c.t = TELEGRAPH_TIME; if (m.speech) m.speech.bark('menace'); }
+      else { doRanged(m, dist); c.cd = randRange(RANGED_CD_MIN, RANGED_CD_MAX); }
+    }
+    return false;
+  }
+  if (c.mode === 'telegraph') {
+    approachPlayer(m, dt, TELEGRAPH_SPEED);
+    c.t -= dt; if (c.t <= 0) { c.mode = 'lunge'; c.t = LUNGE_TIME; }
+    return true;
+  }
+  if (c.mode === 'lunge') {
+    approachPlayer(m, dt, LUNGE_SPEED);
+    if (dist < MELEE_HIT_RADIUS) { onPlayerDamaged(MELEE_DMG, m); c.mode = 'idle'; c.cd = MELEE_CD; }
+    else { c.t -= dt; if (c.t <= 0) { c.mode = 'idle'; c.cd = MELEE_CD; } }
+    return true;
+  }
+  return false;
+}
+
+function approachPlayer(m, dt, speed) {
+  _force.copy(camera.position).sub(m.pos);
+  const d = _force.length() || 1;
+  m.pos.addScaledVector(_force, (speed * dt) / d);
+}
+
+// 遠距離：近くに浮遊オブジェクトがあれば50%で投擲、無ければ/残りは弾
+function doRanged(m, dist) {
+  void dist;
+  if (Math.random() < 0.5 && throwObjectAt(m)) return;
+  fireEnemyBall(m);
+}
+
+function fireEnemyBall(m) {
+  meguCenter(m, _meguC);
+  _hitDir.copy(camera.position).sub(_meguC).normalize();
+  const geo  = new THREE.IcosahedronGeometry(ENEMY_PROJ_RADIUS, 1);
+  const mat  = new THREE.MeshStandardMaterial({ color: 0xff5050, emissive: 0x551111, roughness: 0.4 });
+  const mesh = new THREE.Mesh(geo, mat);
+  const pos  = _meguC.clone().addScaledVector(_hitDir, 0.4);
+  mesh.position.copy(pos);
+  scene.add(mesh);
+  enemyProjectiles.push({ mesh, pos, vel: _hitDir.clone().multiplyScalar(ENEMY_BALL_SPEED), ttl: ENEMY_PROJ_TTL, radius: ENEMY_PROJ_RADIUS, source: m });
+}
+
+function throwObjectAt(m) {
+  meguCenter(m, _meguC);
+  let best = null, bestD = THROW_REACH;
+  for (const obj of objects) {
+    if (obj.grabbed) continue;
+    const d = obj.pos.distanceTo(_meguC);
+    if (d < bestD) { bestD = d; best = obj; }
+  }
+  if (!best) return false;
+  _hitDir.copy(camera.position).sub(best.pos).normalize();
+  best.vel.copy(_hitDir).multiplyScalar(THROW_SPEED);
+  best.thrownBy = m; best.hazardT = HAZARD_TIME;
+  return true;
+}
+
+// 敵弾の前進・プレイヤー命中・寿命
+function stepEnemyProjectiles(dt) {
+  for (let i = enemyProjectiles.length - 1; i >= 0; i--) {
+    const p = enemyProjectiles[i];
+    p.pos.addScaledVector(p.vel, dt);
+    p.ttl -= dt;
+    let dead = p.ttl <= 0;
+    if (!dead && (Math.abs(p.pos.x) > ROOM.x / 2 || p.pos.y < 0 || p.pos.y > ROOM.y || Math.abs(p.pos.z) > ROOM.z / 2)) dead = true;
+    if (!dead && !battleOver && p.pos.distanceTo(camera.position) < p.radius + PLAYER_HIT_R) { onPlayerDamaged(BALL_DMG, p.source); dead = true; }
+    if (dead) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); enemyProjectiles.splice(i, 1); }
+    else p.mesh.position.copy(p.pos);
+  }
+}
+
+// 浮遊オブジェクトのプレイヤー接触/投擲ヒット
+function updateObjectHazards(dt) {
+  if (battleOver) return;
+  for (const obj of objects) {
+    if (obj.grabbed) continue;
+    if (obj.hazardT > 0) obj.hazardT -= dt;
+    if (obj.pos.distanceTo(camera.position) < obj.radius + PLAYER_HIT_R) {
+      const thrown = obj.hazardT > 0;
+      onPlayerDamaged(thrown ? THROW_DMG : TOUCH_DMG, thrown ? obj.thrownBy : null);
+      _hitDir.copy(obj.pos).sub(camera.position).normalize();
+      obj.vel.addScaledVector(_hitDir, 6); clampSpeed(obj.vel);
+      obj.hazardT = 0; obj.thrownBy = null;
+    }
   }
 }
 
 function buildBattleHud() {
-  if (battleHud) return;
-  battleHud = document.createElement('div');
-  battleHud.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:60;display:flex;gap:16px;align-items:center;background:rgba(0,0,0,0.5);color:#fff;font:14px system-ui;padding:8px 16px;border-radius:8px;pointer-events:none;';
-  battleHud.innerHTML = '<span id="b-hp"></span><span id="b-def"></span>';
-  document.body.appendChild(battleHud);
+  if (!battleHud) {
+    battleHud = document.createElement('div');
+    battleHud.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:60;display:flex;gap:16px;align-items:center;background:rgba(0,0,0,0.5);color:#fff;font:14px system-ui;padding:8px 16px;border-radius:8px;pointer-events:none;';
+    battleHud.innerHTML = '<span id="b-hp"></span><span id="b-def"></span>';
+    document.body.appendChild(battleHud);
+  }
+  if (!battleVfx) {
+    battleVfx = document.createElement('div');
+    battleVfx.style.cssText = 'position:fixed;inset:0;z-index:55;pointer-events:none;opacity:0;transition:opacity 0.35s;box-shadow:inset 0 0 120px 30px rgba(255,0,0,0.7);';
+    document.body.appendChild(battleVfx);
+  }
   updateBattleHud();
 }
 function updateBattleHud() {
@@ -850,25 +961,35 @@ function updateMegu(m, dt) {
     if (!rd.recovering) onMeguRecovered(m);
   } else {
     if (m.mixer) m.mixer.update(dt);
-    const st = m.dir ? m.dir.state : 'idle';
-    if (st === 'attack') {
-      // attack：プレイヤー方向へ接近加速
-      _force.copy(camera.position).sub(m.pos);
-      const d = _force.length() || 1;
-      m.vel.addScaledVector(_force, (m.sm.behavior.approachAccel * dt) / d);
-      clampSpeed(m.vel);
-    } else if (st === 'taunt') {
-      updateTauntMovement(m, dt);   // 10m以内へ飛来→ゆっくり
+    // フロー戦闘: 戦闘コントローラ（近接予備動作/踏み込み中は移動を担う・遠距離は撃つだけ）
+    const combatMove = (FLOW && battleCfg && !battleOver) ? updateEnemyCombat(m, dt) : false;
+    if (combatMove) {
+      bounceAxis(m, 'x', -ROOM.x / 2 + MEGU_RADIUS, ROOM.x / 2 - MEGU_RADIUS);
+      bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
+      bounceAxis(m, 'z', -ROOM.z / 2 + MEGU_RADIUS, ROOM.z / 2 - MEGU_RADIUS);
+      m.vrm.scene.position.copy(m.pos);
+      faceToPlayer(m, dt);
     } else {
-      updateIdleMovement(m, dt);    // float / drift / dash を3〜6秒で切替
+      const st = m.dir ? m.dir.state : 'idle';
+      if (st === 'attack') {
+        // attack：プレイヤー方向へ接近加速
+        _force.copy(camera.position).sub(m.pos);
+        const d = _force.length() || 1;
+        m.vel.addScaledVector(_force, (m.sm.behavior.approachAccel * dt) / d);
+        clampSpeed(m.vel);
+      } else if (st === 'taunt') {
+        updateTauntMovement(m, dt);   // 10m以内へ飛来→ゆっくり
+      } else {
+        updateIdleMovement(m, dt);    // float / drift / dash を3〜6秒で切替
+      }
+      m.pos.addScaledVector(m.vel, dt);
+      bounceAxis(m, 'x', -ROOM.x / 2 + MEGU_RADIUS, ROOM.x / 2 - MEGU_RADIUS);
+      bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
+      bounceAxis(m, 'z', -ROOM.z / 2 + MEGU_RADIUS, ROOM.z / 2 - MEGU_RADIUS);
+      m.vrm.scene.position.copy(m.pos);
+      if (st === 'taunt' || st === 'attack') faceToPlayer(m, dt);   // 挑発/攻撃中はプレイヤーを向く
+      else faceMove(m, dt);                                          // それ以外は進行方向
     }
-    m.pos.addScaledVector(m.vel, dt);
-    bounceAxis(m, 'x', -ROOM.x / 2 + MEGU_RADIUS, ROOM.x / 2 - MEGU_RADIUS);
-    bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
-    bounceAxis(m, 'z', -ROOM.z / 2 + MEGU_RADIUS, ROOM.z / 2 - MEGU_RADIUS);
-    m.vrm.scene.position.copy(m.pos);
-    if (st === 'taunt' || st === 'attack') faceToPlayer(m, dt);   // 挑発/攻撃中はプレイヤーを向く
-    else faceMove(m, dt);                                          // それ以外は進行方向
   }
 
   // 表情・視線をステート出力から適用（vrm.update の前に設定）
@@ -876,6 +997,9 @@ function updateMegu(m, dt) {
     const em = m.vrm.expressionManager;
     if (em) {
       for (const name of m.sm.expressionNames) em.setValue(name, m.dir.expression[name] ?? 0);
+      // フロー戦闘: 予備動作/踏み込み中は怒り表情で威嚇（FLOW時のみ）
+      if (FLOW && m.combat && m.combat.mode !== 'idle') { try { em.setValue('angry', 0.9); } catch { /* noop */ } }
+      else if (FLOW) { try { em.setValue('angry', m.dir.expression['angry'] ?? 0); } catch { /* noop */ } }
       // 自動まばたき（ダウン中は除く）
       if (m.blinkT <= 0 && m.blinkDur <= 0) { m.blinkDur = 0.12; m.blinkT = randRange(2.5, 6); }
       m.blinkT -= dt;
@@ -1294,7 +1418,11 @@ function render() {
   syncObjectMeshes();
   updateMegus(dt);
   if (speechUI) speechUI.update(dt, npcScreenPos);
-  if (FLOW && battleCfg && !battleOver) { battleTime += dt; updateBattleDamage(); }
+  if (FLOW && battleCfg) {
+    if (!battleOver) { battleTime += dt; updateObjectHazards(dt); }
+    stepEnemyProjectiles(dt);
+    if (shakeT > 0) { shakeT -= dt; const s = 0.012 * (shakeT / 0.25); camera.rotation.x += (Math.random() - 0.5) * s; camera.rotation.y += (Math.random() - 0.5) * s; }
+  }
   renderer.render(scene, camera);
 }
 

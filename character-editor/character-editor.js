@@ -445,7 +445,7 @@ function buildEventSpeechPanel() {
   if (!el) return;
   el.innerHTML = '';
   if (!characterDef.events) characterDef.events = {};
-  const EVENTS = [['grabbed', '掴まれた'], ['thrown', '投げられた'], ['landed', '衝突 / 着地']];
+  const EVENTS = [['grabbed', '掴まれた'], ['thrown', '投げられた'], ['landed', '衝突 / 着地'], ['menace', '威嚇（攻撃の予備動作）'], ['attackHit', '攻撃ヒット（プレイヤーに命中）']];
   for (const [key, lbl] of EVENTS) {
     const h = document.createElement('div');
     h.style.cssText = 'color:#ffd9a0;font-size:11px;font-weight:700;margin:8px 0 2px;';
