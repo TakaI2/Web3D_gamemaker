@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Flow Player — ゲームフロー再生</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0a0c14; font-family: system-ui, sans-serif; color: #ddd; }
+    #frame { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #0a0c14; }
+    #hud { position: fixed; top: 8px; left: 8px; z-index: 40; display: flex; gap: 8px; align-items: center; }
+    #hud a, #hud button, #hud select { background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; text-decoration: none; }
+    #hud .node { color: #9fd0ff; font-size: 12px; }
+    #end-overlay { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.7); }
+    #end-overlay .box { text-align: center; }
+    #end-overlay h1 { margin: 0 0 12px; }
+    #end-overlay button { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 8px 18px; border-radius: 6px; cursor: pointer; }
+    #loading { position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center; background: #0a0c14; transition: opacity .4s; }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <iframe id="frame" allow="autoplay; xr-spatial-tracking"></iframe>
+
+  <div id="hud">
+    <a href="../hub/">← 一覧</a>
+    <select id="flow-select" title="public/flow/ から読込"></select>
+    <button id="btn-restart">⟲ 最初から</button>
+    <a href="../flow-editor/" title="フロー編集">✎ 編集</a>
+    <span class="node">現在: <span id="hud-node">—</span></span>
+  </div>
+
+  <div id="end-overlay"><div class="box"><h1>フロー終了</h1><button id="btn-again">もう一度</button></div></div>
+  <div id="loading"><div>読み込み中…</div></div>
+
+  <script type="module" src="./flow-player.js"></script>
+</body>
+</html>
