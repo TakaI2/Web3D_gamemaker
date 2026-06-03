@@ -1,238 +1,100 @@
-# 設計書 - ゲームフロー（ノード接続）システム ＜フェーズ1＞
+# 設計書 - ゲームフロー フェーズ2a：敵の攻撃とライフ
 
 要件: `.tmp/requirements.md`
-対象: flow-editor / flow-player（新規）＋ lib/flow-runner ＋ story-player/swing-catch のフローモード
+対象: swing-catch（戦闘モード）中心 ＋ Character Editor（attackHit/menace イベント）＋ サンプルNPCデータ
 
 ---
 
-## 1. 全体アーキテクチャ
-
-```
-  flow-editor/  ── 編集 ──▶  public/flow/*.flow.json  ◀── 読込 ──  flow-player/
-   （ノードグラフ）                                                  （オーケストレータ）
-        │                                                               │
-        └── lib/flow-runner.js（nodes/edges 走査・分岐解決・3D非依存）──┘
-                                                                        │ iframe + postMessage
-                                        ┌───────────────────────────────┴───────────────┐
-                                        ▼                                                ▼
-                              story-player/?flow=1&id=…                      swing-catch/?flow=1
-                              （終了で result:'done'）                  （flow-config 受信→戦闘→result:'win'|'lose'）
-```
-
-設計方針:
-- **flow-runner はグラフ走査のみ**（3D非依存・純粋）。実行（再生/戦闘）は flow-player が iframe で担当。
-- 既存ページ（story-player / swing-catch）を **iframe + postMessage** で再利用。非フロー時は従来動作を維持。
-- **戦闘設定は battle ノードの data にインライン**。flow-player が iframe ロード後に postMessage で渡す（別ファイル不要）。
+## 1. 方針
+- 追加要素はすべて `FLOW`（?flow=1）かつ `battleCfg` ありで作動。非フロー時は一切動かさない（後方互換）。
+- 敵の戦闘は **per-enemy 戦闘コントローラ**（combat）を毎フレーム駆動。state-machine とは独立に「攻撃」を制御し、
+  攻撃中のみ移動を上書きする。表情/視線は従来どおり state-machine。
+- 被弾セリフは既存 bark 機構（npc-speech）に `attackHit`（被弾）/`menace`（予備動作）イベントを足すだけ。
 
 ---
 
-## 2. データモデル（*.flow.json）
-
-```jsonc
-{
-  "version": 1, "id": "chapter1", "title": "第1章",
-  "start": "n_intro",
-  "nodes": [
-    { "id": "n_intro",  "type": "story",  "x": 60,  "y": 120, "data": { "story": "sample.story.json" } },
-    { "id": "n_battle1","type": "battle", "x": 340, "y": 120, "data": { "battle": {
-        "title": "戦闘1",
-        "enemies": ["lily.npc.json", "megu.npc.json"],
-        "stage": "stage.json",
-        "bgm": "",
-        "win":  { "type": "defeatCount", "count": 5 },
-        "lose": { "type": "playerHp",    "hp": 5 }
-      } } },
-    { "id": "n_win",  "type": "story", "x": 620, "y": 40,  "data": { "story": "win.story.json" } },
-    { "id": "n_lose", "type": "story", "x": 620, "y": 220, "data": { "story": "lose.story.json" } },
-    { "id": "n_end",  "type": "end",   "x": 880, "y": 120, "data": {} }
-  ],
-  "edges": [
-    { "from": "n_intro",  "fromPort": "next", "to": "n_battle1" },
-    { "from": "n_battle1","fromPort": "win",  "to": "n_win" },
-    { "from": "n_battle1","fromPort": "lose", "to": "n_lose" },
-    { "from": "n_win",  "fromPort": "next", "to": "n_end" },
-    { "from": "n_lose", "fromPort": "next", "to": "n_end" }
-  ]
-}
+## 2. 定数（swing-catch・FLOW戦闘）
+```
+MELEE_DMG=3, BALL_DMG=1, THROW_DMG=2, TOUCH_DMG=1
+TELEGRAPH_TIME=1.0s, LUNGE_TIME=0.7s
+MELEE_TRIGGER_DIST=7m, MELEE_HIT_RADIUS=1.6m
+TELEGRAPH_SPEED=4, LUNGE_SPEED=14
+RANGED_CD=[2.5,4.0]s, MELEE_CD=3.0s（敵ごとに乱数初期化）
+ENEMY_BALL_SPEED=16, THROW_SPEED=22, THROW_REACH=8m, HAZARD_TIME=2.0s
+INVULN=0.8s, PLAYER_HIT_R=0.5m
+ENEMY_PROJ_TTL=4s
 ```
 
-ノード種別（lib/flow-ops 相当の定数 `NODE_TYPES`）:
-| type | 出力ポート | data |
-|------|-----------|------|
-| `start` | next | （なし） |
-| `story` | next | `{ story: <file> }` |
-| `battle`| win, lose | `{ battle: {enemies[], stage, bgm, win, lose} }` |
-| `end` | （なし） | （なし） |
+## 3. 敵 combat コントローラ（swing-catch）
+createMegu（FLOW時）に追加: `m.combat = { mode:'idle', t:0, cd: randRange(1.5,3.5) }`。
 
-戦闘の勝敗条件種別（`WIN_TYPES`/`LOSE_TYPES`）:
-- win: `defeatCount`(count) … 撃破累計。将来 `bossHp` を追加。
-- lose: `playerHp`(hp) … プレイヤーHP0。将来 `timeout` 等。
+`updateEnemyCombat(m, dt)`（FLOW時、updateMegu 内で呼ぶ。ragdoll/held/downed は return）:
+```
+dist = distanceToPlayer(m)
+switch m.combat.mode:
+  'idle':
+    cd -= dt
+    if cd<=0:
+      if dist < MELEE_TRIGGER_DIST: startMelee(m)         // 近接：予備動作へ
+      else: doRanged(m, dist)                              // 遠距離：弾 or 投擲
+  'telegraph':                                             // 挑発（寄る＋menace bark＋angry表情）
+    approachPlayer(m, dt, TELEGRAPH_SPEED); faceToPlayer(m,dt)
+    t-=dt; if t<=0 { mode='lunge'; t=LUNGE_TIME }
+  'lunge':                                                 // 踏み込み（速い）
+    approachPlayer(m, dt, LUNGE_SPEED); faceToPlayer(m,dt)
+    if dist < MELEE_HIT_RADIUS { onPlayerDamaged(MELEE_DMG, m); endMelee(m) }
+    else { t-=dt; if t<=0 endMelee(m) }
+```
+- startMelee: mode='telegraph', t=TELEGRAPH_TIME, `m.speech?.bark('menace')`, 一時的に angry 表情をcombat側で付与。
+- endMelee: mode='idle', cd=MELEE_CD。
+- doRanged: オブジェクトが近くにあれば 50% で `throwObjectAt(m)`、なければ/残り50% で `fireEnemyBall(m)`。cd=randRange(RANGED_CD)。
+- 攻撃中（telegraph/lunge）は updateMegu の通常移動を抑止（combat が移動を担当）。
 
----
+## 4. 敵の飛び道具
+- **敵弾**: `enemyProjectiles[]`（{mesh,pos,vel,ttl,radius,source}）。`fireEnemyBall(m)`= meguCenter から (player-center) 方向へ ENEMY_BALL_SPEED。
+  `stepEnemyProjectiles(dt)`: 移動・壁/ttl で消滅・プレイヤー命中(dist<radius+PLAYER_HIT_R)で `onPlayerDamaged(BALL_DMG, source)`＋消滅。色を赤系にしてプレイヤー弾と区別。
+- **投擲オブジェクト**: `throwObjectAt(m)`= 最近傍 object(≤THROW_REACH) の vel を player 方向 THROW_SPEED に。`obj.thrownBy=m; obj.hazardT=HAZARD_TIME`。
+  既存 stepObjects はそのまま（飛んでいく）。
 
-## 3. lib/flow-runner.js（グラフ走査・3D非依存）
-
-```js
-export const NODE_TYPES = {
-  start:  { label: '開始', ports: ['next'] },
-  story:  { label: 'ストーリー', ports: ['next'] },
-  battle: { label: '戦闘', ports: ['win', 'lose'] },
-  end:    { label: '終了', ports: [] },
-};
-
-export function createFlow(flow) {
-  const byId = new Map((flow.nodes || []).map(n => [n.id, n]));
-  const edges = flow.edges || [];
-  function getStart() {
-    if (flow.start && byId.has(flow.start)) return byId.get(flow.start);
-    return (flow.nodes || []).find(n => n.type === 'start') || (flow.nodes || [])[0] || null;
-  }
-  function next(nodeId, port) {
-    const e = edges.find(e => e.from === nodeId && e.fromPort === port);
-    return e ? (byId.get(e.to) || null) : null;
-  }
-  return { getStart, getNode: (id) => byId.get(id) || null, next, nodes: flow.nodes || [], edges };
-}
+## 5. 浮遊オブジェクトの対プレイヤー判定（FLOW）
+`updateObjectHazards(dt)`（毎フレーム）:
+```
+for obj in objects:
+  if obj.hazardT>0: obj.hazardT-=dt
+  d = distance(obj.pos, camera)
+  if d < obj.radius + PLAYER_HIT_R:
+    dmg = obj.hazardT>0 ? THROW_DMG : TOUCH_DMG
+    src = obj.hazardT>0 ? obj.thrownBy : null
+    onPlayerDamaged(dmg, src)
+    // プレイヤーから跳ね返す
+    obj.vel.addScaledVector(dirFromPlayer, +); obj.hazardT=0; obj.thrownBy=null
 ```
 
-- story/start 完了 → `next(id, 'next')`。battle → `next(id, 'win'|'lose')`。
-- 接続先なし or end → フロー終了。
+## 6. プレイヤー被弾・ライフ・演出
+- `onPlayerDamaged(amount, src)`:
+  - battleOver/無敵中(battleTime-lastHitT<INVULN) は無視。
+  - lastHitT=battleTime; playerHp=max(0,playerHp-amount); updateBattleHud()。
+  - VFX: 赤ヴィネット(#battle-vfx 不透明度パルス) ＋ カメラシェイク(shakeT=0.25)。
+  - `src?.speech?.bark('attackHit')`（当てた NPC がしゃべる）。
+  - playerHp<=0 → endBattle('lose')。
+- 既存 `updateBattleDamage`（attack状態の近接判定）は撤去し combat の melee に一本化。
+- HUD は既存 buildBattleHud を流用（HP バー＋撃破）。VFX 用 `#battle-vfx`（全画面・pointerEvents none）を追加。
+- カメラシェイク: render で shakeT>0 の間、camera.rotation に微小ランダム付与（毎フレーム減衰）。
 
----
+## 7. データ／エディタ
+- npc `events` に `attackHit`（被弾時）/`menace`（予備動作）を追加可能に。
+- Character Editor `buildEventSpeechPanel` の EVENTS に `['attackHit','攻撃ヒット'],['menace','威嚇']` を追加。
+- サンプル NPC（lily/megu/ayu）に attackHit/menace のセリフを付与（node スクリプトで add-only 注入）。
 
-## 4. flow-player/（オーケストレータ）
-
-`index.html`: 全画面 `#frame`(iframe) ＋ `#hud`(現在ノード表示・再開・← 一覧) ＋ ローディング/終了表示。
-
-`flow-player.js`:
-```
-1. /flow/manifest.json で一覧、?id= or セレクトで *.flow.json 取得 → createFlow。
-2. run(node):
-   - start  → advance(next(node,'next'))
-   - story  → frame.src = '../story-player/?flow=1&id=' + node.data.story
-              （result:'done' 受信で advance(next(node,'next')))
-   - battle → frame.src = '../swing-catch/?flow=1'
-              iframe 'load' で frame.contentWindow.postMessage({type:'flow-config', battle:node.data.battle}, origin)
-              （result:'win'|'lose' 受信で advance(next(node, result)))
-   - end / null → 終了表示（一覧へ）
-3. window 'message' リスナ：origin 検証 → {type:'flow-result', result} で現在ノードを解決し advance。
-4. HUD に現在ノード id/type を表示。
-```
-
-- 多重発火防止: ノードごとに「結果待ち」を1回だけ受ける（フラグ/トークン）。
-- iframe は同一オリジン前提（origin 検証）。
-
----
-
-## 5. story-player フローモード（最小変更）
-
-- `?flow=1` を検出: 開始オーバーレイを出さず、`?id=` のストーリーを `loadStory` 後すぐ `play(0)`。
-- `setOnEnd` で `end` 到達時: `parent.postMessage({type:'flow-result', result:'done'}, location.origin)`。
-- 非フロー時は従来（オーバーレイ・セレクト）。
-
----
-
-## 6. swing-catch フロー(battle)モード（追加・後方互換）
-
-検出: `?flow=1`。親からの `postMessage({type:'flow-config', battle})` を待って戦闘開始。
-
-追加要素（フロー時のみ有効。非フロー時は一切作動させず従来挙動）:
-- **敵構成**: `loadMegus()` を `battle.enemies`（指定 npc ファイル群）で行う（非フローは従来 NPC_FILES）。
-- **ステージ/BGM**: `battle.stage` を読み込み、`battle.bgm` があれば Audio 再生。
-- **プレイヤーHP**: `playerHp`（初期=lose.hp 基準の最大値、例 maxHp=10）。`attack` ステートのNPCが
-  カメラ（プレイヤー）に一定距離内へ来たら、クールダウン付きで 1 ダメージ。0 で敗北。
-- **撃破カウント**: 射撃命中（`hitMegu`）・投擲（`releaseMegu` 後の着地KO）で `defeatCount++`。
-  `win.type==='defeatCount'` の `count` 到達で勝利。
-- **HUD**: HP バーと「撃破 n/total」を簡易表示（フロー時のみ）。
-- **決着**: 勝敗確定で操作を止め、バナー表示後 `parent.postMessage({type:'flow-result', result})`。
-
-実装の隔離: `const FLOW = new URLSearchParams(location.search).get('flow')==='1';` を入口に、
-HP/カウント/HUD/結果通知を `if (FLOW)` で束ねる。既存のゲームループ・操作系はそのまま。
-
-勝敗カウントのフック箇所（既存関数に1行ずつ）:
-| 契機 | 箇所 | 処理 |
-|------|------|------|
-| 射撃命中 | `hitMegu()` | FLOW時 `onDefeat()` |
-| 投擲KO | `releaseMegu()`／landed検出 | FLOW時 `onDefeat()`（過剰カウント防止にCD） |
-| 被ダメ | `updateMegus`/プレイヤー近接判定（新規） | FLOW時 attackNPC接触で `onPlayerHit()` |
-
----
-
-## 7. flow-editor/（ノードグラフ編集）
-
-レイアウト: top（flow選択/新規/保存・開始ノード指定・プレイヤーリンク）＋ center（グラフキャンバス）＋ right（選択ノードのプロパティ）。
-
-グラフ実装:
-- `#canvas`（パン/ズーム可能な内側 `#world` に transform）。ノードは絶対配置 `div`、エッジは `<svg>` のベジェ path。
-- ノード div: ヘッダ（type ラベル＋ id）＋ 入力ポート(左)＋ 出力ポート(右: type ごと next / win,lose)。
-- 操作:
-  - ノードドラッグ移動（x,y 更新・再描画）。
-  - 出力ポート mousedown → ドラッグ → 入力ポート mouseup でエッジ作成（同 fromPort の既存エッジは置換）。
-  - エッジクリックで削除（または選択して Delete）。
-  - 背景ドラッグでパン、ホイールでズーム。
-- ツールバー: ノード追加（start/story/battle/end）、削除、開始ノード指定（選択ノードを start に）、保存、flow 選択読込、新規。
-- 右パネル（プロパティ・データ駆動）:
-  - story: `story` を `/story/manifest.json` のセレクトで選択。
-  - battle: `enemies`（`/npc/manifest.json` から複数選択）、`stage`（`/models/manifest.json`＋stage.json）、`bgm`(text)、
-    `win.count`(number)、`lose.hp`(number)。
-  - start/end: なし。
-- 保存/読込: `POST ../api/save {dir:'flow', filename:'<id>.flow.json', content}`。`/flow/manifest.json` 一覧。
-
-座標は node.x/node.y に保持（RPG-Game の `_editorPositions` 相当をノード自体に持たせる）。
-
----
-
-## 8. vite.config.ts 変更
-
-```ts
-const allowed = { npc:'npc', timeline:'timeline', models:'models', story:'story', flow:'flow' };  // flow 追加
-// /flow/manifest.json（*.flow.json 一覧）を npc 同型で追加
-```
-
----
-
-## 9. 新規/変更ファイル
-
+## 8. 変更ファイル
 | 種別 | パス | 内容 |
 |------|------|------|
-| 新規 | `lib/flow-runner.js` | NODE_TYPES・createFlow（走査/分岐） |
-| 新規 | `flow-player/index.html` `flow-player.js` | オーケストレータ（iframe + postMessage） |
-| 新規 | `flow-editor/index.html` `flow-editor.js` | ノードグラフ編集 |
-| 新規 | `public/flow/sample.flow.json` | サンプル（intro→battle→win/lose→end） |
-| 変更 | `story-player/story-player.js` | `?flow=1` 自動再生＋終了通知 |
-| 変更 | `swing-catch/swing-catch.js` | `?flow=1` 戦闘モード（HP/撃破/HUD/結果通知） |
-| 変更 | `vite.config.ts` | flow 保存許可・/flow/manifest.json |
-| 変更 | `hub/index.html` | Flow Player / Flow Editor リンク |
+| 変更 | `swing-catch/swing-catch.js` | combat コントローラ・敵弾・投擲・接触ダメ・被弾/ライフ/VFX |
+| 変更 | `character-editor/character-editor.js` | イベント種別に attackHit/menace |
+| データ | `public/npc/*.npc.json` | attackHit/menace セリフ（コミット対象外・検証用） |
 
----
-
-## 10. 定数（ハードコード回避）
-
-| 定数 | 値 | 場所 |
-|------|----|------|
-| PLAYER_MAX_HP | 10 | swing-catch(FLOW) |
-| HIT_DAMAGE / HIT_COOLDOWN | 1 / 1.0s | swing-catch(FLOW) |
-| ATTACK_HIT_RANGE | 2.5m | swing-catch(FLOW) |
-| DEFEAT_COOLDOWN | 0.5s | swing-catch(FLOW) |
-| NODE_TYPES / WIN_TYPES / LOSE_TYPES | スキーマ | lib/flow-runner（+editor） |
-
----
-
-## 11. エッジケース・後方互換
-
-- 不正ノード/未接続ポート → フロー終了 or 警告継続（NFR-05）。
-- story/battle ファイル欠如 → iframe 側で警告、可能なら即 result 返却（フロー停止回避）。
-- swing-catch 非フロー起動 → HP/カウント/HUD/通知を一切作動させない（後方互換）。
-- iframe origin 不一致の message は無視。
-- 戦闘が決着しない場合に備え、HUD に「降参/敗北」操作（任意）→ フェーズ2で拡充。
-
----
-
-## 12. 実装順序（tasks.md）
-
-1. lib/flow-runner.js（＋Nodeでロジックテスト）
-2. story-player フローモード
-3. swing-catch フロー戦闘モード（HP/撃破/HUD/通知）
-4. flow-player（オーケストレータ）＋ サンプル flow
-5. flow-editor（グラフ編集・保存）
-6. vite.config・hub リンク・実機/回帰検証
+## 9. エッジ/後方互換
+- 非フロー：combat/敵弾/接触ダメ/VFX/HUD すべて未作動。
+- 敵が ragdoll/held/downed 中は攻撃しない。撃破された敵は攻撃停止。
+- 敵弾/投擲オブジェクトはプレイヤーのみ対象（敵同士・自分には当てない）。
+- 無敵時間で多段ヒットの即死を防止。
