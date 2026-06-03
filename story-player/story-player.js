@@ -4,6 +4,7 @@
 import { createStoryStage } from '../lib/story-stage.js';
 
 const $ = (id) => document.getElementById(id);
+const FLOW = new URLSearchParams(location.search).get('flow') === '1';   // フロー（flow-player）からの埋め込み
 
 async function fetchStoryList() {
   try { const r = await fetch('../story/manifest.json'); if (r.ok) { const a = await r.json(); if (Array.isArray(a) && a.length) return a; } }
@@ -44,7 +45,10 @@ async function main() {
     startOverlay.style.display = 'flex';
   }
 
-  stage.setOnEnd(() => { startOverlay.style.display = 'flex'; });
+  stage.setOnEnd(() => {
+    if (FLOW) { try { parent.postMessage({ type: 'flow-result', result: 'done' }, location.origin); } catch { /* noop */ } return; }
+    startOverlay.style.display = 'flex';
+  });
 
   function start() {
     if (startOverlay.style.display === 'none') return;
@@ -60,7 +64,14 @@ async function main() {
   const qid = new URLSearchParams(location.search).get('id');
   const first = qid ? (qid.endsWith('.story.json') ? qid : qid + '.story.json') : files[0];
   if (qid && files.includes(first)) select.value = first;
-  await loadAndArm(select.value || first);
+  await loadAndArm(qid ? first : (select.value || first));
+
+  if (FLOW) {
+    // フロー埋め込み: UI を隠して自動再生
+    $('topbar').style.display = 'none';
+    startOverlay.style.display = 'none';
+    stage.play(0);
+  }
 
   $('loading').classList.add('hidden');
   setTimeout(() => { $('loading').style.display = 'none'; }, 400);

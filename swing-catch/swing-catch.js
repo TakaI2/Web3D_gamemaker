@@ -54,6 +54,13 @@ const BUBBLE_Y_OFFSET        = 1.6;   // 吹き出しを出す頭上の高さ（
 const BUBBLE_MAX_DIST        = 25;    // この距離より遠い NPC の吹き出しは隠す(m)
 const LANDED_SPEED_THRESHOLD = 4.0;   // landed bark を出す落下速度しきい値(m/s)
 const LANDED_MARGIN          = 0.5;   // 床近傍とみなす高さ(m)
+// ── フロー戦闘モード（flow-player から ?flow=1 で埋め込み。非フロー時は一切作動しない）──
+const FLOW = new URLSearchParams(location.search).get('flow') === '1';
+const PLAYER_MAX_HP   = 10;    // 既定の最大HP（battle.lose.hp で上書き）
+const HIT_DAMAGE      = 1;     // 攻撃NPC接触の1回ダメージ
+const HIT_COOLDOWN    = 1.0;   // 被ダメ間隔(秒)
+const ATTACK_HIT_RANGE = 2.5;  // 攻撃NPCがこの距離内でプレイヤーに当たる(m)
+const DEFEAT_COOLDOWN = 0.5;   // 同一NPCの撃破カウント間隔(秒)
 const ARENA_BOUNDS = {
   min: new THREE.Vector3(-ROOM.x / 2, 0, -ROOM.z / 2),
   max: new THREE.Vector3( ROOM.x / 2, ROOM.y, ROOM.z / 2),
@@ -73,6 +80,13 @@ const params = {
 // ── シーン globals ─────────────────────────────────────────────
 let renderer, scene, camera;
 let speechUI = null;            // セリフ表示（下部ウィンドウ＋頭上吹き出し）
+// フロー戦闘の状態（FLOW 時のみ使用）
+let battleCfg   = null;         // flow-config で受け取る戦闘設定
+let playerHp    = 0, playerMaxHp = 0;
+let defeatCount = 0, defeatTarget = 0;
+let battleTime  = 0, lastHitT = -999;
+let battleOver  = false;
+let battleHud   = null, battleBgm = null;
 let worldOctree    = null;
 let playerCollider = null;
 let playerOnFloor  = false;
@@ -503,15 +517,88 @@ async function createMegu(bundle, pos) {
   return m;
 }
 
-async function loadMegus() {
-  // public/npc/ の全 NPC を1体ずつ出現させる
-  for (const filename of NPC_FILES) {
+async function loadMegus(files) {
+  // public/npc/ の NPC を1体ずつ出現させる（フロー戦闘では battle.enemies を使用）
+  for (const filename of (files || NPC_FILES)) {
     const bundle = await fetchBundle(filename);
     if (!bundle || !bundle.vrm) { console.warn('NPC 読み込み失敗:', filename); continue; }
     const pos = new THREE.Vector3(randRange(-5, 5), randRange(1.5, ROOM.y - 2.5), randRange(-5, 5));
     const m = await createMegu(bundle, pos);
     if (m) megus.push(m);
   }
+}
+
+// ============================================================
+// フロー戦闘モード（FLOW 時のみ）
+// ============================================================
+
+// 親(flow-player)から戦闘設定を受け取り戦闘開始
+function startBattle(cfg) {
+  battleCfg = cfg || {};
+  playerMaxHp = (cfg && cfg.lose && cfg.lose.hp) || PLAYER_MAX_HP;
+  playerHp = playerMaxHp;
+  defeatTarget = (cfg && cfg.win && cfg.win.count) || 5;
+  defeatCount = 0; battleOver = false; battleTime = 0; lastHitT = -999;
+  if (cfg && cfg.bgm) { try { battleBgm = new Audio(new URL('../assets/' + cfg.bgm, import.meta.url).href); battleBgm.loop = true; battleBgm.volume = 0.6; battleBgm.play().catch(() => {}); } catch { /* noop */ } }
+  buildBattleHud();
+  const enemies = (cfg && Array.isArray(cfg.enemies) && cfg.enemies.length) ? cfg.enemies : NPC_FILES;
+  loadMegus(enemies).catch(e => console.warn('戦闘NPC読み込み失敗:', e));
+}
+
+function onDefeat(m) {
+  if (!FLOW || battleOver) return;
+  if (battleTime - (m._lastDefeatT || -999) < DEFEAT_COOLDOWN) return;
+  m._lastDefeatT = battleTime;
+  defeatCount++;
+  updateBattleHud();
+  if (defeatTarget > 0 && defeatCount >= defeatTarget) endBattle('win');
+}
+
+function onPlayerHit() {
+  if (!FLOW || battleOver) return;
+  if (battleTime - lastHitT < HIT_COOLDOWN) return;
+  lastHitT = battleTime;
+  playerHp = Math.max(0, playerHp - HIT_DAMAGE);
+  updateBattleHud();
+  if (battleHud) { battleHud.style.boxShadow = 'inset 0 0 60px rgba(255,0,0,0.6)'; setTimeout(() => { if (battleHud) battleHud.style.boxShadow = 'none'; }, 120); }
+  if (playerHp <= 0) endBattle('lose');
+}
+
+// 攻撃ステートのNPCがプレイヤー(カメラ)に近接していたら被ダメ
+function updateBattleDamage() {
+  if (!FLOW || battleOver) return;
+  for (const m of megus) {
+    if (!m.dir || m.dir.state !== 'attack' || m.ragdoll.active) continue;
+    meguCenter(m, _meguC);
+    if (camera.position.distanceTo(_meguC) < ATTACK_HIT_RANGE) { onPlayerHit(); break; }
+  }
+}
+
+function buildBattleHud() {
+  if (battleHud) return;
+  battleHud = document.createElement('div');
+  battleHud.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:60;display:flex;gap:16px;align-items:center;background:rgba(0,0,0,0.5);color:#fff;font:14px system-ui;padding:8px 16px;border-radius:8px;pointer-events:none;';
+  battleHud.innerHTML = '<span id="b-hp"></span><span id="b-def"></span>';
+  document.body.appendChild(battleHud);
+  updateBattleHud();
+}
+function updateBattleHud() {
+  if (!battleHud) return;
+  const bars = 20, filled = Math.round((playerHp / Math.max(1, playerMaxHp)) * bars);
+  const hp = document.getElementById('b-hp'), df = document.getElementById('b-def');
+  if (hp) hp.textContent = `HP ${'■'.repeat(filled)}${'□'.repeat(bars - filled)} ${playerHp}/${playerMaxHp}`;
+  if (df) df.textContent = `撃破 ${defeatCount}/${defeatTarget}`;
+}
+
+function endBattle(result) {
+  if (battleOver) return;
+  battleOver = true;
+  if (battleBgm) { try { battleBgm.pause(); } catch { /* noop */ } }
+  const banner = document.createElement('div');
+  banner.textContent = result === 'win' ? 'WIN!' : 'LOSE…';
+  banner.style.cssText = 'position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;font:bold 64px system-ui;color:' + (result === 'win' ? '#9fd' : '#f88') + ';background:rgba(0,0,0,0.45);';
+  document.body.appendChild(banner);
+  setTimeout(() => { try { parent.postMessage({ type: 'flow-result', result }, location.origin); } catch { /* noop */ } }, 1400);
 }
 
 // 照準（カメラレイ）に最も近い m のマント頂点を CPU シャドウから探す。{ index, along } or null。
@@ -544,6 +631,7 @@ function hitMegu(m, dir) {
   applyRagdollImpulse(m.ragdoll, dir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'chest');
   m.grabbed = false;
   m.recoverTimer = MEGU_RECOVER_DELAY + LOOK_DURATION;
+  onDefeat(m);   // フロー戦闘: 射撃命中で撃破カウント
 }
 
 // 照準レイに最も近い m の関節を探す。飛行中はボーンのワールド位置、ラグドール中は粒子位置を使う
@@ -591,6 +679,7 @@ function releaseMegu(m) {
   m.grabbed = false;
   m.recoverTimer = MEGU_RECOVER_DELAY + LOOK_DURATION;   // 離した後もしばらくラグドール（落下）→最後の1秒は見つめる→復帰
   if (m.speech) m.speech.bark('thrown');
+  onDefeat(m);   // フロー戦闘: 投擲で撃破カウント
   updateCrosshair();
 }
 
@@ -1205,6 +1294,7 @@ function render() {
   syncObjectMeshes();
   updateMegus(dt);
   if (speechUI) speechUI.update(dt, npcScreenPos);
+  if (FLOW && battleCfg && !battleOver) { battleTime += dt; updateBattleDamage(); }
   renderer.render(scene, camera);
 }
 
@@ -1274,7 +1364,16 @@ async function init() {
   loadSelectedModels().then(() => { if (modelTemplates.length) setObjectCount(params.objectCount); })
     .catch(e => console.warn('選択モデル読み込み失敗:', e));
   loadStage().catch(e => console.warn('ステージ読み込み失敗:', e));
-  loadMegus().catch(e => console.warn('Megu 読み込み失敗:', e));
+  if (FLOW) {
+    // フロー戦闘: 親(flow-player)からの flow-config を待って敵を出現・戦闘開始
+    window.addEventListener('message', (e) => {
+      if (e.origin !== location.origin) return;
+      if (e.data && e.data.type === 'flow-config') startBattle(e.data.battle);
+    });
+    try { parent.postMessage({ type: 'flow-ready' }, location.origin); } catch { /* noop */ }
+  } else {
+    loadMegus().catch(e => console.warn('Megu 読み込み失敗:', e));
+  }
   setupUI();
   setupControls();
   setupTouchControls();   // #joystick-base があれば（モバイル版ビルド）タッチ操作を有効化
