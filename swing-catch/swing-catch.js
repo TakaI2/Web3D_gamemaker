@@ -87,6 +87,7 @@ const params = {
 // ── シーン globals ─────────────────────────────────────────────
 let renderer, scene, camera;
 let speechUI = null;            // セリフ表示（下部ウィンドウ＋頭上吹き出し）
+let stageDecor = null;          // 現在のステージ置物グループ（差し替え用）
 // フロー戦闘の状態（FLOW 時のみ使用）
 let battleCfg   = null;         // flow-config で受け取る戦闘設定
 let playerHp    = 0, playerMaxHp = 0;
@@ -230,10 +231,15 @@ function prepTemplate(gltfScene, scale) {
   return { group, radius: Math.max(0.3, maxDim * s * 0.5) };
 }
 
-// stage.json の置物を静的配置（飛ばない・物理なしの装飾）。底面中心が原点のテンプレートを clone。
-async function loadStage() {
+// ステージ置物を静的配置（飛ばない・物理なしの装飾）。stageRef 指定で public/stages/<id>.stage.json、
+// 無指定は従来の public/models/stage.json（サンドボックス既定）。
+async function loadStage(stageRef) {
+  const url = stageRef && /\.stage\.json$/.test(stageRef)
+    ? new URL('../stages/' + encodeURIComponent(stageRef), window.location.href).href
+    : new URL('../models/stage.json', window.location.href).href;
   let stageItems = [];
-  try { const r = await fetch('../models/stage.json'); if (r.ok) { const j = await r.json(); stageItems = j.items || []; } } catch { /* 無ければ空 */ }
+  try { const r = await fetch(url); if (r.ok) { const j = await r.json(); stageItems = j.items || []; } } catch { /* 無ければ空 */ }
+  if (stageDecor) { scene.remove(stageDecor); stageDecor = null; }
   if (!stageItems.length) return;
   const loader = new GLTFLoader();
   const cache = new Map();
@@ -259,6 +265,7 @@ async function loadStage() {
       decor.add(mesh);
     } catch (e) { console.warn('ステージ置物の読込失敗:', it.model, e); }
   }
+  stageDecor = decor;
   scene.add(decor);
 }
 
@@ -556,6 +563,7 @@ function startBattle(cfg) {
   defeatCount = 0; battleOver = false; battleTime = 0; lastHitT = -999; shakeT = 0;
   for (const p of enemyProjectiles) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); }
   enemyProjectiles.length = 0;
+  if (cfg && cfg.stage) loadStage(cfg.stage).catch(e => console.warn('ステージ読み込み失敗:', e));
   if (cfg && cfg.bgm) { try { battleBgm = new Audio(new URL('../assets/' + cfg.bgm, import.meta.url).href); battleBgm.loop = true; battleBgm.volume = 0.6; battleBgm.play().catch(() => {}); } catch { /* noop */ } }
   buildBattleHud();
   const enemies = (cfg && Array.isArray(cfg.enemies) && cfg.enemies.length) ? cfg.enemies : NPC_FILES;
@@ -1498,15 +1506,15 @@ async function init() {
   // 選択モデル(GLB)を読み込んだら、プリミティブを選択モデルに置き換えて再生成
   loadSelectedModels().then(() => { if (modelTemplates.length) setObjectCount(params.objectCount); })
     .catch(e => console.warn('選択モデル読み込み失敗:', e));
-  loadStage().catch(e => console.warn('ステージ読み込み失敗:', e));
   if (FLOW) {
-    // フロー戦闘: 親(flow-player)からの flow-config を待って敵を出現・戦闘開始
+    // フロー戦闘: 親(flow-player)からの flow-config を待って敵/ステージを出現・戦闘開始
     window.addEventListener('message', (e) => {
       if (e.origin !== location.origin) return;
       if (e.data && e.data.type === 'flow-config') startBattle(e.data.battle);
     });
     try { parent.postMessage({ type: 'flow-ready' }, location.origin); } catch { /* noop */ }
   } else {
+    loadStage().catch(e => console.warn('ステージ読み込み失敗:', e));   // サンドボックス既定（models/stage.json）
     loadMegus().catch(e => console.warn('Megu 読み込み失敗:', e));
   }
   setupUI();

@@ -39,7 +39,11 @@
 
   <div id="topbar">
     <a href="../hub/">← 一覧</a>
-    <button id="btn-save" class="prim">保存（ゲームに反映）</button>
+    <select id="stage-select" title="public/stages/ から読込" style="width:auto"></select>
+    <button id="btn-new">新規</button>
+    <input id="stage-id" type="text" placeholder="ステージID" style="width:120px;background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.25);color:#fff;padding:6px 8px;border-radius:4px;font-size:12px;">
+    <button id="btn-import">現行stage取込</button>
+    <button id="btn-save" class="prim">保存</button>
   </div>
 
   <div id="left" class="panel">

@@ -154,7 +154,7 @@ function addNode(type) {
 }
 function defaultData(type) {
   if (type === 'story') return { story: storyFiles[0] || '' };
-  if (type === 'battle') return { battle: { title: '戦闘', enemies: npcFiles.slice(0, 2), stage: 'stage.json', bgm: '', win: { type: 'defeatCount', count: 5 }, lose: { type: 'playerHp', hp: 5 } } };
+  if (type === 'battle') return { battle: { title: '戦闘', enemies: npcFiles.slice(0, 2), stage: '', bgm: '', win: { type: 'defeatCount', count: 5 }, lose: { type: 'playerHp', hp: 5 } } };
   return {};
 }
 function deleteNode(id) {
@@ -196,7 +196,7 @@ function renderProps() {
       }
       panel.appendChild(wrap);
     }
-    panel.appendChild(rowSelect('ステージ', ['stage.json', ...stageFiles], b.stage || '', v => { b.stage = v; }));
+    panel.appendChild(rowSelect('ステージ', ['', ...stageFiles], b.stage || '', v => { b.stage = v; }));
     panel.appendChild(rowText('BGM', b.bgm || '', v => { b.bgm = v; }));
     b.win = b.win || { type: 'defeatCount', count: 5 };
     b.lose = b.lose || { type: 'playerHp', hp: 5 };
@@ -212,7 +212,7 @@ function renderProps() {
 }
 function rowText(label, val, on) { const r = document.createElement('div'); r.className = 'row'; r.innerHTML = `<label>${label}</label>`; const i = document.createElement('input'); i.type = 'text'; i.value = val; i.oninput = () => on(i.value); r.appendChild(i); return r; }
 function rowNum(label, val, on) { const r = document.createElement('div'); r.className = 'row'; r.innerHTML = `<label>${label}</label>`; const i = document.createElement('input'); i.type = 'number'; i.value = val; i.onchange = () => on(parseFloat(i.value)); r.appendChild(i); return r; }
-function rowSelect(label, opts, val, on) { const r = document.createElement('div'); r.className = 'row'; r.innerHTML = `<label>${label}</label>`; const s = document.createElement('select'); for (const o of opts) { const op = document.createElement('option'); op.value = o; op.textContent = o; s.appendChild(op); } s.value = val; s.onchange = () => on(s.value); r.appendChild(s); return r; }
+function rowSelect(label, opts, val, on) { const r = document.createElement('div'); r.className = 'row'; r.innerHTML = `<label>${label}</label>`; const s = document.createElement('select'); for (const o of opts) { const op = document.createElement('option'); op.value = o; op.textContent = o === '' ? '(なし)' : o; s.appendChild(op); } s.value = val; s.onchange = () => on(s.value); r.appendChild(s); return r; }
 
 // ── 保存/読込 ──
 function syncMeta() { flow.id = $('flow-id').value || 'untitled'; flow.title = $('flow-title').value; }
@@ -252,7 +252,7 @@ async function init() {
   [storyFiles, npcFiles, stageFiles, speechFiles] = await Promise.all([
     fetchList('../story/manifest.json', []),
     fetchList('../npc/manifest.json', []),
-    fetchList('../models/manifest.json', []),
+    fetchList('../stages/manifest.json', []),
     fetchList('../speech/manifest.json', []),
   ]);
   const picker = $('node-picker'); picker.innerHTML = '';

@@ -182,22 +182,52 @@ function onContext(e) {
   if (it) removeItem(it);
 }
 
-// ── 保存/読込 ──
+// ── 保存/読込（複数ステージ: public/stages/<id>.stage.json）──
+function clearStage() { for (const it of [...items]) removeItem(it); }
+
+function stageData() { return { version: 1, room: ROOM, items: items.map(i => ({ model: i.file, x: i.x, y: i.y, z: i.z, ry: i.ry, scale: i.scale })) }; }
+
 async function save() {
-  const data = { room: ROOM, items: items.map(i => ({ model: i.file, x: i.x, y: i.y, z: i.z, ry: i.ry, scale: i.scale })) };
+  const id = ($('stage-id').value || '').trim();
+  if (!id) { toast('ステージIDを入力してください'); return; }
+  const filename = id + '.stage.json';
   try {
-    const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'models', filename: 'stage.json', content: data }) });
-    if (r.ok) { const j = await r.json(); toast(`保存: ${j.path}（${items.length}個）`); return; }
+    const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'stage', filename, content: stageData() }) });
+    if (r.ok) { const j = await r.json(); toast(`保存: ${j.path}（${items.length}個）`); await populateStageSelect(filename); return; }
   } catch { /* noop */ }
-  toast('保存に失敗（開発サーバーが必要）');
+  // フォールバック: ダウンロード
+  const blob = new Blob([JSON.stringify(stageData(), null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+  toast('ダウンロードしました（サーバー保存不可）');
 }
 
-async function loadStage() {
-  try {
-    const r = await fetch('../models/stage.json'); if (!r.ok) return;
-    const j = await r.json();
-    for (const it of (j.items || [])) await placeModel(it.model, it.x, it.z, it.ry || 0, it.y || 0);
-  } catch { /* 無ければ空 */ }
+async function loadStageFile(file) {
+  clearStage();
+  try { const r = await fetch('../stages/' + file); if (r.ok) { const j = await r.json(); for (const it of (j.items || [])) await placeModel(it.model, it.x, it.z, it.ry || 0, it.y || 0); } }
+  catch { /* noop */ }
+}
+
+// 旧 models/stage.json を取り込む（移行用）
+async function importLegacy() {
+  clearStage();
+  try { const r = await fetch('../models/stage.json'); if (r.ok) { const j = await r.json(); for (const it of (j.items || [])) await placeModel(it.model, it.x, it.z, it.ry || 0, it.y || 0); toast('現行 stage.json を取り込みました'); } else toast('現行 stage.json がありません'); }
+  catch { toast('取込失敗'); }
+}
+
+async function populateStageSelect(current) {
+  const sel = $('stage-select');
+  let files = [];
+  try { const r = await fetch('../stages/manifest.json'); if (r.ok) files = await r.json(); } catch { /* noop */ }
+  sel.innerHTML = '<option value="">(新規)</option>';
+  for (const f of files) { const o = document.createElement('option'); o.value = f; o.textContent = f.replace(/\.stage\.json$/, ''); sel.appendChild(o); }
+  if (current && files.includes(current)) sel.value = current;
+  sel.onchange = async () => {
+    const f = sel.value;
+    if (!f) { clearStage(); $('stage-id').value = ''; return; }
+    $('stage-id').value = f.replace(/\.stage\.json$/, '');
+    await loadStageFile(f);
+  };
+  return files;
 }
 
 // ── init ──
@@ -236,9 +266,14 @@ async function init() {
   buildPalette();
   generatePaletteThumbs();   // サムネを順次生成（非同期）
 
-  await loadStage();
+  // ステージ一覧を読み、あれば先頭を表示、無ければ旧 stage.json を取り込んで継続
+  const files = await populateStageSelect();
+  if (files.length) { $('stage-select').value = files[0]; $('stage-id').value = files[0].replace(/\.stage\.json$/, ''); await loadStageFile(files[0]); }
+  else { await importLegacy(); }
 
   $('btn-save').onclick = save;
+  $('btn-new').onclick = () => { clearStage(); $('stage-id').value = ''; $('stage-select').value = ''; };
+  $('btn-import').onclick = importLegacy;
   $('btn-del').onclick = () => { if (selected) removeItem(selected); };
   for (const id of ['px', 'pz', 'py', 'ry']) $(id).oninput = applyProps;
   renderer.domElement.addEventListener('pointerdown', onDown);
