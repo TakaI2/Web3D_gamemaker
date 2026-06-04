@@ -15,6 +15,7 @@ import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { createNpcStateMachine } from '../lib/npc-state-machine.js';
 import { createNpcSpeech } from '../lib/npc-speech.js';
 import { createSpeechUI } from '../lib/speech-ui.js';
+import { defaultSpeechFile, fetchSpeechSet, buildSpeechCharacter, speechFromLegacyCharacter } from '../lib/speech-set.js';
 import { positionWorld, mix, color } from 'https://esm.sh/three@0.184.0/tsl';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 
@@ -461,8 +462,8 @@ async function fetchBundle(filename) {
   return null;
 }
 
-// バンドルから NPC を1体生成して返す（VRM は個体ごとに別インスタンス）。
-async function createMegu(bundle, pos) {
+// バンドルから NPC を1体生成して返す（VRM は個体ごとに別インスタンス）。speechData は分離した反応セリフ。
+async function createMegu(bundle, pos, speechData) {
   const loader = new GLTFLoader();
   loader.register(p => new VRMLoaderPlugin(p));
   const gltf = await loader.loadAsync(URL.createObjectURL(dataURIToBlob(bundle.vrm)));
@@ -515,7 +516,8 @@ async function createMegu(bundle, pos) {
     grabbed: false, clothGrabbed: false, grabBone: 'chest', grabOffset: new THREE.Vector3(), recoverTimer: 0,
   };
   // セリフ：発話開始時に下部ウィンドウ＋頭上吹き出しへ流す
-  m.speech = createNpcSpeech(vrm, bundle.character, {
+  const speechChar = buildSpeechCharacter(speechData, (bundle.character && bundle.character.displayName) || '');
+  m.speech = createNpcSpeech(vrm, speechChar, {
     onLineStart: (speaker, text, cps) => {
       if (!speechUI) return;
       speechUI.showBottom(speaker, text, cps);
@@ -527,11 +529,16 @@ async function createMegu(bundle, pos) {
 
 async function loadMegus(files) {
   // public/npc/ の NPC を1体ずつ出現させる（フロー戦闘では battle.enemies を使用）
-  for (const filename of (files || NPC_FILES)) {
-    const bundle = await fetchBundle(filename);
-    if (!bundle || !bundle.vrm) { console.warn('NPC 読み込み失敗:', filename); continue; }
+  // enemies の各要素は "lily.npc.json"（規約 speech）か { npc, speech }（speech 上書き）。
+  for (const entry of (files || NPC_FILES)) {
+    const npcFile = typeof entry === 'string' ? entry : entry.npc;
+    const speechFile = (entry && typeof entry === 'object' && entry.speech) || defaultSpeechFile(npcFile);
+    const bundle = await fetchBundle(npcFile);
+    if (!bundle || !bundle.vrm) { console.warn('NPC 読み込み失敗:', npcFile); continue; }
+    let speechData = await fetchSpeechSet(speechFile);
+    if (!speechData) speechData = speechFromLegacyCharacter(bundle.character);   // 移行前 npc.json の救済
     const pos = new THREE.Vector3(randRange(-5, 5), randRange(1.5, ROOM.y - 2.5), randRange(-5, 5));
-    const m = await createMegu(bundle, pos);
+    const m = await createMegu(bundle, pos, speechData);
     if (m) megus.push(m);
   }
 }

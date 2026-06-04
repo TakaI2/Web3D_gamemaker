@@ -13,6 +13,7 @@ import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse }
   from '../lib/vrm-ragdoll.js';
 import { createLipSync } from '../lib/lip-sync.js';
+import { fetchSpeechSet, speechFromLegacyCharacter } from '../lib/speech-set.js';
 
 const STATES = ['idle', 'alert', 'attack', 'taunt', 'downed', 'recovering'];
 const STATE_LABEL = { idle: '通常 (idle)', alert: '警戒 (alert)', attack: '攻撃 (attack)', taunt: '挑発 (taunt)', downed: 'ダウン (downed)', recovering: '復帰 (recovering)' };
@@ -57,6 +58,7 @@ let renderer, scene, camera, controls;
 let bundle = null;             // 読み込んだ .npc.json（書き出しのベース）
 let vrm = null, mixer = null, action = null, cloth = null, ragdoll = null;
 let characterDef = defaultCharacter();
+let speechDef = { version: 1, id: '', displayName: '', states: {}, events: {} };  // 反応セリフ（*.speech.json）
 let exprNames = [];            // この VRM が持つ表情プリセット名
 let editorState = 'idle';      // プレビュー中の状態
 let mode = 'preview';          // 'preview' | 'sim'
@@ -138,9 +140,14 @@ async function loadBundleObject(b) {
     catch (e) { console.warn('cloth 生成失敗', e); }
   }
 
-  // character 定義（既存があれば取り込み、無ければ既定）
+  // character 定義（既存があれば取り込み、無ければ既定）。セリフは別ファイル(speech.json)へ分離済み。
   characterDef = b.character ? mergeCharacter(b.character) : defaultCharacter();
   characterDef.displayName = characterDef.displayName || b.name || '';
+
+  // 反応セリフ（*.speech.json）を読み込む。無ければ npc.json 内の旧インライン speech から救済、それも無ければ空。
+  const speechName = (b.name || 'character') + '.speech.json';
+  const sd = await fetchSpeechSet(speechName) || speechFromLegacyCharacter(b.character) || { states: {}, events: {} };
+  speechDef = { version: 1, id: b.name || '', displayName: sd.displayName || characterDef.displayName, states: sd.states || {}, events: sd.events || {} };
 
   // この VRM が持つ表情名
   exprNames = EXPR_PRESETS.filter(n => hasExpression(n));
@@ -403,16 +410,16 @@ function buildSpeechPanel() {
   const el = document.getElementById('speech-panel');
   if (!el) return;
   el.innerHTML = '';
-  const st = characterDef.states[editorState];
+  const sp0 = speechDef.states[editorState];   // speech.json 側（state→speechオブジェクト）
 
-  if (!st.speech) {
+  if (!sp0) {
     const add = document.createElement('button');
     add.className = 'act'; add.textContent = '＋ セリフを追加';
-    add.onclick = () => { st.speech = { mode: 'once', intervalMs: 1500, charsPerSecond: 8, lines: [''] }; buildSpeechPanel(); };
+    add.onclick = () => { speechDef.states[editorState] = { mode: 'once', intervalMs: 1500, charsPerSecond: 8, lines: [''] }; buildSpeechPanel(); };
     el.appendChild(add);
     return;
   }
-  const sp = st.speech;
+  const sp = sp0;
 
   // mode / intervalMs / charsPerSecond
   const cfg = document.createElement('div');
@@ -436,7 +443,7 @@ function buildSpeechPanel() {
 
   const rm = document.createElement('button');
   rm.className = 'act'; rm.textContent = '✕ セリフ設定を削除';
-  rm.onclick = () => { delete st.speech; buildSpeechPanel(); };
+  rm.onclick = () => { delete speechDef.states[editorState]; buildSpeechPanel(); };
   el.appendChild(rm);
 }
 
@@ -444,15 +451,15 @@ function buildEventSpeechPanel() {
   const el = document.getElementById('event-speech-panel');
   if (!el) return;
   el.innerHTML = '';
-  if (!characterDef.events) characterDef.events = {};
+  if (!speechDef.events) speechDef.events = {};
   const EVENTS = [['grabbed', '掴まれた'], ['thrown', '投げられた'], ['landed', '衝突 / 着地'], ['menace', '威嚇（攻撃の予備動作）'], ['attackHit', '攻撃ヒット（プレイヤーに命中）']];
   for (const [key, lbl] of EVENTS) {
     const h = document.createElement('div');
     h.style.cssText = 'color:#ffd9a0;font-size:11px;font-weight:700;margin:8px 0 2px;';
     h.textContent = `${lbl} (${key})`;
     el.appendChild(h);
-    if (!characterDef.events[key]) characterDef.events[key] = { lines: [] };
-    renderLineList(el, characterDef.events[key].lines, buildEventSpeechPanel, () => 8);
+    if (!speechDef.events[key]) speechDef.events[key] = { lines: [] };
+    renderLineList(el, speechDef.events[key].lines, buildEventSpeechPanel, () => 8);
   }
 }
 
@@ -500,26 +507,38 @@ function startSim(held) {
   recoverTimer = (characterDef.behavior.recoverDelaySec ?? 2.5) + LOOK_DURATION;
 }
 
-// 保存前に空のセリフ行・空の speech/events を間引いた character を返す（元データは変更しない）
+const lineNonEmpty = (l) => (typeof l === 'string' ? l.trim() : (l && l.text || '').trim());
+const cleanLines = (lines) => (Array.isArray(lines) ? lines.filter(lineNonEmpty) : []);
+
+// npc.json 保存用：セリフ（speech/events）は別ファイル(speech.json)へ分離したので character からは除去する。
 function cleanCharacter(c) {
-  const lineNonEmpty = (l) => (typeof l === 'string' ? l.trim() : (l && l.text || '').trim());
-  const cleanLines = (lines) => (Array.isArray(lines) ? lines.filter(lineNonEmpty) : []);
   const out = JSON.parse(JSON.stringify(c));
-  for (const s of Object.keys(out.states || {})) {
-    const sp = out.states[s].speech;
-    if (sp) {
-      sp.lines = cleanLines(sp.lines);
-      if (!sp.lines.length) delete out.states[s].speech;
-    }
-  }
-  if (out.events) {
-    for (const k of Object.keys(out.events)) {
-      out.events[k].lines = cleanLines(out.events[k].lines);
-      if (!out.events[k].lines.length) delete out.events[k];
-    }
-    if (!Object.keys(out.events).length) delete out.events;
-  }
+  for (const s of Object.keys(out.states || {})) { if (out.states[s].speech) delete out.states[s].speech; }
+  delete out.events;
   return out;
+}
+
+// 反応セリフを speech.json として保存（空行/空セットは間引く）
+async function saveSpeech() {
+  if (!bundle) { toast('先に NPC を読み込んでください'); return; }
+  const id = bundle.name || 'character';
+  const out = { version: 1, id, displayName: speechDef.displayName || characterDef.displayName || id, states: {}, events: {} };
+  for (const [s, sp] of Object.entries(speechDef.states || {})) {
+    const lines = cleanLines(sp.lines);
+    if (lines.length) out.states[s] = { ...sp, lines };
+  }
+  for (const [k, ev] of Object.entries(speechDef.events || {})) {
+    const lines = cleanLines(ev.lines);
+    if (lines.length) out.events[k] = { ...ev, lines };
+  }
+  const filename = `${id}.speech.json`;
+  try {
+    const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'speech', filename, content: out }) });
+    if (r.ok) { const j = await r.json(); toast(`セリフ保存: ${j.path}`); return; }
+  } catch { /* フォールバック */ }
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+  toast('speech.json をダウンロードしました');
 }
 
 async function exportBundle() {
@@ -617,6 +636,8 @@ function setupUI() {
   document.getElementById('btn-sim-grab').onclick = () => startSim(true);
   document.getElementById('btn-sim-release').onclick = () => { simHeld = false; if (ragdoll && ragdoll.active) { recoverTimer = (characterDef.behavior.recoverDelaySec ?? 2.5) + LOOK_DURATION; } };
   document.getElementById('btn-export').onclick = exportBundle;
+  const btnSpeech = document.getElementById('btn-save-speech');
+  if (btnSpeech) btnSpeech.onclick = saveSpeech;
   const fi = document.getElementById('file-input');
   document.getElementById('btn-load').onclick = () => fi.click();
   fi.onchange = async () => { const f = fi.files[0]; if (!f) return; const j = JSON.parse(await f.text()); await loadBundleObject(j); };

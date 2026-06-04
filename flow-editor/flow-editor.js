@@ -9,7 +9,7 @@ const NODE_W = 160, HD = 28, PORT_SP = 18;
 
 let flow = newFlow();
 let selected = null;
-let storyFiles = [], npcFiles = [], stageFiles = [];
+let storyFiles = [], npcFiles = [], stageFiles = [], speechFiles = [];
 const view = { x: 40, y: 40, scale: 1 };
 let nodeSeq = 1;
 
@@ -177,12 +177,24 @@ function renderProps() {
   } else if (n.type === 'battle') {
     const b = n.data.battle = n.data.battle || defaultData('battle').battle;
     panel.appendChild(rowText('タイトル', b.title || '', v => { b.title = v; }));
-    const h = document.createElement('h4'); h.textContent = '出現NPC'; panel.appendChild(h);
+    const h = document.createElement('h4'); h.textContent = '出現NPC（敵ごとにセリフ差し替え可）'; panel.appendChild(h);
+    b.enemies = b.enemies || [];
+    const enemyNpc = (e) => (typeof e === 'string' ? e : e.npc);
+    const findIdx = (npc) => b.enemies.findIndex(e => enemyNpc(e) === npc);
     for (const f of npcFiles) {
-      const wrap = document.createElement('label'); wrap.className = 'chk';
-      const c = document.createElement('input'); c.type = 'checkbox'; c.checked = (b.enemies || []).includes(f);
-      c.onchange = () => { const s = new Set(b.enemies || []); c.checked ? s.add(f) : s.delete(f); b.enemies = [...s]; redraw(); };
-      wrap.appendChild(c); wrap.appendChild(document.createTextNode(f.replace(/\.npc\.json$/, ''))); panel.appendChild(wrap);
+      const wrap = document.createElement('div'); wrap.className = 'chk';
+      const c = document.createElement('input'); c.type = 'checkbox'; c.checked = findIdx(f) >= 0;
+      c.onchange = () => { const i = findIdx(f); if (c.checked) { if (i < 0) b.enemies.push(f); } else if (i >= 0) b.enemies.splice(i, 1); redraw(); renderProps(); };
+      wrap.appendChild(c);
+      wrap.appendChild(document.createTextNode(f.replace(/\.npc\.json$/, '')));
+      if (c.checked) {
+        const e = b.enemies[findIdx(f)];
+        const cur = (typeof e === 'object' && e.speech) || '';
+        const sel = selectEl(['', ...speechFiles], cur, (v) => { const i = findIdx(f); b.enemies[i] = v ? { npc: f, speech: v } : f; }, '(規約セリフ)');
+        sel.style.cssText = 'font-size:10px;margin-left:6px;flex:1;min-width:0;background:#222;color:#ddd;border:1px solid #3a3a60;border-radius:3px;';
+        wrap.appendChild(sel);
+      }
+      panel.appendChild(wrap);
     }
     panel.appendChild(rowSelect('ステージ', ['stage.json', ...stageFiles], b.stage || '', v => { b.stage = v; }));
     panel.appendChild(rowText('BGM', b.bgm || '', v => { b.bgm = v; }));
@@ -237,10 +249,11 @@ async function refreshList(current) {
 
 // ── init ──
 async function init() {
-  [storyFiles, npcFiles, stageFiles] = await Promise.all([
+  [storyFiles, npcFiles, stageFiles, speechFiles] = await Promise.all([
     fetchList('../story/manifest.json', []),
     fetchList('../npc/manifest.json', []),
     fetchList('../models/manifest.json', []),
+    fetchList('../speech/manifest.json', []),
   ]);
   const picker = $('node-picker'); picker.innerHTML = '';
   for (const t of Object.keys(NODE_TYPES)) { const o = document.createElement('option'); o.value = t; o.textContent = NODE_TYPES[t].label; picker.appendChild(o); }

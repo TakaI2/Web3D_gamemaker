@@ -50,7 +50,7 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
@@ -92,6 +92,16 @@ export default defineConfig({
           if (!url.endsWith('/flow/manifest.json')) return next();
           const dir = path.join(pub, 'flow');
           const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.flow.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // 反応セリフ一覧（public/speech/*.speech.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/speech/manifest.json')) return next();
+          const dir = path.join(pub, 'speech');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.speech.json')) : [];
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
         });
