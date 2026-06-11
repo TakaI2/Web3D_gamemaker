@@ -3,6 +3,9 @@
 </script>
 
 <div class="mode-btns">
+  <a class="mode-btn hub-btn" href="hub/">
+    ← ハブへ
+  </a>
   <button class="mode-btn game-btn" on:click={() => appModeStore.toGame()}>
     ゲーム ▶
   </button>
@@ -43,6 +46,8 @@
     opacity: 0.9;
   }
   .mode-btn:hover { opacity: 1; }
+  .hub-btn { background: #333; text-decoration: none; text-align: center; }
+  .hub-btn:hover { background: #444; }
   .game-btn { background: #2a6; }
   .game-btn:hover { background: #3b7; }
   .retarget-btn { background: #47a; }
