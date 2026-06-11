@@ -52,8 +52,10 @@ export function createAnimEditorScene(
   let vrm: VRM | null = null;
   let skeletonHelper: THREE.SkeletonHelper | null = null;
 
-  // TransformControls は1つだけ使う。ボーン回転・IK移動・IK回転を状態で切り替える
+  // TransformControls は1つだけ使う。ボーン回転・IK移動・IK回転を状態で切り替える。
+  // three r169+ では本体ではなく getHelper() の返すオブジェクトをシーンに追加してギズモを描画する。
   let tc: TransformControls | null = null;
+  let tcHelper: THREE.Object3D | null = null;
 
   // ボーン選択状態
   let selectedBone: THREE.Bone | null = null;
@@ -64,6 +66,8 @@ export function createAnimEditorScene(
   const ikEnabled = new Map<IKTarget, boolean>();
   let activeIKTarget: IKTarget | null = null;
   let ikGizmoMode: IKGizmoMode = 'translate';
+  // IK の曲げ方向ヒント（掴んだ時点の肘/膝の向き）。逆曲がり防止用にソルバへ渡す。
+  let activePole: THREE.Vector3 | null = null;
 
   const raycaster = new THREE.Raycaster();
   raycaster.params.Line = { threshold: 0.05 };
@@ -71,13 +75,14 @@ export function createAnimEditorScene(
   // TransformControls 初期化（VRM ロード時に1回作成）
   function initTC(): void {
     if (tc) {
+      if (tcHelper) { scene.remove(tcHelper); tcHelper = null; }
       tc.dispose();
-      scene.remove(tc as unknown as THREE.Object3D);
     }
     tc = new TransformControls(camera, renderer.domElement);
     tc.setMode('rotate');
     tc.setSpace('local');
-    scene.add(tc as unknown as THREE.Object3D);
+    tcHelper = tc.getHelper();           // r169+: ギズモ描画用オブジェクト
+    scene.add(tcHelper);
 
     tc.addEventListener('dragging-changed', (event) => {
       orbitController.setEnabled(!(event as { value: boolean }).value);
@@ -104,7 +109,7 @@ export function createAnimEditorScene(
       const endBone  = vrm.humanoid.getRawBoneNode(chainDef.end  as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
       if (!rootBone || !midBone || !endBone) return;
 
-      const chain: TwoBoneIKChain = { root: rootBone, mid: midBone, end: endBone };
+      const chain: TwoBoneIKChain = { root: rootBone, mid: midBone, end: endBone, poleVector: activePole ?? undefined };
       const result = solveTwoBoneIK(chain, handleMesh.position);
       rootBone.quaternion.copy(result.rootQuat);
       midBone.quaternion.copy(result.midQuat);
@@ -154,11 +159,33 @@ export function createAnimEditorScene(
     }
   }
 
+  // 掴んだ時点の肘/膝の曲げ方向を捕捉（root→end 線に対する mid の直交オフセット方向・ワールド）。
+  // これを pole としてソルバに固定で渡すことで、手足が真っ直ぐを通過しても逆側に曲がらない。
+  function captureActivePole(target: IKTarget): void {
+    activePole = null;
+    if (!vrm) return;
+    const def = IK_CHAINS[target];
+    const rb = vrm.humanoid.getRawBoneNode(def.root as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
+    const mb = vrm.humanoid.getRawBoneNode(def.mid as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
+    const eb = vrm.humanoid.getRawBoneNode(def.end as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
+    if (!rb || !mb || !eb) return;
+    const rW = rb.getWorldPosition(new THREE.Vector3());
+    const mW = mb.getWorldPosition(new THREE.Vector3());
+    const eW = eb.getWorldPosition(new THREE.Vector3());
+    const dir = eW.clone().sub(rW);
+    if (dir.lengthSq() < 1e-8) return;
+    dir.normalize();
+    const pole = mW.clone().sub(rW);
+    pole.addScaledVector(dir, -pole.dot(dir));   // root→end 方向成分を除去 = 肘の出ている向き
+    if (pole.lengthSq() > 1e-8) activePole = pole.normalize();
+  }
+
   // IK ターゲットを選択してギズモをアタッチ
   function selectIKTarget(target: IKTarget): void {
     if (!vrm || !tc) return;
     activeIKTarget = target;
     ikGizmoMode = 'translate';
+    captureActivePole(target);
 
     selectedBone = null;
     selectedBoneName = null;
@@ -189,8 +216,9 @@ export function createAnimEditorScene(
 
   function onPointerDown(e: PointerEvent): void {
     if (!vrm) return;
-    // TC 自体がドラッグ中なら無視
-    if (tc?.dragging) return;
+    // ギズモの軸上クリック or ドラッグ中は独自ピッキングせず TransformControls に委ねる
+    // （これをしないと、矢印を掴んだ瞬間に「ハンドル非ヒット」と判定され detach されてドラッグできない）
+    if (tc && (tc.dragging || tc.axis !== null)) return;
 
     const rect = renderer.domElement.getBoundingClientRect();
     _mouse.set(
@@ -432,8 +460,8 @@ export function createAnimEditorScene(
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       if (vrm) scene.remove(vrm.scene);
       if (tc) {
+        if (tcHelper) { scene.remove(tcHelper); tcHelper = null; }
         tc.dispose();
-        scene.remove(tc as unknown as THREE.Object3D);
       }
       if (skeletonHelper) {
         scene.remove(skeletonHelper);
