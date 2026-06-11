@@ -1044,6 +1044,24 @@ function updateMegu(m, dt) {
     }
     m.cloth.update(dt, frame);              // ボーン追従＋手グリップでマント更新（vrm.update の後）
   }
+  updateMeguAura(m, dt);   // ステート連動の氷オーラ（攻撃/挑発/予備動作中に発生）
+}
+
+// ステート連動エフェクト：攻撃/挑発(state machine) または 予備動作/踏み込み(FLOW戦闘) の間だけ
+// 足元から氷オーラを立ち上らせる。VRM の scene に子付けして追従。詠唱するまで生成しない（idleは無コスト）。
+function updateMeguAura(m, dt) {
+  const st = m.dir ? m.dir.state : 'idle';
+  const held = m.grabbed || m.clothGrabbed;
+  const combatCasting = m.combat && (m.combat.mode === 'telegraph' || m.combat.mode === 'lunge');
+  const casting = !m.ragdoll.active && !held && (combatCasting || st === 'attack' || st === 'taunt');
+  if (!m.aura) {
+    if (!casting) return;
+    m.aura = createFxSystem(cloneFxConfig(FX_PRESETS.frost));
+    m.aura.object3D.position.set(0, 0.1, 0);   // 足元から立ち上る
+    m.vrm.scene.add(m.aura.object3D);
+  }
+  m.aura.setEmitting(casting);
+  m.aura.update(dt);
 }
 
 // NPC 頭上の吹き出し用：判定中心+オフセットをワールド→画面(px)へ投影。背面/画面外/遠距離は visible:false。
