@@ -16,6 +16,7 @@ import { createNpcStateMachine } from '../lib/npc-state-machine.js';
 import { createNpcSpeech } from '../lib/npc-speech.js';
 import { createSpeechUI } from '../lib/speech-ui.js';
 import { defaultSpeechFile, fetchSpeechSet, buildSpeechCharacter, speechFromLegacyCharacter } from '../lib/speech-set.js';
+import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
 import { positionWorld, mix, color } from 'https://esm.sh/three@0.184.0/tsl';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 
@@ -1094,6 +1095,29 @@ function stepObjects(dt) {
   }
 }
 
+// ── エフェクト（着弾スパーク） ────────────────────────────────
+// lib/fx-particles の単発バーストを使い回すプール。被弾点で火花を散らす。
+const sparkPool = [];
+function spawnSpark(pos) {
+  let slot = sparkPool.find((s) => s.idle);
+  if (!slot) {
+    const fx = createFxSystem(cloneFxConfig(FX_PRESETS.spark));
+    scene.add(fx.object3D);
+    slot = { fx, idle: true, releaseAt: 0 };
+    sparkPool.push(slot);
+  }
+  slot.fx.object3D.position.copy(pos);
+  slot.fx.burst(24);
+  slot.idle = false;
+  slot.releaseAt = performance.now() + 600;   // 寿命(最大0.4s)経過後にidleへ戻す
+}
+function updateFx(dt) {
+  const now = performance.now();
+  for (const s of sparkPool) {
+    if (!s.idle) { s.fx.update(dt); if (now >= s.releaseAt) s.idle = true; }
+  }
+}
+
 function stepProjectiles(dt) {
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
@@ -1119,6 +1143,7 @@ function stepProjectiles(dt) {
           _hitDir.normalize();
           obj.vel.addScaledVector(_hitDir, params.impulse);
           clampSpeed(obj.vel);
+          spawnSpark(p.pos);
           dead = true;
           break;
         }
@@ -1138,6 +1163,7 @@ function stepProjectiles(dt) {
           } else {
             hitMegu(m, _hitDir);
           }
+          spawnSpark(p.pos);
           dead = true;
           break;
         }
@@ -1432,6 +1458,7 @@ function render() {
 
   syncObjectMeshes();
   updateMegus(dt);
+  updateFx(dt);
   if (speechUI) speechUI.update(dt, npcScreenPos);
   if (FLOW && battleCfg) {
     if (!battleOver) { battleTime += dt; updateObjectHazards(dt); }
