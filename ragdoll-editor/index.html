@@ -65,6 +65,11 @@
     <h4>ラグドール</h4>
     <button id="btn-ragdoll" type="button">崩す（ラグドール ON）</button>
     <button id="btn-redrop" type="button">もう一度落とす</button>
+    <button id="btn-impulse" type="button">小突く（インパルス＝被弾反応）</button>
+
+    <h4>剛体（ラグドール化しない）</h4>
+    <div class="pin-item"><input type="checkbox" id="chk-rigid-shoulder" checked><label for="chk-rigid-shoulder">肩（鎖骨）を固定</label></div>
+    <div class="pin-item"><input type="checkbox" id="chk-rigid-legroot" checked><label for="chk-rigid-legroot">脚の付け根を固定</label></div>
 
     <h4>表示</h4>
     <div class="pin-item"><input type="checkbox" id="chk-viz" checked><label for="chk-viz">関節・骨を可視化</label></div>
@@ -83,11 +88,12 @@
   <!-- 右：関節の回転制限 -->
   <div id="right" class="panel">
     <h3>関節の回転制限</h3>
-    <div class="hint">各関節の許容曲げ角(度)。小さいほど硬く、大きいほどよく曲がる。スライダーは即反映。</div>
+    <div class="hint">各関節の許容曲げ角(度)。小さいほど硬く、大きいほどよく曲がる。スライダーは即反映。<br>関節名/スライダーを選ぶと、その関節の<b style="color:#66ff99">制限コーン（緑）</b>を3D表示（ラグドールON時）。</div>
     <div id="limits"></div>
     <button id="btn-reset-limits" type="button">既定値にリセット</button>
 
     <h4>全体パラメータ</h4>
+    <div class="pin-item"><input type="checkbox" id="chk-selfcol" checked><label for="chk-selfcol">自己衝突（体の埋まり防止）</label></div>
     <div id="params"></div>
   </div>
 

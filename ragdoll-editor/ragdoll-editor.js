@@ -3,13 +3,14 @@
 // ragdoll.json として保存する。lib/vrm-ragdoll.js を再利用。
 import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import { OrbitControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.4.0?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
   from 'https://esm.sh/@pixiv/three-vrm-animation?deps=three@0.184.0,@pixiv/three-vrm@3.4.0';
 import {
   createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery,
-  setBoneMaxBend, listBoneLimits, disposeRagdoll,
+  setBoneMaxBend, listBoneLimits, disposeRagdoll, applyRagdollImpulse,
 } from '../lib/vrm-ragdoll.js';
 
 // ── 状態 ───────────────────────────────────────────────
@@ -25,14 +26,26 @@ const jointMat = new THREE.MeshBasicMaterial({ color: 0x44ddff, depthTest: false
 const pinMat   = new THREE.MeshBasicMaterial({ color: 0xffcc33, depthTest: false });
 const jointGeo = new THREE.SphereGeometry(0.03, 8, 6);
 
+// 回転制限コーンの可視化（選択中の関節1つ）
+let limitViz = null;       // LineSegments（コーンのワイヤ）
+let limitBone = null;      // 表示対象の関節名（スライダー選択で切替）
+const LIMIT_RIM = 28;      // コーン外周の分割数
+const _axis = new THREE.Vector3(), _u = new THREE.Vector3(), _v = new THREE.Vector3(), _tip = new THREE.Vector3();
+
 // ピン
 const pins = new Set();
-const pinPos = {};   // bone -> THREE.Vector3
+const pinPos = {};      // bone -> THREE.Vector3（ピンの目標位置＝真の状態）
+const pinHandles = {};  // bone -> THREE.Mesh（移動ギズモで掴むハンドル）
+let gizmo = null;       // TransformControls
+const handleGeo = new THREE.SphereGeometry(0.05, 10, 8);
+const handleMat = new THREE.MeshBasicMaterial({ color: 0xff8833, depthTest: false });
+const _ray = new THREE.Raycaster();
+const _ndc = new THREE.Vector2();
 const PIN_CANDIDATES = ['head', 'hips', 'chest', 'leftHand', 'rightHand', 'leftFoot', 'rightFoot',
   'leftLowerArm', 'rightLowerArm', 'leftLowerLeg', 'rightLowerLeg'];
 
 // 設定（保存対象）
-let cfg = { boneMaxBend: {}, params: { gravity: -22, stiffness: 1.0, iterations: 8, foldLimit: 0.6 } };
+let cfg = { boneMaxBend: {}, params: { gravity: -22, stiffness: 1.0, iterations: 8, foldLimit: 0.6, drag: 0.015, limitDamp: 0.4, selfCollision: true, bodyScale: 1.0, rigidBones: ['leftShoulder', 'rightShoulder', 'leftUpperLeg', 'rightUpperLeg'] } };
 
 const status = (msg) => { const el = document.getElementById('status'); if (el) el.textContent = msg; };
 const showError = (m) => { document.getElementById('error-detail').textContent = String(m); document.getElementById('error-msg').classList.add('visible'); };
@@ -102,6 +115,7 @@ function teardownModel() {
   mixer = null; action = null;
   pins.clear();
   if (vizGroup) { scene.remove(vizGroup); vizGroup = null; jointMeshes = []; boneLines = null; }
+  clearPinHandles();
 }
 
 // ── ラグドール構築 ─────────────────────────────────────
@@ -129,6 +143,23 @@ function toggleRagdoll() {
   }
 }
 
+// 剛体ボーン（ラグドール化しない）の選択を反映してラグドールを作り直す
+function rebuildRigid() {
+  const r = [];
+  if (document.getElementById('chk-rigid-shoulder').checked) r.push('leftShoulder', 'rightShoulder');
+  if (document.getElementById('chk-rigid-legroot').checked) r.push('leftUpperLeg', 'rightUpperLeg');
+  cfg.params.rigidBones = r;
+  if (!vrm) return;
+  const wasActive = ragdoll && ragdoll.active;
+  setupRagdoll();
+  if (wasActive) {
+    vrm.scene.updateMatrixWorld(true);
+    setRagdollActive(ragdoll, true);
+    const btn = document.getElementById('btn-ragdoll');
+    btn.textContent = '戻す（ラグドール OFF）'; btn.classList.add('on');
+  }
+}
+
 function reDrop() {
   if (!ragdoll) return;
   // 即時リセット（ブレンドなし）：アイドル/レスト姿勢へ戻してから再スナップ落下
@@ -137,10 +168,27 @@ function reDrop() {
   vrm.update(0);
   vrm.scene.updateMatrixWorld(true);
   setRagdollActive(ragdoll, true);
-  // ピン位置を取り直す
-  for (const b of pins) ensurePinPos(b);
+  // ピン位置とハンドルを取り直す
+  for (const b of pins) { ensurePinPos(b); if (pinHandles[b]) pinHandles[b].position.copy(pinPos[b]); }
   const btn = document.getElementById('btn-ragdoll');
   btn.textContent = '戻す（ラグドール OFF）'; btn.classList.add('on');
+}
+
+// 被弾反応の確認用：ラグドールが非アクティブなら起こしてから、ランダムな部位へ水平インパルス。
+const IMPULSE_BONES = ['chest', 'hips', 'head', 'leftHand', 'rightHand', 'leftUpperArm', 'rightUpperArm'];
+function kickImpulse() {
+  if (!ragdoll || !vrm) return;
+  if (!ragdoll.active) {
+    vrm.scene.updateMatrixWorld(true);
+    setRagdollActive(ragdoll, true);
+    const btn = document.getElementById('btn-ragdoll');
+    btn.textContent = '戻す（ラグドール OFF）'; btn.classList.add('on');
+  }
+  const ang = Math.random() * Math.PI * 2;
+  const dir = new THREE.Vector3(Math.cos(ang), 0.25, Math.sin(ang)).normalize().multiplyScalar(0.22);
+  const bone = IMPULSE_BONES[Math.floor(Math.random() * IMPULSE_BONES.length)];
+  applyRagdollImpulse(ragdoll, dir, ragdoll.idxOf[bone] != null ? bone : 'chest');
+  status(`インパルス → ${bone}`);
 }
 
 // ── 可視化 ─────────────────────────────────────────────
@@ -160,7 +208,58 @@ function buildViz() {
   boneLines = new THREE.LineSegments(g, lineMat);
   boneLines.renderOrder = 1000; boneLines.frustumCulled = false;
   vizGroup.add(boneLines);
+
+  // 回転制限コーン（選択関節のみ。外周リム＋母線をワイヤで描く）
+  const lg = new THREE.BufferGeometry();
+  lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(256 * 3), 3).setUsage(THREE.DynamicDrawUsage));
+  const limMat = new THREE.LineBasicMaterial({ color: 0x66ff99, transparent: true, opacity: 0.85, depthTest: false });
+  limitViz = new THREE.LineSegments(lg, limMat);
+  limitViz.renderOrder = 1002; limitViz.frustumCulled = false; limitViz.visible = false;
+  vizGroup.add(limitViz);
+  limitBone = null;
+
   scene.add(vizGroup);
+}
+
+// 選択中の関節の回転制限コーンを線で描く。
+// 軸 = 親骨の延長方向(B-A)、半角 hi = restAngle + maxBend。子骨の向きはこのコーン内に制限される
+// （方位角＝コーン周りの回転は自由なので、横方向にも曲がるのが分かる）。
+function updateLimitViz() {
+  if (!limitViz) return;
+  const show = vizOn && ragdoll && ragdoll.active && limitBone;
+  limitViz.visible = !!show;
+  if (!show) return;
+  const L = ragdoll.angleLimits.find((x) => x.bone === limitBone);
+  if (!L) { limitViz.visible = false; return; }
+  const A = ragdoll.particles[L.a].pos, B = ragdoll.particles[L.b].pos, C = ragdoll.particles[L.c].pos;
+  _axis.copy(B).sub(A);
+  if (_axis.lengthSq() < 1e-9) { limitViz.visible = false; return; }
+  _axis.normalize();
+  const len = Math.max(0.05, B.distanceTo(C));
+  let hi = L.restAngle + L.maxBend;
+  hi = Math.min(Math.PI, Math.max(0.02, hi));
+  // 軸に直交する基底 u, v
+  _u.set(1, 0, 0); if (Math.abs(_axis.x) > 0.9) _u.set(0, 1, 0);
+  _u.crossVectors(_axis, _u).normalize();
+  _v.crossVectors(_axis, _u).normalize();
+  const cosh = Math.cos(hi) * len, sinh = Math.sin(hi) * len;
+  const pos = limitViz.geometry.getAttribute('position');
+  const arr = pos.array;
+  const tips = [];
+  for (let i = 0; i < LIMIT_RIM; i++) {
+    const ph = (i / LIMIT_RIM) * Math.PI * 2;
+    _tip.copy(_axis).multiplyScalar(cosh)
+      .addScaledVector(_u, Math.cos(ph) * sinh)
+      .addScaledVector(_v, Math.sin(ph) * sinh).add(B);
+    tips.push(_tip.clone());
+  }
+  let k = 0;
+  const put = (p) => { arr[k++] = p.x; arr[k++] = p.y; arr[k++] = p.z; };
+  for (let i = 0; i < LIMIT_RIM; i++) { put(tips[i]); put(tips[(i + 1) % LIMIT_RIM]); }   // 外周リム
+  const step = Math.max(1, Math.floor(LIMIT_RIM / 8));
+  for (let i = 0; i < LIMIT_RIM; i += step) { put(B); put(tips[i]); }                       // 母線
+  limitViz.geometry.setDrawRange(0, k / 3);
+  pos.needsUpdate = true;
 }
 
 function updateViz() {
@@ -191,6 +290,43 @@ function ensurePinPos(bone) {
   pinPos[bone].copy(ragdoll.particles[idx].pos);
 }
 
+// ピンの移動ハンドル（移動ギズモで掴む）を生成し、ギズモをアタッチ
+function addPinHandle(bone) {
+  let h = pinHandles[bone];
+  if (!h) {
+    h = new THREE.Mesh(handleGeo, handleMat);
+    h.renderOrder = 1001; h.frustumCulled = false;
+    h.userData.pinBone = bone;
+    pinHandles[bone] = h; scene.add(h);
+  }
+  h.position.copy(pinPos[bone]);
+  if (gizmo) gizmo.attach(h);
+}
+
+function removePinHandle(bone) {
+  const h = pinHandles[bone];
+  if (!h) return;
+  if (gizmo && gizmo.object === h) gizmo.detach();
+  scene.remove(h);
+  delete pinHandles[bone];
+}
+
+function clearPinHandles() {
+  if (gizmo) gizmo.detach();
+  for (const b of Object.keys(pinHandles)) { scene.remove(pinHandles[b]); delete pinHandles[b]; }
+}
+
+// キャンバスのクリックでハンドルを選択 → ギズモを付け替え
+function pickHandle(ev) {
+  if (!gizmo || gizmo.dragging) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  _ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  _ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+  _ray.setFromCamera(_ndc, camera);
+  const hits = _ray.intersectObjects(Object.values(pinHandles), false);
+  if (hits.length) gizmo.attach(hits[0].object);
+}
+
 function buildPinUI() {
   const host = document.getElementById('pin-list');
   host.innerHTML = '';
@@ -201,8 +337,8 @@ function buildPinUI() {
     const cb = document.createElement('input');
     cb.type = 'checkbox'; cb.id = `pin-${bone}`;
     cb.onchange = () => {
-      if (cb.checked) { ensurePinPos(bone); pins.add(bone); }
-      else pins.delete(bone);
+      if (cb.checked) { ensurePinPos(bone); pins.add(bone); addPinHandle(bone); }
+      else { pins.delete(bone); removePinHandle(bone); }
     };
     const lab = document.createElement('label');
     lab.htmlFor = cb.id; lab.textContent = bone;
@@ -222,12 +358,18 @@ function buildLimitUI() {
     const range = document.createElement('input');
     range.type = 'range'; range.min = '5'; range.max = '180'; range.step = '1'; range.value = String(Math.round(deg));
     const val = document.createElement('span'); val.className = 'val'; val.textContent = `${Math.round(deg)}°`;
+    const select = () => { limitBone = bone; };
+    range.onfocus = select;
+    range.onpointerdown = select;
+    lab.onclick = select;
     range.oninput = () => {
       const d = Number(range.value);
       val.textContent = `${d}°`;
       cfg.boneMaxBend[bone] = d;
       setBoneMaxBend(ragdoll, bone, d);
+      limitBone = bone;
     };
+    lab.style.cursor = 'pointer';
     row.append(lab, range, val);
     host.appendChild(row);
   }
@@ -246,11 +388,15 @@ function resetLimits() {
 function buildParamUI() {
   const host = document.getElementById('params');
   host.innerHTML = '';
+  const sc = document.getElementById('chk-selfcol'); if (sc) sc.checked = !!ragdoll.opts.selfCollision;
   const defs = [
     { key: 'gravity', label: '重力', min: -40, max: 0, step: 1 },
     { key: 'stiffness', label: '硬さ', min: 0, max: 1, step: 0.05 },
     { key: 'iterations', label: '反復', min: 1, max: 16, step: 1 },
     { key: 'foldLimit', label: '折れ抑制', min: 0.2, max: 1, step: 0.02 },
+    { key: 'drag', label: '空気抵抗', min: 0, max: 0.2, step: 0.005 },
+    { key: 'limitDamp', label: '制限減衰', min: 0, max: 1, step: 0.05 },
+    { key: 'bodyScale', label: '体の太さ', min: 0.5, max: 1.6, step: 0.05 },
   ];
   for (const d of defs) {
     const row = document.createElement('div');
@@ -342,6 +488,8 @@ function render() {
   const dt = Math.min(clock.getDelta(), 1 / 30);
   if (vrm) {
     if (ragdoll && ragdoll.active) {
+      // ハンドル（ギズモで動かす）位置を真のピン位置へ反映
+      for (const b of pins) { const h = pinHandles[b]; if (h && pinPos[b]) pinPos[b].copy(h.position); }
       const env = { floorY: 0 };
       if (pins.size) env.pins = [...pins].map((b) => ({ bone: b, pos: pinPos[b] })).filter((p) => p.pos);
       updateRagdoll(ragdoll, dt, env);
@@ -352,6 +500,7 @@ function render() {
     vrm.update(dt);
   }
   updateViz();
+  updateLimitViz();
   controls.update();
   updateFps();
   renderer.render(scene, camera);
@@ -378,6 +527,14 @@ async function init() {
   controls.target.set(0, 0.95, 0);
   controls.enableDamping = true;
 
+  // 移動ギズモ（ピンを掴んで動かす）。ドラッグ中は OrbitControls を止める。
+  gizmo = new TransformControls(camera, renderer.domElement);
+  gizmo.setMode('translate');
+  gizmo.setSize(0.7);
+  gizmo.addEventListener('dragging-changed', (e) => { controls.enabled = !e.value; });
+  scene.add(gizmo.getHelper ? gizmo.getHelper() : gizmo);
+  renderer.domElement.addEventListener('pointerdown', pickHandle);
+
   scene.add(new THREE.AmbientLight(0xffffff, 0.55));
   const key = new THREE.DirectionalLight(0xfff6e6, 1.6); key.position.set(3, 6, 4); scene.add(key);
   scene.add(new THREE.GridHelper(10, 20, 0x445588, 0x223344));
@@ -391,7 +548,14 @@ async function init() {
   // UI 配線
   document.getElementById('btn-ragdoll').onclick = toggleRagdoll;
   document.getElementById('btn-redrop').onclick = reDrop;
+  document.getElementById('btn-impulse').onclick = kickImpulse;
+  document.getElementById('chk-rigid-shoulder').onchange = rebuildRigid;
+  document.getElementById('chk-rigid-legroot').onchange = rebuildRigid;
   document.getElementById('chk-viz').onchange = (e) => { vizOn = e.target.checked; };
+  document.getElementById('chk-selfcol').onchange = (e) => {
+    cfg.params.selfCollision = e.target.checked;
+    if (ragdoll) ragdoll.opts.selfCollision = e.target.checked;
+  };
   document.getElementById('btn-reset-limits').onclick = () => { if (ragdoll) resetLimits(); };
   document.getElementById('btn-save').onclick = saveConfig;
   document.getElementById('btn-load').onclick = () => {
