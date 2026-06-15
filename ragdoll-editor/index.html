@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Ragdoll Editor — ラグドール調整</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #10121c; font-family: system-ui, sans-serif; color: #e8eef6; }
+    #app { width: 100%; height: 100%; }
+
+    .panel {
+      position: fixed; top: 0; bottom: 0; z-index: 10;
+      background: rgba(16,18,28,0.92); padding: 12px; overflow-y: auto; font-size: 12px;
+      width: 240px;
+    }
+    #left  { left: 0;  border-right: 1px solid rgba(255,255,255,0.12); }
+    #right { right: 0; border-left: 1px solid rgba(255,255,255,0.12); }
+    h3 { margin: 0 0 8px; font-size: 14px; color: #fff; }
+    h4 { margin: 14px 0 6px; font-size: 12px; color: #9fd0ff; border-bottom: 1px solid #2a3756; padding-bottom: 4px; }
+
+    .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+    .row label { flex: 1; color: #aab; }
+    .row input[type=range] { flex: 1.4; accent-color: #5580cc; }
+    .row .val { width: 38px; text-align: right; color: #adf; font-size: 11px; }
+    select, button {
+      width: 100%; background: #1a1f33; color: #dfe6ff;
+      border: 1px solid #3a4566; border-radius: 5px; padding: 6px 8px; font-size: 12px; cursor: pointer; margin: 3px 0;
+    }
+    button:hover { background: #24304f; }
+    button.on { background: #3a5a3a; border-color: #5a8a5a; }
+    .pin-item { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+    .pin-item input { accent-color: #ffcc33; }
+    .pin-item label { color: #cdd; }
+    .hint { color: #7a8aa6; font-size: 10.5px; line-height: 1.5; margin-top: 6px; }
+    #status { color: #8fa3bf; font-size: 11px; margin-top: 8px; min-height: 14px; }
+
+    #back-btn {
+      position: fixed; top: 12px; left: 252px; z-index: 30;
+      background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.3);
+      color: #fff; padding: 6px 14px; border-radius: 4px; font-size: 13px; cursor: pointer; text-decoration: none;
+    }
+    #back-btn:hover { background: rgba(0,0,0,0.75); }
+    #fps-counter { position: fixed; bottom: 12px; left: 252px; z-index: 10; color: rgba(255,255,255,0.7); font-size: 13px; font-family: monospace; pointer-events: none; }
+
+    #error-msg { display: none; position: fixed; inset: 0; background: #111; color: #fff; align-items: center; justify-content: center; flex-direction: column; gap: 12px; text-align: center; padding: 24px; z-index: 100; }
+    #error-msg.visible { display: flex; }
+    #error-msg h2 { margin: 0; color: #f66; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <a id="back-btn" href="../hub/">← 戻る</a>
+  <div id="fps-counter">-- FPS</div>
+
+  <!-- 左：操作 -->
+  <div id="left" class="panel">
+    <h3>ラグドール調整</h3>
+
+    <h4>VRM ソース</h4>
+    <select id="npc-select"><option value="">-- NPC を選択 --</option></select>
+    <label class="file-btn"><button id="btn-vrm" type="button">VRM ファイルを読込</button></label>
+    <input type="file" id="vrm-file" accept=".vrm" style="display:none">
+
+    <h4>ラグドール</h4>
+    <button id="btn-ragdoll" type="button">崩す（ラグドール ON）</button>
+    <button id="btn-redrop" type="button">もう一度落とす</button>
+
+    <h4>表示</h4>
+    <div class="pin-item"><input type="checkbox" id="chk-viz" checked><label for="chk-viz">関節・骨を可視化</label></div>
+
+    <h4>グラブ点を固定（ピン）</h4>
+    <div id="pin-list"></div>
+    <div class="hint">チェックした関節を現在位置に固定して吊り下げます（複数可）。</div>
+
+    <h4>保存 / 読込</h4>
+    <select id="ragdoll-select"><option value="">-- 保存済みを読込 --</option></select>
+    <button id="btn-load" type="button">読込</button>
+    <button id="btn-save" type="button">この設定を保存</button>
+    <div id="status"></div>
+  </div>
+
+  <!-- 右：関節の回転制限 -->
+  <div id="right" class="panel">
+    <h3>関節の回転制限</h3>
+    <div class="hint">各関節の許容曲げ角(度)。小さいほど硬く、大きいほどよく曲がる。スライダーは即反映。</div>
+    <div id="limits"></div>
+    <button id="btn-reset-limits" type="button">既定値にリセット</button>
+
+    <h4>全体パラメータ</h4>
+    <div id="params"></div>
+  </div>
+
+  <div id="error-msg">
+    <h2>初期化に失敗しました</h2>
+    <p>Chrome または Edge の最新版 (WebGPU 対応) でお試しください。</p>
+    <p id="error-detail" style="font-size:12px;color:#aaa;"></p>
+  </div>
+
+  <script type="module" src="./ragdoll-editor.js"></script>
+</body>
+</html>

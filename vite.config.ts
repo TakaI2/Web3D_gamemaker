@@ -50,7 +50,7 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
@@ -112,6 +112,16 @@ export default defineConfig({
           if (!url.endsWith('/stages/manifest.json')) return next();
           const dir = path.join(pub, 'stages');
           const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.stage.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // ラグドール設定一覧（public/ragdoll/*.ragdoll.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/ragdoll/manifest.json')) return next();
+          const dir = path.join(pub, 'ragdoll');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.ragdoll.json')) : [];
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
         });
