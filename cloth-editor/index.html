@@ -121,6 +121,8 @@
       position: fixed;
       top: 0; right: 0;
       width: 200px;
+      min-width: 160px;
+      max-width: 60vw;
       z-index: 20;
       background: rgba(10,10,24,0.82);
       border-left: 1px solid rgba(255,255,255,0.12);
@@ -131,6 +133,14 @@
       flex-direction: column;
       gap: 10px;
     }
+    #panel-right-resizer {
+      position: absolute;
+      left: 0; top: 0;
+      width: 7px; height: 100%;
+      cursor: ew-resize;
+      background: transparent;
+    }
+    #panel-right-resizer:hover { background: rgba(120,170,255,0.35); }
     #panel-right h3 { margin: 0; font-size: 14px; color: #fff; }
 
     .ui-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
@@ -305,6 +315,8 @@
       <div class="p-section-title">VRM モデル</div>
       <button id="btn-vrm-load">VRM を読み込む</button>
       <input type="file" id="vrm-file" accept=".vrm" style="display:none">
+      <button id="btn-import-npc" class="btn-sm" style="width:100%;margin-top:5px;background:rgba(80,120,200,0.22);border-color:rgba(110,170,255,0.45);color:#bdf;">NPCバンドル (.npc.json) を再インポート</button>
+      <input type="file" id="import-npc-file" accept=".json" style="display:none">
     </div>
 
     <div class="p-section">
@@ -431,6 +443,7 @@
 
   <!-- 右パネル -->
   <div id="panel-right">
+    <div id="panel-right-resizer" title="ドラッグで幅を調整"></div>
     <h3>シミュレーション</h3>
 
     <div class="ui-row">

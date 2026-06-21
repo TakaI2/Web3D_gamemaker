@@ -32,6 +32,8 @@ const timer = new THREE.Timer();
 let currentVRM       = null;
 let currentVRMFile   = null;   // NPCバンドル書き出し用：アップロードしたVRMのFile（バイト保持）
 let currentVRMAName  = null;   // NPCバンドル書き出し用：選択中のVRMAファイル名
+let currentVRMADataURI = null; // 再インポートで埋め込みVRMAを読んだ場合の dataURI（再書き出しで再利用）
+let importedTimeline   = null; // 再インポートした timeline（再書き出しで再添付）
 let currentMeshes    = [];   // { name, mesh }[]
 let selectedMeshIdx  = -1;
 let analysisData     = null; // analyzeMesh() の結果
@@ -67,7 +69,7 @@ let dampeningUniform;
 let windUniform;
 
 // ── コライダー（球）────────────────────────────────────────────
-const MAX_COLLIDERS = 8;
+const MAX_COLLIDERS = 16;
 // colliders[i] = { x, y, z, r, boneNode, boneName, localOffset, helperMesh }
 const colliders = [];
 // GPU へ渡す Float32Array: [x,y,z,r, x,y,z,r, ...]  MAX_COLLIDERS 個
@@ -194,7 +196,19 @@ const BONE_COLLIDER_DEFS = [
   { bone: 'leftShoulder',  r: 0.07 },
   { bone: 'rightShoulder', r: 0.07 },
   { bone: 'upperChest',    r: 0.13 },
+  { bone: 'leftUpperLeg',  r: 0.09 },
+  { bone: 'rightUpperLeg', r: 0.09 },
+  { bone: 'leftLowerLeg',  r: 0.07 },
+  { bone: 'rightLowerLeg', r: 0.07 },
 ];
+
+// コライダーの表示名（どの部位かを分かりやすく）。boneName から引く。
+const COLLIDER_LABELS = {
+  head: '頭', neck: '首', chest: '胸', upperChest: '胸上', spine: '腹', hips: '腰',
+  leftShoulder: '左肩', rightShoulder: '右肩',
+  leftUpperLeg: '左もも', rightUpperLeg: '右もも', leftLowerLeg: '左すね', rightLowerLeg: '右すね',
+};
+const colliderLabel = (c, i) => (c.boneName && COLLIDER_LABELS[c.boneName]) || c.boneName || `球${i + 1}`;
 
 function buildCollidersFromVRM(vrm) {
   clearColliders();
@@ -276,7 +290,7 @@ function updateColliderUI() {
     const row = document.createElement('div');
     row.className = 'collider-row';
     row.innerHTML = `
-      <span class="c-label">球${i + 1}</span>
+      <span class="c-label">${colliderLabel(c, i)}</span>
       <label style="font-size:10px;color:#888;">X</label>
       <input type="number" class="c-input" data-idx="${i}" data-key="x" value="${c.x.toFixed(3)}" step="0.01">
       <label style="font-size:10px;color:#888;">Y</label>
@@ -475,6 +489,20 @@ function applyMantleTransform(origPos, vertexCount, tr) {
   return out;
 }
 
+// マント変形(tx/ty/tz/ry/scale)のUI（スライダー＋数値入力）を mantleTransform に同期
+function syncMantleTransformUI() {
+  const set = (id, valId, value, fmt) => {
+    const sl = document.getElementById(id), num = document.getElementById(valId);
+    if (sl)  sl.value  = value;
+    if (num) num.value = fmt(value);
+  };
+  set('mt-tx',    'mt-tx-val',    mantleTransform.tx,    v => v.toFixed(2));
+  set('mt-ty',    'mt-ty-val',    mantleTransform.ty,    v => v.toFixed(2));
+  set('mt-tz',    'mt-tz-val',    mantleTransform.tz,    v => v.toFixed(2));
+  set('mt-ry',    'mt-ry-val',    mantleTransform.ry,    v => String(Math.round(v)));
+  set('mt-scale', 'mt-scale-val', mantleTransform.scale, v => v.toFixed(2));
+}
+
 function loadMantleJSON(json) {
   if (json.version !== 1 || !json.positions || !json.springs || !json.indices) {
     throw new Error('無効なマントファイルです');
@@ -523,6 +551,17 @@ function loadMantleJSON(json) {
   // 球コライダー設定を復元（VRM読込済みなら半径・オフセットを適用して再構築）
   savedColliderData = json.colliders ?? null;
   if (savedColliderData && currentVRM) buildCollidersFromVRM(currentVRM);
+
+  // マント位置（エディタ変形）を復元。positions は変形前なので二重適用にならない。
+  const et = json.editorTransform;
+  if (et) {
+    mantleTransform.tx = et.tx ?? 0; mantleTransform.ty = et.ty ?? 0; mantleTransform.tz = et.tz ?? 0;
+    mantleTransform.ry = et.ry ?? 0; mantleTransform.scale = et.scale ?? 1.0;
+  } else {
+    mantleTransform.tx = 0; mantleTransform.ty = 0; mantleTransform.tz = 0;
+    mantleTransform.ry = 0; mantleTransform.scale = 1.0;
+  }
+  syncMantleTransformUI();
 
   // 初期変換を適用してマーカー表示（initMarkers内で全マーカーvisualを更新）
   const transformed = applyMantleTransform(mantleOrigPos, json.vertexCount, mantleTransform);
@@ -1407,6 +1446,69 @@ function arrayBufferToBase64(buf) {
   return btoa(binary);
 }
 
+// dataURI(base64) → Blob
+function dataURIToBlob(uri) {
+  const [head, data] = uri.split(',');
+  const mime = (head.match(/:(.*?);/) || [])[1] || 'application/octet-stream';
+  const bin = atob(data);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// 書き出した npc.json(.npc.json) を再インポート：VRM → cloth → (VRMA/timeline) を復元。
+async function importNPCBundle(bundle) {
+  if (!bundle || !bundle.vrm) { showToast('VRM を含まないファイルです', 'error'); return; }
+  showToast('再インポート中…');
+  try {
+    const name = bundle.name || 'imported';
+    // 1) VRM を Blob→File 化して読み込み（currentVRMFile も設定＝再書き出し可能に）
+    const vrmFile = new File([dataURIToBlob(bundle.vrm)], `${name}.vrm`, { type: 'application/octet-stream' });
+    const meshes = await loadVRM(vrmFile);
+    currentVRMFile = vrmFile;
+    updateMeshList();
+    _populateAnchorBoneDropdown(currentVRM);
+
+    // 2) cloth（マント）復元：currentVRM があるので pin/grip/アンカー/コライダーまで復元される
+    if (bundle.cloth) loadMantleJSON(bundle.cloth);
+
+    // 3) VRMA（埋め込み）復元：プレビュー＋再書き出し用に dataURI を保持
+    currentVRMADataURI = null;
+    if (bundle.vrma) {
+      try {
+        unloadVRMA();
+        const loader = new GLTFLoader();
+        loader.register(parser => new VRMAnimationLoaderPlugin(parser));
+        const url = URL.createObjectURL(dataURIToBlob(bundle.vrma));
+        const gltf = await loader.loadAsync(url);
+        URL.revokeObjectURL(url);
+        const vrmAnims = gltf.userData.vrmAnimations;
+        if (vrmAnims?.length) {
+          vrmaClip   = createVRMAnimationClip(vrmAnims[0], currentVRM);
+          mixer      = new THREE.AnimationMixer(currentVRM.scene);
+          vrmaAction = mixer.clipAction(vrmaClip);
+          vrmaAction.setLoop(THREE.LoopRepeat, Infinity);
+          vrmaAction.play();
+          vrmaAction.paused = true;
+          vrmaPlaying = false;
+          _updateVrmaButtons();
+          currentVRMADataURI = bundle.vrma;
+          currentVRMAName = `${name}.vrma`;
+        }
+      } catch (e) { console.warn('VRMA 復元失敗', e); }
+    }
+
+    // 4) timeline 保持（再書き出しで再添付）
+    importedTimeline = bundle.timeline ?? null;
+
+    const parts = ['VRM', bundle.vrma ? 'VRMA' : null, 'Cloth', bundle.timeline ? 'Timeline' : null].filter(Boolean);
+    showToast(`再インポート完了（${parts.join(' + ')}）`);
+  } catch (err) {
+    showToast(`再インポート失敗: ${err.message}`, 'error');
+    console.error(err);
+  }
+}
+
 // NPCバンドル(.npc.json)書き出し：VRM + VRMA + cloth(+任意でtimeline) を1ファイルにまとめる。
 // fps-cloth-vrm の「NPC一括読込」で読める形式（format: "fps-npc-bundle"）。
 async function exportNPCBundle() {
@@ -1420,9 +1522,11 @@ async function exportNPCBundle() {
     // VRM バイト（アップロードFileから）
     const vrmB64 = arrayBufferToBase64(await currentVRMFile.arrayBuffer());
 
-    // VRMA バイト（選択中のものをサーバから取得）。未選択なら省略。
+    // VRMA バイト。再インポートで埋め込みを保持していればそれを再利用。なければサーバ取得。
     let vrmaDataURI = null;
-    if (currentVRMAName) {
+    if (currentVRMADataURI) {
+      vrmaDataURI = currentVRMADataURI;
+    } else if (currentVRMAName) {
       const res = await fetch(`/vrma/${currentVRMAName}`);
       if (res.ok) {
         vrmaDataURI = 'data:application/octet-stream;base64,' + arrayBufferToBase64(await res.arrayBuffer());
@@ -1431,12 +1535,14 @@ async function exportNPCBundle() {
       }
     }
 
-    // 任意添付の timeline.json（cloth-editor にタイムラインは無いので外部ファイルを受け付ける）
+    // timeline.json：外部ファイルが指定されていればそれ、なければ再インポートで保持したもの。
     let timeline = null;
     const tlInput = document.getElementById('bundle-tl-file');
     const tlFile  = tlInput?.files?.[0];
     if (tlFile) {
       timeline = JSON.parse(await tlFile.text());
+    } else if (importedTimeline) {
+      timeline = importedTimeline;
     }
 
     const bundle = {
@@ -1677,6 +1783,21 @@ function setupUI() {
   });
   document.getElementById('btn-vrm-load').addEventListener('click', () => fileInput.click());
 
+  // NPCバンドル(.npc.json) 再インポート
+  const importNpcInput = document.getElementById('import-npc-file');
+  importNpcInput.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    importNpcInput.value = '';
+    try {
+      const bundle = JSON.parse(await file.text());
+      await importNPCBundle(bundle);
+    } catch (err) {
+      showToast(`再インポート失敗: ${err.message}`, 'error');
+    }
+  });
+  document.getElementById('btn-import-npc').addEventListener('click', () => importNpcInput.click());
+
   // VRMA ドロップダウン + 再生コントロール
   fetch('/vrma/manifest.json')
     .then(r => r.json())
@@ -1694,6 +1815,7 @@ function setupUI() {
     const sel = document.getElementById('vrma-select');
     if (!sel.value) { showToast('VRMAを選択してください', 'warn'); return; }
     currentVRMAName = sel.value;
+    currentVRMADataURI = null;   // サーバ選択を優先（埋め込み保持を解除）
     loadVRMA(sel.value);
   });
   document.getElementById('btn-vrma-play').addEventListener('click', () => {
@@ -1711,6 +1833,7 @@ function setupUI() {
   document.getElementById('btn-vrma-stop').addEventListener('click', () => {
     unloadVRMA();
     currentVRMAName = null;
+    currentVRMADataURI = null;
     document.getElementById('vrma-select').value = '';
   });
   document.getElementById('vrma-speed').addEventListener('change', e => {
@@ -2056,3 +2179,30 @@ init().catch(err => {
   document.getElementById('error-msg').classList.add('visible');
   document.getElementById('loading').style.display = 'none';
 });
+
+// 右パネルの幅をドラッグでリサイズ（左端のハンドルを掴んで伸び縮み）
+(function setupPanelResize() {
+  const panel = document.getElementById('panel-right');
+  const grip  = document.getElementById('panel-right-resizer');
+  if (!panel || !grip) return;
+  let dragging = false;
+  grip.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    grip.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const w = Math.max(160, Math.min(window.innerWidth * 0.6, window.innerWidth - e.clientX));
+    panel.style.width = `${w}px`;
+  });
+  const end = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.userSelect = '';
+    try { grip.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+  };
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
+})();
