@@ -116,6 +116,16 @@ export default defineConfig({
           res.end(JSON.stringify(files));
         });
 
+        // マント一覧（public/cloth/*.cloth.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/cloth/manifest.json')) return next();
+          const dir = path.join(pub, 'cloth');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.cloth.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
         // ラグドール設定一覧（public/ragdoll/*.ragdoll.json）
         server.middlewares.use((req, res, next) => {
           const url = (req.url || '').split('?')[0];

@@ -908,6 +908,69 @@ function setupUI() {
       });
     }
   }
+
+  // ---- 保存マント(cloth.json)の読み込み（public/cloth/） ----
+  // 全コントロールを現在の shapeParams / segments / matParams に同期する
+  const setCtl = (id, value, valId, fmt) => {
+    const el = document.getElementById(id);
+    if (el == null || value == null) return;
+    if (el.type === 'checkbox') el.checked = !!value; else el.value = value;
+    if (valId) { const v = document.getElementById(valId); if (v) v.textContent = fmt ? fmt(value) : String(value); }
+  };
+  function syncUIFromState() {
+    setCtl('shape-type',        shapeParams.type);
+    setCtl('shape-top-width',   shapeParams.topWidth,    'shape-top-width-val',    v => (+v).toFixed(2));
+    setCtl('shape-bottom-width',shapeParams.bottomWidth, 'shape-bottom-width-val', v => (+v).toFixed(2));
+    setCtl('shape-height',      shapeParams.height,      'shape-height-val',       v => (+v).toFixed(2));
+    setCtl('shape-pin-count',   shapeParams.pinCount,    'shape-pin-count-val',    v => String(v));
+    setCtl('shape-top-curve',   shapeParams.topCurve,    'shape-top-curve-val',    v => (+v).toFixed(2));
+    setCtl('shape-arc-angle',   shapeParams.arcAngle,    'shape-arc-angle-val',    v => `${v}°`);
+    setCtl('shape-hem-jag',     shapeParams.hemJag,      'shape-hem-jag-val',      v => (+v).toFixed(2));
+    setCtl('shape-hem-teeth',   shapeParams.hemTeeth,    'shape-hem-teeth-val',    v => String(v));
+    setCtl('collar-enable',     shapeParams.collar);
+    setCtl('collar-height',     shapeParams.collarHeight,'collar-height-val',      v => (+v).toFixed(2));
+    setCtl('collar-flare',      shapeParams.collarFlare, 'collar-flare-val',       v => (+v).toFixed(2));
+    setCtl('collar-curve',      shapeParams.collarCurve, 'collar-curve-val',       v => (+v).toFixed(2));
+    setCtl('segments',          clothNumSegments,        'segments-val',           v => `${v}×${v}`);
+    setCtl('mat-color-front',   matParams.colorFront);
+    setCtl('mat-color-back',    matParams.colorBack);
+    setCtl('mat-roughness',     matParams.roughness,     'mat-roughness-val',      v => (+v).toFixed(2));
+    setCtl('mat-sheen',         matParams.sheen,         'mat-sheen-val',          v => (+v).toFixed(2));
+    setCtl('mat-sheen-roughness',matParams.sheenRoughness,'mat-sheen-roughness-val',v => (+v).toFixed(2));
+    setCtl('mat-sheen-color',   matParams.sheenColor);
+    setCtl('mat-opacity',       matParams.opacity,       'mat-opacity-val',        v => (+v).toFixed(2));
+    _updateShapeVisibility();
+    _updateCollarVisibility();
+  }
+  async function populateClothSelect() {
+    const sel = document.getElementById('cloth-select');
+    if (!sel) return;
+    let files = [];
+    try { const r = await fetch('manifest.json'); if (r.ok) files = await r.json(); } catch { /* なし */ }
+    sel.innerHTML = '<option value="">-- 選択 --</option>';
+    for (const f of files) {
+      const o = document.createElement('option');
+      o.value = f; o.textContent = f.replace(/\.cloth\.json$/, '');
+      sel.appendChild(o);
+    }
+  }
+  async function loadClothJson(name) {
+    if (!name) return;
+    let j;
+    try { const r = await fetch(name); if (!r.ok) return; j = await r.json(); } catch { return; }
+    if (j.shapeParams) Object.assign(shapeParams, j.shapeParams);
+    if (j.segments) clothNumSegments = j.segments;
+    if (j.material) {
+      Object.assign(matParams, j.material);
+      if (frontColorUniform && matParams.colorFront) frontColorUniform.value.set(matParams.colorFront);
+      if (backColorUniform && matParams.colorBack) backColorUniform.value.set(matParams.colorBack);
+    }
+    syncUIFromState();
+    setInstanceCount(instanceCount, clothNumSegments);   // 形状/メッシュ/マテリアルを反映して再生成
+  }
+  const btnLoadCloth = document.getElementById('btn-load-cloth');
+  if (btnLoadCloth) btnLoadCloth.addEventListener('click', () => loadClothJson(document.getElementById('cloth-select').value));
+  populateClothSelect();
 }
 
 // ============================================================
