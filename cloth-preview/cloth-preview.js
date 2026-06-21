@@ -15,7 +15,7 @@ import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
   from 'https://esm.sh/@pixiv/three-vrm-animation?deps=three@0.184.0,@pixiv/three-vrm@3.4.0';
 
 // ── 定数 ─────────────────────────────────────────────────────────
-const MAX_COLLIDERS = 8;
+const MAX_COLLIDERS = 16;
 
 // ── シーングローバル ─────────────────────────────────────────────
 let renderer, scene, camera, controls;
@@ -52,6 +52,7 @@ const colliders        = [];
 const colliderDataArr  = new Float32Array(MAX_COLLIDERS * 4);
 let colliderCountUniform = null;
 let colliderDataBuffer   = null;
+let savedColliderData    = null;   // 読み込んだ cloth/bundle のコライダー設定 [{ boneName, r, offset }]
 
 // ── ハンドグラブポイント ─────────────────────────────────────────
 const handGrabPoints = {
@@ -171,22 +172,33 @@ const BONE_COLLIDER_DEFS = [
   { bone: 'leftShoulder',  r: 0.07 },
   { bone: 'rightShoulder', r: 0.07 },
   { bone: 'upperChest',    r: 0.13 },
+  { bone: 'leftUpperLeg',  r: 0.09 },
+  { bone: 'rightUpperLeg', r: 0.09 },
+  { bone: 'leftLowerLeg',  r: 0.07 },
+  { bone: 'rightLowerLeg', r: 0.07 },
 ];
 
 function buildCollidersFromVRM(vrm) {
   clearColliders();
-  const tmp = new THREE.Vector3();
+  const tmp  = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
   for (const def of BONE_COLLIDER_DEFS) {
     const node = vrm.humanoid?.getNormalizedBoneNode(def.bone);
     if (!node) continue;
     node.getWorldPosition(tmp);
-    addCollider(tmp.x, tmp.y, tmp.z, def.r, node);
+    node.getWorldQuaternion(quat);
+    // 保存済み設定があれば半径・ボーンローカルオフセットを復元（無ければ既定）
+    const saved = savedColliderData?.find(s => s.boneName === def.bone);
+    const r           = saved ? saved.r : def.r;
+    const localOffset = (saved && saved.offset) ? new THREE.Vector3(...saved.offset) : new THREE.Vector3();
+    const world = tmp.clone().add(localOffset.clone().applyQuaternion(quat));
+    addCollider(world.x, world.y, world.z, r, node, def.bone, localOffset);
     if (colliders.length >= MAX_COLLIDERS) break;
   }
   syncColliderDataArr();
 }
 
-function addCollider(x, y, z, r, boneNode = null) {
+function addCollider(x, y, z, r, boneNode = null, boneName = null, localOffset = null) {
   const geo  = new THREE.SphereGeometry(1, 12, 8);
   const mat  = new THREE.MeshBasicMaterial({
     color: 0x44aaff, wireframe: true, transparent: true, opacity: 0.25,
@@ -196,7 +208,7 @@ function addCollider(x, y, z, r, boneNode = null) {
   mesh.scale.setScalar(r);
   mesh.renderOrder = 5;
   scene.add(mesh);
-  colliders.push({ x, y, z, r, boneNode, helperMesh: mesh });
+  colliders.push({ x, y, z, r, boneNode, boneName, localOffset: localOffset ?? new THREE.Vector3(), helperMesh: mesh });
 }
 
 function clearColliders() {
@@ -294,11 +306,17 @@ const _anchorBoneQuat = new THREE.Quaternion();
 const _anchorWorldOff = new THREE.Vector3();
 
 const _colliderTmp = new THREE.Vector3();
+const _colliderQuat = new THREE.Quaternion();
 function updateBoneColliders() {
   let changed = false;
   for (const c of colliders) {
     if (!c.boneNode) continue;
     c.boneNode.getWorldPosition(_colliderTmp);
+    // 保存されたボーンローカルオフセットを反映してボーン追従
+    if (c.localOffset && c.localOffset.lengthSq() > 0) {
+      c.boneNode.getWorldQuaternion(_colliderQuat);
+      _colliderTmp.add(c.localOffset.clone().applyQuaternion(_colliderQuat));
+    }
     if (c.x === _colliderTmp.x && c.y === _colliderTmp.y && c.z === _colliderTmp.z) continue;
     c.x = _colliderTmp.x;
     c.y = _colliderTmp.y;
@@ -403,11 +421,50 @@ function loadMantleJSON(json) {
     _syncHgpOffsetUI('right');
   }
 
+  // コライダー設定（半径・ボーンローカルオフセット）を復元してボーンから再構築
+  savedColliderData = json.colliders ?? null;
+  if (savedColliderData && currentVRM) buildCollidersFromVRM(currentVRM);
+
   // 初期メッシュをシーンに追加（シミュ未実行で静止表示）
   simData = buildSimulation(_buildMantleAnalysis());
   // simRunning は false のままにしておく
 
   showToast(`マント読み込み完了 (${json.vertexCount}頂点 / L手:${leftGripSet.size} R手:${rightGripSet.size} アンカー:${anchorMap.size})`);
+}
+
+// dataURI(base64) → Blob
+function dataURIToBlob(uri) {
+  const [head, data] = uri.split(',');
+  const mime = (head.match(/:(.*?);/) || [])[1] || 'application/octet-stream';
+  const bin = atob(data);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// NPCバンドル(.npc.json)を一括読込：VRM → マント(cloth) → VRMA → timeline。
+async function importNPCBundle(bundle) {
+  if (!bundle || !bundle.vrm) { showToast('VRM を含まないファイルです', 'error'); return; }
+  const name = bundle.name || 'imported';
+  showToast('NPC読み込み中…');
+  try {
+    // 1) VRM（先に読む＝マントのボーンアンカー解決に必要）
+    await loadVRM(new File([dataURIToBlob(bundle.vrm)], `${name}.vrm`, { type: 'application/octet-stream' }));
+    // 2) マント（cloth）
+    if (bundle.cloth) loadMantleJSON(bundle.cloth);
+    // 3) VRMA（埋め込み）
+    if (bundle.vrma) {
+      try { await loadVRMA(new File([dataURIToBlob(bundle.vrma)], `${name}.vrma`, { type: 'application/octet-stream' })); }
+      catch (e) { console.warn('VRMA 復元失敗', e); }
+    }
+    // 4) timeline
+    if (bundle.timeline) { try { importTimeline(bundle.timeline); } catch (e) { console.warn('timeline 復元失敗', e); } }
+    const parts = ['VRM', bundle.cloth ? 'マント' : null, bundle.vrma ? 'VRMA' : null, bundle.timeline ? 'TL' : null].filter(Boolean);
+    showToast(`NPC読み込み完了（${parts.join(' + ')}）`);
+  } catch (err) {
+    showToast(`NPC読み込み失敗: ${err.message}`, 'error');
+    console.error(err);
+  }
 }
 
 function clearMantle() {
@@ -1387,6 +1444,18 @@ function setupUI() {
     catch (err) { showToast(`VRM 読み込み失敗: ${err.message}`, 'error'); console.error(err); }
   });
   document.getElementById('btn-vrm-load').addEventListener('click', () => vrmFile.click());
+
+  // ── NPCバンドル(.npc.json) 一括読み込み ──
+  const npcFile = document.getElementById('npc-file');
+  npcFile.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    npcFile.value = '';
+    showToast('NPC読み込み中…');
+    try { await importNPCBundle(JSON.parse(await file.text())); }
+    catch (err) { showToast(`NPC読み込み失敗: ${err.message}`, 'error'); console.error(err); }
+  });
+  document.getElementById('btn-npc-load').addEventListener('click', () => npcFile.click());
 
   // ── VRMA 読み込み ──
   const vrmaFile = document.getElementById('vrma-file');
