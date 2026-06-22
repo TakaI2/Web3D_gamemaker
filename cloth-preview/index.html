@@ -192,31 +192,8 @@
 
     <!-- Hand grab points (hidden until VRM loaded) -->
     <div class="sec" id="hgp-section">
-      <h3>ハンドグラブポイント</h3>
-      <div style="font-size:10px;color:#556;margin-bottom:5px;">球をドラッグしても微調整できます</div>
-
-      <div style="font-size:11px;color:#88aaff;margin-bottom:2px;">左手</div>
-      <div class="row"><label>X</label>
-        <input type="range" id="hgp-l-x" min="-0.3" max="0.3" step="0.005" value="0">
-        <span class="val" id="hgp-l-x-val">0.00</span></div>
-      <div class="row"><label>Y</label>
-        <input type="range" id="hgp-l-y" min="-0.3" max="0.3" step="0.005" value="0">
-        <span class="val" id="hgp-l-y-val">0.00</span></div>
-      <div class="row"><label>Z</label>
-        <input type="range" id="hgp-l-z" min="-0.3" max="0.3" step="0.005" value="0">
-        <span class="val" id="hgp-l-z-val">0.00</span></div>
-
-      <div style="font-size:11px;color:#ffaa88;margin-top:4px;margin-bottom:2px;">右手</div>
-      <div class="row"><label>X</label>
-        <input type="range" id="hgp-r-x" min="-0.3" max="0.3" step="0.005" value="0">
-        <span class="val" id="hgp-r-x-val">0.00</span></div>
-      <div class="row"><label>Y</label>
-        <input type="range" id="hgp-r-y" min="-0.3" max="0.3" step="0.005" value="0">
-        <span class="val" id="hgp-r-y-val">0.00</span></div>
-      <div class="row"><label>Z</label>
-        <input type="range" id="hgp-r-z" min="-0.3" max="0.3" step="0.005" value="0">
-        <span class="val" id="hgp-r-z-val">0.00</span></div>
-
+      <h3>グラブ点（グリップグループ）</h3>
+      <div style="font-size:10px;color:#556;margin-bottom:5px;">色付き球＝各グループのグラブ点。球をドラッグで微調整（位置編集は主に cloth-editor）。タイムラインの各グループ行で有効化。</div>
       <div class="row" style="margin-top:4px;">
         <label style="min-width:0;">
           <input type="checkbox" id="hgp-visible" checked style="margin-right:3px;">表示

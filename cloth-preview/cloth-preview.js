@@ -29,9 +29,11 @@ let mantleData    = null;
 let mantleOrigPos = null;
 const mantleTransform = { tx: 0, ty: 0, tz: 0, ry: 0, scale: 1.0 };
 
-// ── グリップセット（マントJSONから復元）─────────────────────────
-const leftGripSet  = new Set();
-const rightGripSet = new Set();
+// ── グリップ：名前付きグループ（cloth.json から復元）─────────────
+const GRIP_PALETTE = [0x44aaff, 0xff6644, 0x33ddbb, 0xffcc33, 0xcc66ff, 0x66ff88, 0xff66aa, 0x88ccff];
+let gripGroups = [];          // [{id,name,bone,boneNode,offset,worldPos,markerMesh,active,color}]
+const gripMap = new Map();    // vertexIdx → groupId
+const groupById = (id) => gripGroups.find(g => g.id === id);
 
 // ── ボーンアンカー（マントJSONから復元）─────────────────────────
 // vertexIdx → { boneName, boneNode, localOffset: THREE.Vector3 }
@@ -54,12 +56,8 @@ let colliderCountUniform = null;
 let colliderDataBuffer   = null;
 let savedColliderData    = null;   // 読み込んだ cloth/bundle のコライダー設定 [{ boneName, r, offset }]
 
-// ── ハンドグラブポイント ─────────────────────────────────────────
-const handGrabPoints = {
-  left:  { boneNode: null, offset: new THREE.Vector3(), worldPos: new THREE.Vector3(), markerMesh: null, active: false },
-  right: { boneNode: null, offset: new THREE.Vector3(), worldPos: new THREE.Vector3(), markerMesh: null, active: false },
-};
-let _hgpDragSide = null;
+// ── グラブ点（各グリップグループが関節に追従するマーカー）。座標等は gripGroups 内に保持。
+let _hgpDragSide = null;   // ドラッグ中のグループ id
 const _hgpDragPlane     = new THREE.Plane();
 const _hgpDragRaycaster = new THREE.Raycaster();
 
@@ -78,10 +76,7 @@ const timeline = {
   fps:           30,
   durationFrames: 90,
   currentFrame:  0,
-  grip: {
-    left:  [],  // [{start, end}] — グリップ有効範囲
-    right: [],
-  },
+  grip: {},  // groupId → [{start, end}]（グリップ有効範囲）
   blendShape: new Map(),  // name → Map<frame, value>
   selected:   null,       // { kind, name?, frame } | null
 };
@@ -93,10 +88,10 @@ let tlScrollX    = 0;
 const HEADER_W = 160;
 const ROW_H    = 22;
 const RULER_H  = 24;
-const GRIP_ROWS = [
-  { kind: 'grip', side: 'left',  label: 'Grip L', color: '#44aaff' },
-  { kind: 'grip', side: 'right', label: 'Grip R', color: '#ff6644' },
-];
+// グリップ行はグループから動的生成（各グループ1行）
+function gripRows() {
+  return gripGroups.map(g => ({ kind: 'grip', groupId: g.id, label: g.name, color: '#' + g.color.toString(16).padStart(6, '0') }));
+}
 
 // ── イベントディスパッチ ─────────────────────────────────────────
 let _lastDispatchedFrame = -1;
@@ -243,64 +238,43 @@ function syncColliderDataArr() {
 // Hand Grab Points
 // ============================================================
 
+function _createGroupMarker(g) {
+  const geo = new THREE.SphereGeometry(0.028, 14, 10);
+  const mat = new THREE.MeshBasicMaterial({ color: g.color, transparent: true, opacity: 0.85, depthTest: false });
+  g.markerMesh = new THREE.Mesh(geo, mat);
+  g.markerMesh.renderOrder = 12; g.markerMesh.frustumCulled = false;
+  scene.add(g.markerMesh);
+}
+function _disposeGroupMarker(g) {
+  if (!g.markerMesh) return;
+  scene.remove(g.markerMesh); g.markerMesh.geometry.dispose(); g.markerMesh.material.dispose(); g.markerMesh = null;
+}
+
 function initHandGrabPoints(vrm) {
   disposeHandGrabPoints();
-  const defs = [
-    { side: 'left',  boneName: 'leftHand',  color: 0x44aaff },
-    { side: 'right', boneName: 'rightHand', color: 0xff6644 },
-  ];
   let found = 0;
-  for (const { side, boneName, color } of defs) {
-    const hp = handGrabPoints[side];
-    hp.boneNode = vrm.humanoid?.getNormalizedBoneNode(boneName) ?? null;
-    if (!hp.boneNode) continue;
-    found++;
-    hp.boneNode.getWorldPosition(hp.worldPos);
-    hp.offset.set(0, 0, 0);
-    const geo  = new THREE.SphereGeometry(0.025, 14, 10);
-    const mat  = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, depthTest: false });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(hp.worldPos);
-    mesh.renderOrder   = 12;
-    mesh.frustumCulled = false;
-    hp.markerMesh = mesh;
-    scene.add(mesh);
+  for (const g of gripGroups) {
+    g.boneNode = vrm.humanoid?.getNormalizedBoneNode(g.bone) ?? null;
+    if (g.boneNode) { found++; if (!g.markerMesh) _createGroupMarker(g); }
   }
-  if (found > 0) {
-    document.getElementById('hgp-section').style.display = '';
-    _syncHgpOffsetUI('left');
-    _syncHgpOffsetUI('right');
-  }
+  if (found > 0) document.getElementById('hgp-section').style.display = '';
 }
 
 function disposeHandGrabPoints() {
-  for (const side of ['left', 'right']) {
-    const hp = handGrabPoints[side];
-    if (hp.markerMesh) {
-      scene.remove(hp.markerMesh);
-      hp.markerMesh.geometry.dispose();
-      hp.markerMesh.material.dispose();
-      hp.markerMesh = null;
-    }
-    hp.boneNode = null;
-    hp.offset.set(0, 0, 0);
-  }
+  for (const g of gripGroups) { _disposeGroupMarker(g); g.boneNode = null; }
   _hgpDragSide = null;
   document.getElementById('hgp-section').style.display = 'none';
 }
 
+// 各グループのグラブ点 worldPos = bonePos + boneQuat*offset（位置＋回転追従）。マーカー更新。
 function updateHandGrabPoints() {
-  for (const side of ['left', 'right']) {
-    const hp = handGrabPoints[side];
-    if (!hp.boneNode) continue;
-    hp.boneNode.getWorldPosition(hp.worldPos);
-    hp.worldPos.add(hp.offset);
-    if (hp.markerMesh) hp.markerMesh.position.copy(hp.worldPos);
-    // アクティブなグリップのターゲットを毎フレーム追従更新
-    if (simData && hp.active) {
-      if (side === 'left') simData.leftGripTargetUniform.value.copy(hp.worldPos);
-      else                 simData.rightGripTargetUniform.value.copy(hp.worldPos);
-    }
+  for (const g of gripGroups) {
+    if (!g.boneNode) continue;
+    g.boneNode.getWorldPosition(_anchorTmp);
+    g.boneNode.getWorldQuaternion(_anchorBoneQuat);
+    _anchorWorldOff.copy(g.offset).applyQuaternion(_anchorBoneQuat);
+    g.worldPos.copy(_anchorTmp).add(_anchorWorldOff);
+    if (g.markerMesh) g.markerMesh.position.copy(g.worldPos);
   }
 }
 
@@ -330,29 +304,24 @@ function updateBoneColliders() {
   if (changed) syncColliderDataArr();
 }
 
-function updateAnchorPositions() {
-  if (!simData?.bonePinTargetBuffer || !anchorMap.size) return;
+// per-vertex vec4 [x,y,z,active] を更新：アンカー=常時(w=1)、グリップ=所属グループの active
+function updatePinTargets() {
+  if (!simData?.bonePinTargetBuffer) return;
+  if (!anchorMap.size && !gripMap.size) return;
   const arr = simData.bonePinTargetBuffer.value.array;
   for (const [idx, { boneNode, localOffset }] of anchorMap) {
+    if (!boneNode) continue;
     boneNode.getWorldPosition(_anchorTmp);
     boneNode.getWorldQuaternion(_anchorBoneQuat);
     _anchorWorldOff.copy(localOffset).applyQuaternion(_anchorBoneQuat);
-    arr[idx*3]   = _anchorTmp.x + _anchorWorldOff.x;
-    arr[idx*3+1] = _anchorTmp.y + _anchorWorldOff.y;
-    arr[idx*3+2] = _anchorTmp.z + _anchorWorldOff.z;
+    arr[idx*4] = _anchorTmp.x + _anchorWorldOff.x; arr[idx*4+1] = _anchorTmp.y + _anchorWorldOff.y; arr[idx*4+2] = _anchorTmp.z + _anchorWorldOff.z; arr[idx*4+3] = 1;
+  }
+  for (const [idx, gid] of gripMap) {
+    const g = groupById(gid);
+    if (!g || !g.boneNode) { arr[idx*4+3] = 0; continue; }
+    arr[idx*4] = g.worldPos.x; arr[idx*4+1] = g.worldPos.y; arr[idx*4+2] = g.worldPos.z; arr[idx*4+3] = g.active ? 1 : 0;
   }
   simData.bonePinTargetBuffer.value.needsUpdate = true;
-}
-
-function _syncHgpOffsetUI(side) {
-  const hp     = handGrabPoints[side];
-  const prefix = side === 'left' ? 'hgp-l' : 'hgp-r';
-  for (const axis of ['x', 'y', 'z']) {
-    const sl = document.getElementById(`${prefix}-${axis}`);
-    const vl = document.getElementById(`${prefix}-${axis}-val`);
-    if (sl) sl.value       = hp.offset[axis].toFixed(3);
-    if (vl) vl.textContent = hp.offset[axis].toFixed(2);
-  }
 }
 
 // ============================================================
@@ -389,10 +358,32 @@ function loadMantleJSON(json) {
     Object.assign(mantleTransform, { tx: 0, ty: 0, tz: 0, ry: 0, scale: 1.0 });
   }
 
-  leftGripSet.clear();
-  rightGripSet.clear();
-  if (json.leftGripIndices)  for (const idx of json.leftGripIndices)  leftGripSet.add(idx);
-  if (json.rightGripIndices) for (const idx of json.rightGripIndices) rightGripSet.add(idx);
+  // グリップ復元：新形式 gripGroups を優先、無ければ legacy(leftGripIndices/rightGripIndices→既定グループ)
+  for (const g of gripGroups) _disposeGroupMarker(g);
+  gripGroups = []; gripMap.clear();
+  let _gid = 0;
+  const _bindBone = (g) => { if (currentVRM) { g.boneNode = currentVRM.humanoid?.getNormalizedBoneNode(g.bone) ?? null; if (g.boneNode) _createGroupMarker(g); } };
+  const _mkGroup = (name, bone, color) => ({ id: `g${++_gid}`, name, bone, boneNode: null, offset: new THREE.Vector3(), worldPos: new THREE.Vector3(), markerMesh: null, active: false, color: color ?? GRIP_PALETTE[gripGroups.length % GRIP_PALETTE.length] });
+  if (Array.isArray(json.gripGroups) && json.gripGroups.length) {
+    for (const gd of json.gripGroups) {
+      const g = _mkGroup(gd.name || gd.bone, gd.bone, typeof gd.color === 'number' ? gd.color : undefined);
+      if (gd.id) { g.id = gd.id; _gid = Math.max(_gid, +((`${gd.id}`.match(/\d+/) || [0])[0])); }
+      if (gd.offset) g.offset.set(gd.offset[0], gd.offset[1], gd.offset[2]);
+      gripGroups.push(g); _bindBone(g);
+      for (const idx of (gd.vertices || [])) gripMap.set(idx, g.id);
+    }
+  } else {
+    const addLegacy = (indices, name, bone, off) => {
+      if (!indices || !indices.length) return;
+      const g = _mkGroup(name, bone); if (off) g.offset.set(off[0], off[1], off[2]);
+      gripGroups.push(g); _bindBone(g);
+      for (const idx of indices) gripMap.set(idx, g.id);
+    };
+    addLegacy(json.leftGripIndices, 'L手', 'leftHand', json.handGrabOffsets?.left);
+    addLegacy(json.rightGripIndices, 'R手', 'rightHand', json.handGrabOffsets?.right);
+  }
+  // タイムラインのグリップ範囲を現グループ id に合わせて初期化（未定義グループは空配列）
+  for (const g of gripGroups) if (!timeline.grip[g.id]) timeline.grip[g.id] = [];
 
   // ボーンアンカー復元（VRM読込済みの場合のみ）
   anchorMap.clear();
@@ -414,16 +405,6 @@ function loadMantleJSON(json) {
     }
   }
 
-  // HGPオフセット復元
-  if (json.handGrabOffsets) {
-    for (const side of ['left', 'right']) {
-      const v = json.handGrabOffsets[side];
-      if (v) handGrabPoints[side].offset.set(v[0], v[1], v[2]);
-    }
-    _syncHgpOffsetUI('left');
-    _syncHgpOffsetUI('right');
-  }
-
   // コライダー設定（半径・ボーンローカルオフセット）を復元してボーンから再構築
   savedColliderData = json.colliders ?? null;
   if (savedColliderData && currentVRM) buildCollidersFromVRM(currentVRM);
@@ -432,7 +413,8 @@ function loadMantleJSON(json) {
   simData = buildSimulation(_buildMantleAnalysis());
   // simRunning は false のままにしておく
 
-  showToast(`マント読み込み完了 (${json.vertexCount}頂点 / L手:${leftGripSet.size} R手:${rightGripSet.size} アンカー:${anchorMap.size})`);
+  renderTimeline();
+  showToast(`マント読み込み完了 (${json.vertexCount}頂点 / グリップ${gripGroups.length}グループ / アンカー:${anchorMap.size})`);
 }
 
 // dataURI(base64) → Blob
@@ -473,8 +455,8 @@ async function importNPCBundle(bundle) {
 function clearMantle() {
   if (simRunning) stopSim();
   disposeSimulation();
-  leftGripSet.clear();
-  rightGripSet.clear();
+  for (const g of gripGroups) _disposeGroupMarker(g);
+  gripGroups = []; gripMap.clear();
   anchorMap.clear();
   mantleData    = null;
   mantleOrigPos = null;
@@ -513,20 +495,25 @@ function buildSimulation(analysis) {
     vertexSpringIds[springs[s*2 + 1]].push(s);
   }
 
-  // ボーンアンカー: 頂点ごとの初期ターゲット座標を事前計算
-  const hasBonePins = anchorMap.size > 0;
-  const bonePinTargetArr = new Float32Array(vertexCount * 3);
+  // アンカー＋グリップ: 頂点ごとの初期ターゲット vec4 [x,y,z,active] を事前計算
+  const hasBonePins = anchorMap.size > 0 || gripMap.size > 0;
+  const bonePinTargetArr = new Float32Array(vertexCount * 4);
   if (hasBonePins) {
+    updateHandGrabPoints();   // 各グループのグラブ点 worldPos を最新化
     const tmp      = new THREE.Vector3();
     const boneQuat = new THREE.Quaternion();
     const worldOff = new THREE.Vector3();
     for (const [idx, { boneNode, localOffset }] of anchorMap) {
+      if (!boneNode) continue;
       boneNode.getWorldPosition(tmp);
       boneNode.getWorldQuaternion(boneQuat);
       worldOff.copy(localOffset).applyQuaternion(boneQuat);
-      bonePinTargetArr[idx*3]   = tmp.x + worldOff.x;
-      bonePinTargetArr[idx*3+1] = tmp.y + worldOff.y;
-      bonePinTargetArr[idx*3+2] = tmp.z + worldOff.z;
+      bonePinTargetArr[idx*4] = tmp.x + worldOff.x; bonePinTargetArr[idx*4+1] = tmp.y + worldOff.y; bonePinTargetArr[idx*4+2] = tmp.z + worldOff.z; bonePinTargetArr[idx*4+3] = 1;
+    }
+    for (const [idx, gid] of gripMap) {
+      const g = groupById(gid);
+      if (!g || !g.boneNode) continue;
+      bonePinTargetArr[idx*4] = g.worldPos.x; bonePinTargetArr[idx*4+1] = g.worldPos.y; bonePinTargetArr[idx*4+2] = g.worldPos.z; bonePinTargetArr[idx*4+3] = g.active ? 1 : 0;
     }
   }
 
@@ -534,10 +521,10 @@ function buildSimulation(analysis) {
   const vertexParamsArr  = new Uint32Array(vertexCount * 4);
   for (let i = 0; i < vertexCount; i++) {
     const isFixed = 0;
+    // gripCode: 0=なし, 1=アンカー(常時), 2=グリップ(グループactive時)
     let gripCode = 0;
-    if (anchorMap.has(i))       gripCode = 3;
-    else if (leftGripSet.has(i))  gripCode = 1;
-    else if (rightGripSet.has(i)) gripCode = 2;
+    if (anchorMap.has(i)) gripCode = 1;
+    else if (gripMap.has(i) && groupById(gripMap.get(i))?.boneNode) gripCode = 2;
     vertexParamsArr[i*4]   = isFixed;
     vertexParamsArr[i*4+3] = gripCode;
     vertexParamsArr[i*4+1] = vertexSpringIds[i].length;
@@ -569,12 +556,7 @@ function buildSimulation(analysis) {
   colliderDataBuffer   = instancedArray(colliderDataArr.slice(), 'vec4');
   colliderCountUniform = uniform(colliders.length);
 
-  const bonePinTargetBuffer = hasBonePins ? instancedArray(bonePinTargetArr, 'vec3') : null;
-
-  const leftGripActiveUniform  = uniform(0);
-  const rightGripActiveUniform = uniform(0);
-  const leftGripTargetUniform  = uniform(new THREE.Vector3());
-  const rightGripTargetUniform = uniform(new THREE.Vector3());
+  const bonePinTargetBuffer = hasBonePins ? instancedArray(bonePinTargetArr, 'vec4') : null;  // xyz=target, w=active
 
   const computeSpringForces = Fn(() => {
     const vertexIds  = springVertexIdBuffer.element(instanceIndex);
@@ -596,28 +578,16 @@ function buildSimulation(analysis) {
 
     If(isFixed, () => { Return(); });
 
-    If(leftGripActiveUniform.greaterThan(0.5), () => {
-      If(gripCode.equal(1), () => {
-        vertexForceBuffer.element(instanceIndex).assign(vec3(0, 0, 0));
-        vertexPositionBuffer.element(instanceIndex).assign(leftGripTargetUniform);
-        Return();
-      });
-    });
-    If(rightGripActiveUniform.greaterThan(0.5), () => {
-      If(gripCode.equal(2), () => {
-        vertexForceBuffer.element(instanceIndex).assign(vec3(0, 0, 0));
-        vertexPositionBuffer.element(instanceIndex).assign(rightGripTargetUniform);
-        Return();
-      });
-    });
-
-    // ボーンアンカー（gripCode == 3）
+    // アンカー＋グリップ：per-vertex ターゲット(xyz)へ吸着。code1=アンカー(常時), code2=グリップ(w>0.5時)
     if (hasBonePins) {
-      If(gripCode.equal(3), () => {
+      const tgt = bonePinTargetBuffer.element(instanceIndex).toVar('tgt');
+      const snap = () => {
         vertexForceBuffer.element(instanceIndex).assign(vec3(0, 0, 0));
-        vertexPositionBuffer.element(instanceIndex).assign(bonePinTargetBuffer.element(instanceIndex));
+        vertexPositionBuffer.element(instanceIndex).assign(tgt.xyz);
         Return();
-      });
+      };
+      If(gripCode.equal(1), snap);
+      If(gripCode.equal(2), () => { If(tgt.w.greaterThan(0.5), snap); });
     }
 
     const position = vertexPositionBuffer.element(instanceIndex).toVar('pos');
@@ -692,8 +662,6 @@ function buildSimulation(analysis) {
     computeVertexForces,
     bonePinTargetBuffer,
     clothMesh, clothGeo, clothMat,
-    leftGripActiveUniform, rightGripActiveUniform,
-    leftGripTargetUniform, rightGripTargetUniform,
     cpuPositions: positions.slice(),
   };
 }
@@ -747,18 +715,17 @@ function stopSim() {
 function setupGrabEvents(canvas) {
   canvas.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
-    for (const side of ['left', 'right']) {
-      const hp = handGrabPoints[side];
-      if (!hp.markerMesh) continue;
-      const p    = hp.worldPos.clone().project(camera);
+    for (const g of gripGroups) {
+      if (!g.markerMesh || !g.markerMesh.visible) continue;
+      const p    = g.worldPos.clone().project(camera);
       if (p.z > 1) continue;
       const rect = canvas.getBoundingClientRect();
       const sx = (p.x *  0.5 + 0.5) * rect.width  + rect.left;
       const sy = (p.y * -0.5 + 0.5) * rect.height + rect.top;
       if (Math.hypot(sx - e.clientX, sy - e.clientY) < 22) {
-        _hgpDragSide = side;
-        const normal = hp.worldPos.clone().sub(camera.position).normalize();
-        _hgpDragPlane.setFromNormalAndCoplanarPoint(normal, hp.worldPos);
+        _hgpDragSide = g.id;
+        const normal = g.worldPos.clone().sub(camera.position).normalize();
+        _hgpDragPlane.setFromNormalAndCoplanarPoint(normal, g.worldPos);
         controls.enabled = false;
         canvas.setPointerCapture(e.pointerId);
         canvas.style.cursor = 'move';
@@ -778,11 +745,13 @@ function setupGrabEvents(canvas) {
     );
     const hit = new THREE.Vector3();
     if (_hgpDragRaycaster.ray.intersectPlane(_hgpDragPlane, hit)) {
-      const hp = handGrabPoints[_hgpDragSide];
-      const bonePos = new THREE.Vector3();
-      hp.boneNode.getWorldPosition(bonePos);
-      hp.offset.copy(hit).sub(bonePos).clampScalar(-0.3, 0.3);
-      _syncHgpOffsetUI(_hgpDragSide);
+      const g = groupById(_hgpDragSide);
+      if (g && g.boneNode) {
+        const bonePos = new THREE.Vector3(), boneQuat = new THREE.Quaternion();
+        g.boneNode.getWorldPosition(bonePos);
+        g.boneNode.getWorldQuaternion(boneQuat);
+        g.offset.copy(hit).sub(bonePos).applyQuaternion(boneQuat.invert()).clampScalar(-0.4, 0.4);
+      }
     }
   });
 
@@ -907,20 +876,23 @@ function updatePlayButtons() {
 // Timeline State Management
 // ============================================================
 
-function addGripRange(side, start, end) {
+function addGripRange(groupId, start, end) {
+  if (!timeline.grip[groupId]) timeline.grip[groupId] = [];
   const s = Math.min(start, end), e = Math.max(start, end);
-  timeline.grip[side].push({ start: s, end: e });
-  timeline.grip[side].sort((a, b) => a.start - b.start);
+  timeline.grip[groupId].push({ start: s, end: e });
+  timeline.grip[groupId].sort((a, b) => a.start - b.start);
 }
 
-function removeGripRangeAt(side, frame) {
-  const ranges = timeline.grip[side];
+function removeGripRangeAt(groupId, frame) {
+  const ranges = timeline.grip[groupId];
+  if (!ranges) return;
   const idx = ranges.findIndex(r => frame >= r.start && frame <= r.end);
   if (idx >= 0) ranges.splice(idx, 1);
 }
 
-function gripActiveAt(side, frame) {
-  return timeline.grip[side].some(r => frame >= r.start && frame <= r.end);
+function gripActiveAt(groupId, frame) {
+  const ranges = timeline.grip[groupId];
+  return ranges ? ranges.some(r => frame >= r.start && frame <= r.end) : false;
 }
 
 function addBlendShapeTrack(name) {
@@ -963,9 +935,9 @@ function selectBlendShapeKF(name, frame) {
 
 function exportTimeline() {
   const tracks = [];
-  for (const side of ['left', 'right']) {
-    if (timeline.grip[side].length > 0)
-      tracks.push({ kind: 'grip', side, ranges: timeline.grip[side].map(r => ({ ...r })) });
+  for (const g of gripGroups) {
+    const ranges = timeline.grip[g.id];
+    if (ranges && ranges.length) tracks.push({ kind: 'grip', groupId: g.id, ranges: ranges.map(r => ({ ...r })) });
   }
   for (const [name, kfMap] of timeline.blendShape) {
     if (kfMap.size > 0) {
@@ -982,26 +954,26 @@ function exportTimeline() {
 
 function importTimeline(json) {
   if (!Array.isArray(json.tracks)) throw new Error('無効なタイムラインファイルです');
-  timeline.grip.left  = [];
-  timeline.grip.right = [];
+  for (const k of Object.keys(timeline.grip)) timeline.grip[k] = [];
   timeline.blendShape.clear();
   timeline.selected = null;
 
   if (json.fps)            timeline.fps            = json.fps;
   if (json.durationFrames) timeline.durationFrames = json.durationFrames;
 
+  const byBone = (bone) => gripGroups.find(g => g.bone === bone)?.id;
   for (const track of json.tracks) {
     if (track.kind === 'grip') {
-      if (track.side && Array.isArray(track.ranges)) {
-        // v2形式: ranges
-        for (const r of track.ranges) timeline.grip[track.side].push({ start: r.start, end: r.end });
-      } else if (track.type && Array.isArray(track.frames)) {
-        // v1旧形式: 単一フレームをそのまま1フレーム範囲として読み込み
-        const side = track.type.includes('Left') || track.type === 'gripLeft' ? 'left' : 'right';
-        if (track.type === 'gripLeft' || track.type === 'gripRight') {
-          for (const f of track.frames) timeline.grip[side].push({ start: f, end: f });
-        }
-        // releaseLeft/releaseRight は無視
+      // groupId(新) を優先、無ければ legacy side/type を leftHand/rightHand グループへマップ
+      let gid = track.groupId && groupById(track.groupId) ? track.groupId : null;
+      if (!gid && track.side)  gid = byBone(track.side === 'left' ? 'leftHand' : 'rightHand');
+      if (!gid && track.type)  gid = byBone((track.type.includes('Left') || track.type === 'gripLeft') ? 'leftHand' : 'rightHand');
+      if (!gid) continue;
+      if (!timeline.grip[gid]) timeline.grip[gid] = [];
+      if (Array.isArray(track.ranges)) {
+        for (const r of track.ranges) timeline.grip[gid].push({ start: r.start, end: r.end });
+      } else if (Array.isArray(track.frames) && (track.type === 'gripLeft' || track.type === 'gripRight')) {
+        for (const f of track.frames) timeline.grip[gid].push({ start: f, end: f });
       }
     } else if (track.kind === 'blendShape') {
       const kfMap = new Map();
@@ -1023,7 +995,7 @@ function importTimeline(json) {
 // ============================================================
 
 function allRows() {
-  const rows = [...GRIP_ROWS];
+  const rows = gripRows();
   for (const name of timeline.blendShape.keys()) {
     rows.push({ kind: 'blendShape', name, label: name, color: '#44ee88' });
   }
@@ -1098,7 +1070,7 @@ function renderTimeline() {
     ctx.stroke();
 
     if (row.kind === 'grip') {
-      const ranges = timeline.grip[row.side];
+      const ranges = timeline.grip[row.groupId] || [];
       for (const r of ranges) {
         const x0 = Math.max(HEADER_W, frameToX(r.start));
         const x1 = Math.min(W, frameToX(r.end + 1));
@@ -1115,7 +1087,7 @@ function renderTimeline() {
         ctx.fillRect(x1 - 3, y + 3, 3, ROW_H - 6);
       }
       // ドラッグ中プレビュー
-      if (_gripDrag?.side === row.side) {
+      if (_gripDrag?.groupId === row.groupId) {
         const s = Math.min(_gripDrag.startFrame, _gripDrag.endFrame);
         const e = Math.max(_gripDrag.startFrame, _gripDrag.endFrame);
         const x0 = Math.max(HEADER_W, frameToX(s));
@@ -1224,7 +1196,7 @@ function screenToTrack(offsetX, offsetY) {
   return { row: rows[rowIdx], rowIdx, frame };
 }
 
-let _gripDrag = null; // { side, startFrame, endFrame }
+let _gripDrag = null; // { groupId, startFrame, endFrame }
 
 function setupTimelineEvents(canvas) {
   let _tlDragging = false;
@@ -1249,7 +1221,7 @@ function setupTimelineEvents(canvas) {
 
     if (row.kind === 'grip') {
       // ドラッグ開始（マウスアップまで範囲確定しない）
-      _gripDrag = { side: row.side, startFrame: frame, endFrame: frame };
+      _gripDrag = { groupId: row.groupId, startFrame: frame, endFrame: frame };
       renderTimeline();
     } else if (row.kind === 'blendShape') {
       const kfMap = timeline.blendShape.get(row.name);
@@ -1280,7 +1252,7 @@ function setupTimelineEvents(canvas) {
 
   canvas.addEventListener('mouseup', () => {
     if (_gripDrag) {
-      addGripRange(_gripDrag.side, _gripDrag.startFrame, _gripDrag.endFrame);
+      addGripRange(_gripDrag.groupId, _gripDrag.startFrame, _gripDrag.endFrame);
       _gripDrag = null;
       renderTimeline();
     }
@@ -1288,7 +1260,7 @@ function setupTimelineEvents(canvas) {
   });
   canvas.addEventListener('mouseleave', () => {
     if (_gripDrag) {
-      addGripRange(_gripDrag.side, _gripDrag.startFrame, _gripDrag.endFrame);
+      addGripRange(_gripDrag.groupId, _gripDrag.startFrame, _gripDrag.endFrame);
       _gripDrag = null;
       renderTimeline();
     }
@@ -1304,7 +1276,7 @@ function setupTimelineEvents(canvas) {
     if (!hit) return;
     const { row, frame } = hit;
     if (row.kind === 'blendShape') removeBlendShapeKF(row.name, frame);
-    else if (row.kind === 'grip')  { removeGripRangeAt(row.side, frame); renderTimeline(); }
+    else if (row.kind === 'grip')  { removeGripRangeAt(row.groupId, frame); renderTimeline(); }
   });
 
   canvas.addEventListener('wheel', e => {
@@ -1351,23 +1323,8 @@ function dispatchTimelineEvents(frame) {
 }
 
 function _updateGripState(f) {
-  if (!simData) return;
-  for (const side of ['left', 'right']) {
-    const active = gripActiveAt(side, f);
-    const hp     = handGrabPoints[side];
-    hp.active    = active;
-    try {
-      if (side === 'left') {
-        simData.leftGripActiveUniform.value = active ? 1 : 0;
-        if (active && hp.boneNode) simData.leftGripTargetUniform.value.copy(hp.worldPos);
-      } else {
-        simData.rightGripActiveUniform.value = active ? 1 : 0;
-        if (active && hp.boneNode) simData.rightGripTargetUniform.value.copy(hp.worldPos);
-      }
-    } catch (err) {
-      showToast(`グリップエラー: ${err.message}`, 'error');
-    }
-  }
+  // 各グループの active をフレームの範囲から決定。per-vertex のターゲット/active は updatePinTargets が反映。
+  for (const g of gripGroups) g.active = gripActiveAt(g.id, f);
 }
 
 function applyBlendShapesAt(frame) {
@@ -1552,30 +1509,13 @@ function setupUI() {
   bindSlider('stiffness', 'stiffness-val', stiffnessUniform, parseFloat, v => v.toFixed(3));
   bindSlider('wind',      'wind-val',      windUniform,      parseFloat, v => v.toFixed(1));
 
-  // ── HGP オフセットスライダー ──
-  for (const side of ['left', 'right']) {
-    const prefix = side === 'left' ? 'hgp-l' : 'hgp-r';
-    for (const axis of ['x', 'y', 'z']) {
-      const sl = document.getElementById(`${prefix}-${axis}`);
-      const vl = document.getElementById(`${prefix}-${axis}-val`);
-      if (!sl) continue;
-      sl.addEventListener('input', () => {
-        handGrabPoints[side].offset[axis] = parseFloat(sl.value);
-        if (vl) vl.textContent = parseFloat(sl.value).toFixed(2);
-      });
-    }
-  }
+  // ── グラブ点マーカー表示切替（オフセット編集は cloth-editor 側。ここは球ドラッグで微調整可）──
   document.getElementById('hgp-visible')?.addEventListener('change', e => {
-    for (const side of ['left', 'right']) {
-      if (handGrabPoints[side].markerMesh) handGrabPoints[side].markerMesh.visible = e.target.checked;
-    }
+    for (const g of gripGroups) if (g.markerMesh) g.markerMesh.visible = e.target.checked;
   });
   document.getElementById('btn-hgp-reset')?.addEventListener('click', () => {
-    for (const side of ['left', 'right']) {
-      handGrabPoints[side].offset.set(0, 0, 0);
-      _syncHgpOffsetUI(side);
-    }
-    showToast('グラブポイントオフセットをリセットしました');
+    for (const g of gripGroups) g.offset.set(0, 0, 0);
+    showToast('グラブ点オフセットをリセットしました');
   });
 
   // ── ブレンドシェイプ追加 ──
@@ -1661,7 +1601,7 @@ async function render() {
 
   // 布シミュレーション
   if (simRunning && simData) {
-    updateAnchorPositions();
+    updatePinTargets();
     timeSinceLastStep += dt;
     const step = 1 / 360;
     while (timeSinceLastStep >= step) {
