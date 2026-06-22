@@ -10,6 +10,7 @@ import {
   cross, transformNormalToView,
 } from 'https://esm.sh/three@0.184.0/tsl';
 import { OrbitControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader }    from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
@@ -80,18 +81,24 @@ let   colliderDataBuffer   = null;  // instancedArray
 let   savedColliderData    = null;
 
 // ── グリップ状態 ──────────────────────────────────────────────
-const leftGripSet  = new Set();  // 左手でつかめる頂点インデックス
-const rightGripSet = new Set();  // 右手でつかめる頂点インデックス
-let gripEditMode   = null;        // 'left' | 'right' | null
+// グリップ：4グループ(L手/R手/L肘/R肘)。各頂点は1グループのみ（重複不可）。割当時に関節基準ローカルoffsetを捕捉。
+const GRIP_GROUPS = ['leftHand', 'rightHand', 'leftLowerArm', 'rightLowerArm'];
+const GRIP_CODE   = { leftHand: 2, rightHand: 3, leftLowerArm: 4, rightLowerArm: 5 };
+const GRIP_LABEL  = { leftHand: 'L手', rightHand: 'R手', leftLowerArm: 'L肘', rightLowerArm: 'R肘' };
+const GRIP_COLOR  = { leftHand: 0x44aaff, rightHand: 0xff6644, leftLowerArm: 0x33ddbb, rightLowerArm: 0xffcc33 };
+const GRIP_KEY    = { KeyL: 'leftHand', KeyR: 'rightHand', KeyK: 'leftLowerArm', KeyE: 'rightLowerArm' };
+const gripMap    = new Map();   // vertexIdx → { group }（どのグループに属するか）
+const gripActive = { leftHand: false, rightHand: false, leftLowerArm: false, rightLowerArm: false };
+let gripEditMode = null;         // 編集中グループ（GRIP_GROUPS の値）| null
 
 // ── ハンドグラブポイント ─────────────────────────────────────
-// VRM手ボーンに追従するグラブポイント（オフセット微調整可能）
-const handGrabPoints = {
-  left:  { boneNode: null, offset: new THREE.Vector3(), worldPos: new THREE.Vector3(), markerMesh: null, active: false },
-  right: { boneNode: null, offset: new THREE.Vector3(), worldPos: new THREE.Vector3(), markerMesh: null, active: false },
-};
-// ハンドグラブポイントのドラッグ状態（マーカー球を直接ドラッグして微調整）
-let _hgpDragSide = null;
+// 4グループ(L手/R手/L肘/R肘)のグラブ点。各グループの全グリップ頂点がこの1点に吸着。
+// worldPos = jointWorldPos + jointWorldQuat * offset（位置＋回転に追従）。offsetはスライダー/ドラッグで調整。
+const gripPt = {};
+for (const _g of GRIP_GROUPS) gripPt[_g] = { boneNode: null, offset: new THREE.Vector3(), worldPos: new THREE.Vector3(), markerMesh: null };
+// グラブ点マーカーのドラッグ状態（マーカー球を直接ドラッグして offset 調整）
+let _hgpDragSide = null;   // ドラッグ中のグループ名
+let gripGizmo    = null;   // グラブ点移動ギズモ(TransformControls)
 const _hgpDragPlane    = new THREE.Plane();
 const _hgpDragRaycaster = new THREE.Raycaster();
 
@@ -330,75 +337,81 @@ function updateColliderUI() {
 
 function initHandGrabPoints(vrm) {
   disposeHandGrabPoints();
-  const defs = [
-    { side: 'left',  boneName: 'leftHand',  color: 0x44aaff },
-    { side: 'right', boneName: 'rightHand', color: 0xff6644 },
-  ];
   let found = 0;
-  for (const { side, boneName, color } of defs) {
-    const hp = handGrabPoints[side];
-    hp.boneNode = vrm.humanoid?.getNormalizedBoneNode(boneName) ?? null;
-    if (!hp.boneNode) continue;
+  for (const g of GRIP_GROUPS) {
+    const pt = gripPt[g];
+    pt.boneNode = vrm.humanoid?.getNormalizedBoneNode(g) ?? null;
+    if (!pt.boneNode) continue;
     found++;
-    hp.boneNode.getWorldPosition(hp.worldPos);
-    hp.offset.set(0, 0, 0);
-
-    const geo  = new THREE.SphereGeometry(0.025, 14, 10);
-    const mat  = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, depthTest: false });
+    pt.boneNode.getWorldPosition(pt.worldPos);
+    const geo  = new THREE.SphereGeometry(0.03, 14, 10);
+    const mat  = new THREE.MeshBasicMaterial({ color: GRIP_COLOR[g], transparent: true, opacity: 0.85, depthTest: false });
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(hp.worldPos);
-    mesh.renderOrder   = 12;
-    mesh.frustumCulled = false;
-    hp.markerMesh = mesh;
+    mesh.position.copy(pt.worldPos);
+    mesh.renderOrder = 12; mesh.frustumCulled = false;
+    pt.markerMesh = mesh;
     scene.add(mesh);
   }
   if (found > 0) {
     document.getElementById('hand-grab-section').style.display = '';
-    _syncHgpOffsetUI('left');
-    _syncHgpOffsetUI('right');
+    for (const g of GRIP_GROUPS) _syncHgpOffsetUI(g);
   }
+  updateGripCounts();
 }
 
 function disposeHandGrabPoints() {
-  for (const side of ['left', 'right']) {
-    const hp = handGrabPoints[side];
-    if (hp.markerMesh) {
-      scene.remove(hp.markerMesh);
-      hp.markerMesh.geometry.dispose();
-      hp.markerMesh.material.dispose();
-      hp.markerMesh = null;
+  for (const g of GRIP_GROUPS) {
+    const pt = gripPt[g];
+    if (pt.markerMesh) {
+      scene.remove(pt.markerMesh);
+      pt.markerMesh.geometry.dispose();
+      pt.markerMesh.material.dispose();
+      pt.markerMesh = null;
     }
-    hp.boneNode = null;
-    hp.offset.set(0, 0, 0);
-    hp.active = false;
+    pt.boneNode = null;
   }
   _hgpDragSide = null;
+  if (gripGizmo) gripGizmo.detach();
   document.getElementById('hand-grab-section').style.display = 'none';
 }
 
-// 毎フレーム呼び出し：ボーン位置＋オフセットでmarkerを更新し、アクティブ時はgrip targetも更新
+// 毎フレーム：各グループのグラブ点 worldPos = jointPos + jointQuat*offset（位置＋回転に追従）。マーカー更新。
 function updateHandGrabPoints() {
-  for (const side of ['left', 'right']) {
-    const hp = handGrabPoints[side];
-    if (!hp.boneNode) continue;
-    hp.boneNode.getWorldPosition(hp.worldPos);
-    hp.worldPos.add(hp.offset);
-    if (hp.markerMesh) hp.markerMesh.position.copy(hp.worldPos);
-    if (simData && hp.active) {
-      if (side === 'left')  simData.leftGripTargetUniform.value.copy(hp.worldPos);
-      else                  simData.rightGripTargetUniform.value.copy(hp.worldPos);
-    }
+  for (const g of GRIP_GROUPS) {
+    const pt = gripPt[g];
+    if (!pt.boneNode) continue;
+    pt.boneNode.getWorldPosition(_anchorTmp);
+    pt.boneNode.getWorldQuaternion(_anchorBoneQuat);
+    _anchorWorldOff.copy(pt.offset).applyQuaternion(_anchorBoneQuat);
+    pt.worldPos.copy(_anchorTmp).add(_anchorWorldOff);
+    if (pt.markerMesh) pt.markerMesh.position.copy(pt.worldPos);
   }
 }
 
-function _syncHgpOffsetUI(side) {
-  const hp     = handGrabPoints[side];
-  const prefix = side === 'left' ? 'hgp-l' : 'hgp-r';
+function _syncHgpOffsetUI(group) {
+  const pt = gripPt[group];
   for (const axis of ['x', 'y', 'z']) {
-    const sl = document.getElementById(`${prefix}-${axis}`);
-    const vl = document.getElementById(`${prefix}-${axis}-val`);
-    if (sl) sl.value         = hp.offset[axis].toFixed(3);
-    if (vl) vl.textContent   = hp.offset[axis].toFixed(2);
+    const sl = document.getElementById(`grip-off-${group}-${axis}`);
+    const vl = document.getElementById(`grip-off-${group}-${axis}-val`);
+    if (sl) sl.value       = pt.offset[axis].toFixed(3);
+    if (vl) vl.textContent = pt.offset[axis].toFixed(2);
+  }
+}
+
+// 移動ギズモでグラブ点マーカーを動かしたとき：マーカー座標 → 関節ローカルoffset を逆算
+const _gizPos = new THREE.Vector3(), _gizQuat = new THREE.Quaternion();
+function onGripGizmoChange() {
+  const obj = gripGizmo?.object;
+  if (!obj) return;
+  for (const g of GRIP_GROUPS) {
+    const pt = gripPt[g];
+    if (pt.markerMesh !== obj || !pt.boneNode) continue;
+    pt.boneNode.getWorldPosition(_gizPos);
+    pt.boneNode.getWorldQuaternion(_gizQuat);
+    pt.offset.copy(obj.position).sub(_gizPos).applyQuaternion(_gizQuat.invert()).clampScalar(-0.4, 0.4);
+    pt.worldPos.copy(obj.position);
+    _syncHgpOffsetUI(g);
+    break;
   }
 }
 
@@ -523,9 +536,27 @@ function loadMantleJSON(json) {
   // ピン・グリップをJSONから復元
   anchorMap.clear();
   for (const idx of json.pinnedIndices) pinnedSet.add(idx);
-  leftGripSet.clear(); rightGripSet.clear();
-  if (json.leftGripIndices)  for (const idx of json.leftGripIndices)  leftGripSet.add(idx);
-  if (json.rightGripIndices) for (const idx of json.rightGripIndices) rightGripSet.add(idx);
+  // グリップ復元：新形式 gripIndices+gripOffsets を優先、次に旧 gripPoints、無ければ legacy
+  gripMap.clear();
+  for (const g of GRIP_GROUPS) gripPt[g].offset.set(0, 0, 0);
+  if (json.gripIndices) {
+    for (const g of GRIP_GROUPS) {
+      for (const idx of (json.gripIndices[g] || [])) gripMap.set(idx, { group: g });
+      const off = json.gripOffsets?.[g];
+      if (off) gripPt[g].offset.set(off[0], off[1], off[2]);
+    }
+  } else if (Array.isArray(json.gripPoints)) {
+    for (const gp of json.gripPoints) if (gp.group) gripMap.set(gp.vertexIdx, { group: gp.group });
+  } else {
+    const addLegacy = (indices, group, off) => {
+      if (indices) for (const idx of indices) gripMap.set(idx, { group });
+      if (off) gripPt[group].offset.set(off[0], off[1], off[2]);
+    };
+    addLegacy(json.leftGripIndices, 'leftHand', json.handGrabOffsets?.left);
+    addLegacy(json.rightGripIndices, 'rightHand', json.handGrabOffsets?.right);
+  }
+  for (const g of GRIP_GROUPS) _syncHgpOffsetUI(g);
+  updateGripCounts();
 
   // ボーンアンカー復元（VRM 読み込み済みの場合のみ boneNode を解決）
   const anchorData = json.anchorAssignments ?? json.pinnedBoneAssignments;
@@ -579,8 +610,8 @@ function clearMantle() {
   disposeMarkers();
   pinnedSet.clear();
   anchorMap.clear();
-  leftGripSet.clear();
-  rightGripSet.clear();
+  gripMap.clear();
+  updateGripCounts();
   mantleData    = null;
   mantleOrigPos = null;
   mantleTransform.tx = 0; mantleTransform.ty = 0; mantleTransform.tz = 0;
@@ -659,11 +690,8 @@ function _updateMarkerVisual(idx) {
   } else if (pinnedSet.has(idx)) {
     mat.color.set(0xffee00); mat.opacity = 1.0; mat.transparent = false;
     markerMeshes[idx].scale.setScalar(1.6);
-  } else if (leftGripSet.has(idx)) {
-    mat.color.set(0x44aaff); mat.opacity = 1.0; mat.transparent = false;
-    markerMeshes[idx].scale.setScalar(1.4);
-  } else if (rightGripSet.has(idx)) {
-    mat.color.set(0xff6644); mat.opacity = 1.0; mat.transparent = false;
+  } else if (gripMap.has(idx)) {
+    mat.color.set(GRIP_COLOR[gripMap.get(idx).group]); mat.opacity = 1.0; mat.transparent = false;
     markerMeshes[idx].scale.setScalar(1.4);
   } else {
     mat.color.set(0xffffff); mat.opacity = 0.4; mat.transparent = true;
@@ -686,29 +714,35 @@ function resetPins() {
   for (let i = 0; i < markerMeshes.length; i++) _updateMarkerVisual(i);
 }
 
-function toggleGrip(idx, side) {
-  if (side === 'left') {
-    if (leftGripSet.has(idx)) {
-      leftGripSet.delete(idx);
-    } else {
-      leftGripSet.add(idx);
-      rightGripSet.delete(idx); // 同じ頂点を両手に割り当て不可
-    }
+// 現在の編集グループへ頂点を割当/解除。重複禁止（ピン・アンカー・他グリップから除外）。
+function toggleGrip(idx) {
+  if (!gripEditMode) return;
+  const existing = gripMap.get(idx);
+  if (existing && existing.group === gripEditMode) {
+    gripMap.delete(idx);
   } else {
-    if (rightGripSet.has(idx)) {
-      rightGripSet.delete(idx);
-    } else {
-      rightGripSet.add(idx);
-      leftGripSet.delete(idx);
-    }
+    pinnedSet.delete(idx);
+    anchorMap.delete(idx);
+    gripMap.set(idx, { group: gripEditMode });
   }
   _updateMarkerVisual(idx);
+  updateGripCounts();
 }
 
 function resetGrips() {
-  leftGripSet.clear();
-  rightGripSet.clear();
-  for (let i = 0; i < markerMeshes.length; i++) _updateMarkerVisual(i);
+  const indices = [...gripMap.keys()];
+  gripMap.clear();
+  for (const i of indices) _updateMarkerVisual(i);
+  updateGripCounts();
+}
+
+// グリップ各グループの点数を表示
+function updateGripCounts() {
+  const el = document.getElementById('grip-counts');
+  if (!el) return;
+  const counts = { leftHand: 0, rightHand: 0, leftLowerArm: 0, rightLowerArm: 0 };
+  for (const { group } of gripMap.values()) counts[group]++;
+  el.textContent = GRIP_GROUPS.map(g => `${GRIP_LABEL[g]}:${counts[g]}`).join(' / ');
 }
 
 function toggleAnchor(idx) {
@@ -752,16 +786,23 @@ const _anchorTmp      = new THREE.Vector3();
 const _anchorBoneQuat = new THREE.Quaternion();
 const _anchorWorldOff = new THREE.Vector3();
 
-function updateAnchorPositions() {
-  if (!simData?.bonePinTargetBuffer || !anchorMap.size) return;
+function updatePinTargets() {
+  if (!simData?.bonePinTargetBuffer) return;
+  if (!anchorMap.size && !gripMap.size) return;
   const arr = simData.bonePinTargetBuffer.value.array;
-  for (const [idx, { boneNode, localOffset }] of anchorMap) {
-    boneNode.getWorldPosition(_anchorTmp);
-    boneNode.getWorldQuaternion(_anchorBoneQuat);
-    _anchorWorldOff.copy(localOffset).applyQuaternion(_anchorBoneQuat);
-    arr[idx*3]   = _anchorTmp.x + _anchorWorldOff.x;
-    arr[idx*3+1] = _anchorTmp.y + _anchorWorldOff.y;
-    arr[idx*3+2] = _anchorTmp.z + _anchorWorldOff.z;
+  // アンカー：頂点ごとのローカルオフセットで追従
+  for (const [idx, a] of anchorMap) {
+    if (!a.boneNode) continue;
+    a.boneNode.getWorldPosition(_anchorTmp);
+    a.boneNode.getWorldQuaternion(_anchorBoneQuat);
+    _anchorWorldOff.copy(a.localOffset).applyQuaternion(_anchorBoneQuat);
+    arr[idx*3] = _anchorTmp.x + _anchorWorldOff.x; arr[idx*3+1] = _anchorTmp.y + _anchorWorldOff.y; arr[idx*3+2] = _anchorTmp.z + _anchorWorldOff.z;
+  }
+  // グリップ：グループのグラブ点 worldPos（updateHandGrabPoints で計算済み）へ全頂点を吸着
+  for (const [idx, g] of gripMap) {
+    const w = gripPt[g.group]?.worldPos;
+    if (!w) continue;
+    arr[idx*3] = w.x; arr[idx*3+1] = w.y; arr[idx*3+2] = w.z;
   }
   simData.bonePinTargetBuffer.value.needsUpdate = true;
 }
@@ -794,36 +835,40 @@ function buildSimulation(analysis) {
   const springListArray = [];
   const vertexParamsArr = new Uint32Array(vertexCount * 4);
 
-  // ボーンアンカー：頂点ごとの初期ターゲット座標（boneWorldPos + rotate(localOffset) をCPUで事前計算）
-  // フレームごとに updateAnchorPositions() で更新される
-  const hasBonePins = anchorMap.size > 0;
+  // アンカー＋グリップ：頂点ごとの初期ターゲット座標（boneWorldPos + rotate(localOffset)）を事前計算。
+  // フレームごとに updatePinTargets() で更新される。アンカー=常時、グリップ=対応マスク有効時に吸着。
+  const hasPinTargets = anchorMap.size > 0 || gripMap.size > 0;
   const bonePinTargetArr = new Float32Array(vertexCount * 3);
-  if (hasBonePins) {
+  if (hasPinTargets) {
+    updateHandGrabPoints();   // 各グループのグラブ点 worldPos を最新化（offset+bone）
     const tmp      = new THREE.Vector3();
     const boneQuat = new THREE.Quaternion();
     const worldOff = new THREE.Vector3();
-    for (const [idx, { boneNode, localOffset }] of anchorMap) {
-      boneNode.getWorldPosition(tmp);
-      boneNode.getWorldQuaternion(boneQuat);
-      worldOff.copy(localOffset).applyQuaternion(boneQuat);
-      bonePinTargetArr[idx*3]   = tmp.x + worldOff.x;
-      bonePinTargetArr[idx*3+1] = tmp.y + worldOff.y;
-      bonePinTargetArr[idx*3+2] = tmp.z + worldOff.z;
+    // アンカー：頂点ごとのローカルオフセット
+    for (const [idx, a] of anchorMap) {
+      if (!a.boneNode) continue;
+      a.boneNode.getWorldPosition(tmp);
+      a.boneNode.getWorldQuaternion(boneQuat);
+      worldOff.copy(a.localOffset).applyQuaternion(boneQuat);
+      bonePinTargetArr[idx*3] = tmp.x + worldOff.x; bonePinTargetArr[idx*3+1] = tmp.y + worldOff.y; bonePinTargetArr[idx*3+2] = tmp.z + worldOff.z;
+    }
+    // グリップ：グループのグラブ点 worldPos（全頂点が同じ点へ吸着）
+    for (const [idx, g] of gripMap) {
+      const w = gripPt[g.group]?.worldPos;
+      if (!w) continue;
+      bonePinTargetArr[idx*3] = w.x; bonePinTargetArr[idx*3+1] = w.y; bonePinTargetArr[idx*3+2] = w.z;
     }
   }
 
   for (let i = 0; i < vertexCount; i++) {
     const isAnchor = anchorMap.has(i);
-    // アンカー頂点は isFixed=0 にしてシェーダー内で gripCode==3 として処理
-    const isFixed = (!isAnchor && pinnedSet.has(i)) ? 1 : 0;
+    const grip     = gripMap.get(i);
+    // アンカー/グリップ頂点は isFixed=0（シミュしつつシェーダーでターゲットへ吸着）
+    const isFixed = (!isAnchor && !grip && pinnedSet.has(i)) ? 1 : 0;
+    // gripCode: 0=なし, 1=アンカー(常時), 2=L手,3=R手,4=L肘,5=R肘(対応マスク有効時)
     let gripCode = 0;
-    if (isAnchor) {
-      gripCode = 3;
-    } else if (leftGripSet.has(i)) {
-      gripCode = 1;
-    } else if (rightGripSet.has(i)) {
-      gripCode = 2;
-    }
+    if (isAnchor) gripCode = 1;
+    else if (grip && gripPt[grip.group].boneNode) gripCode = GRIP_CODE[grip.group];
     vertexParamsArr[i * 4]     = isFixed;
     vertexParamsArr[i * 4 + 3] = gripCode;
     if (!isFixed) {
@@ -864,15 +909,11 @@ function buildSimulation(analysis) {
   colliderDataBuffer   = instancedArray(colliderDataArr.slice(), 'vec4');
   colliderCountUniform = uniform(colliders.length);
 
-  // ── ボーンアンカーターゲットバッファ（アンカーがある場合のみ）──
-  // 1本のバッファに boneWorldPos+offset を事前計算して格納（スロット方式不要）
-  const bonePinTargetBuffer = hasBonePins ? instancedArray(bonePinTargetArr, 'vec3') : null;
+  // ── アンカー＋グリップの per-vertex ターゲットバッファ（いずれかがある場合のみ）──
+  const bonePinTargetBuffer = hasPinTargets ? instancedArray(bonePinTargetArr, 'vec3') : null;
 
-  // ── グリップ uniform（マスクはvertexParamsの.wに格納済み）──
-  const leftGripActiveUniform  = uniform(0);   // 1=アクティブ, 0=非アクティブ
-  const rightGripActiveUniform = uniform(0);
-  const leftGripTargetUniform  = uniform(new THREE.Vector3());
-  const rightGripTargetUniform = uniform(new THREE.Vector3());
+  // ── グリップ活性マスク（x=L手, y=R手, z=L肘, w=R肘。押下中=1）──
+  const gripMaskUniform = uniform(new THREE.Vector4(0, 0, 0, 0));
 
   // ── Compute: スプリング力 ──
   const computeSpringForces = Fn(() => {
@@ -905,31 +946,19 @@ function buildSimulation(analysis) {
       Return();
     });
 
-    // 左手グリップオーバーライド（gripCode==1 かつアクティブ時）
-    If(leftGripActiveUniform.greaterThan(0.5), () => {
-      If(gripCode.equal(1), () => {
-        vertexForceBuffer.element(instanceIndex).assign(vec3(0, 0, 0));
-        vertexPositionBuffer.element(instanceIndex).assign(leftGripTargetUniform);
-        Return();
-      });
-    });
-
-    // 右手グリップオーバーライド（gripCode==2 かつアクティブ時）
-    If(rightGripActiveUniform.greaterThan(0.5), () => {
-      If(gripCode.equal(2), () => {
-        vertexForceBuffer.element(instanceIndex).assign(vec3(0, 0, 0));
-        vertexPositionBuffer.element(instanceIndex).assign(rightGripTargetUniform);
-        Return();
-      });
-    });
-
-    // ボーンアンカー（gripCode == 3）: 事前計算済みターゲット座標へ直接セット
-    if (hasBonePins) {
-      If(gripCode.equal(3), () => {
+    // アンカー＋グリップ：事前計算済み per-vertex ターゲットへ吸着
+    // code 1=アンカー(常時) / 2=L手 / 3=R手 / 4=L肘 / 5=R肘（対応マスクが有効な時）
+    if (hasPinTargets) {
+      const snap = () => {
         vertexForceBuffer.element(instanceIndex).assign(vec3(0, 0, 0));
         vertexPositionBuffer.element(instanceIndex).assign(bonePinTargetBuffer.element(instanceIndex));
         Return();
-      });
+      };
+      If(gripCode.equal(1), snap);
+      If(gripCode.equal(2), () => { If(gripMaskUniform.x.greaterThan(0.5), snap); });
+      If(gripCode.equal(3), () => { If(gripMaskUniform.y.greaterThan(0.5), snap); });
+      If(gripCode.equal(4), () => { If(gripMaskUniform.z.greaterThan(0.5), snap); });
+      If(gripCode.equal(5), () => { If(gripMaskUniform.w.greaterThan(0.5), snap); });
     }
 
     const position = vertexPositionBuffer.element(instanceIndex).toVar('pos');
@@ -1074,10 +1103,7 @@ function buildSimulation(analysis) {
     clothMat: clothMat,
     grabbedIndexUniform,
     grabbedTargetUniform,
-    leftGripActiveUniform,
-    rightGripActiveUniform,
-    leftGripTargetUniform,
-    rightGripTargetUniform,
+    gripMaskUniform,
     srcMesh,
     cpuPositions: positions.slice(),
   };
@@ -1154,21 +1180,22 @@ function clearGrabState() {
 function setupGrabEvents(canvas) {
   canvas.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
+    if (gripGizmo && gripGizmo.dragging) return;   // 移動ギズモ操作中は他の掴みを抑制
 
-    // ── ハンドグラブポイント マーカー球のドラッグ（優先度最高）──
+    // ── グラブ点マーカー球のドラッグ（4グループ・優先度最高）──
     if (!gripEditMode && !pinMode) {
-      for (const side of ['left', 'right']) {
-        const hp = handGrabPoints[side];
-        if (!hp.markerMesh) continue;
-        const p  = hp.worldPos.clone().project(camera);
+      for (const g of GRIP_GROUPS) {
+        const pt = gripPt[g];
+        if (!pt.markerMesh || !pt.markerMesh.visible) continue;
+        const p  = pt.worldPos.clone().project(camera);
         if (p.z > 1) continue;
         const sx = (p.x *  0.5 + 0.5) * window.innerWidth;
         const sy = (p.y * -0.5 + 0.5) * window.innerHeight;
         if (Math.hypot(sx - e.clientX, sy - e.clientY) < 22) {
-          // ドラッグ開始：カメラ向き法線でドラッグ平面を設定
-          _hgpDragSide = side;
-          const normal = hp.worldPos.clone().sub(camera.position).normalize();
-          _hgpDragPlane.setFromNormalAndCoplanarPoint(normal, hp.worldPos);
+          _hgpDragSide = g;
+          if (gripGizmo) gripGizmo.attach(pt.markerMesh);   // 移動ギズモをこのマーカーへ
+          const normal = pt.worldPos.clone().sub(camera.position).normalize();
+          _hgpDragPlane.setFromNormalAndCoplanarPoint(normal, pt.worldPos);
           controls.enabled = false;
           canvas.setPointerCapture(e.pointerId);
           canvas.style.cursor = 'move';
@@ -1207,7 +1234,7 @@ function setupGrabEvents(canvas) {
       } else { return; }
       const idx = pickNearestVertex(e.clientX, e.clientY, snapshot, vertexCount, PIN_THRESHOLD_PX);
       if (idx < 0) return;
-      toggleGrip(idx, gripEditMode);
+      toggleGrip(idx);
       e.stopPropagation();
       return;
     }
@@ -1279,12 +1306,12 @@ function setupGrabEvents(canvas) {
       );
       const hit = new THREE.Vector3();
       if (_hgpDragRaycaster.ray.intersectPlane(_hgpDragPlane, hit)) {
-        const hp = handGrabPoints[_hgpDragSide];
-        const bonePos = new THREE.Vector3();
-        hp.boneNode.getWorldPosition(bonePos);
-        hp.offset.copy(hit).sub(bonePos);
-        // スライダー範囲にクランプ
-        hp.offset.clampScalar(-0.3, 0.3);
+        const pt = gripPt[_hgpDragSide];
+        const bonePos = new THREE.Vector3(), boneQuat = new THREE.Quaternion();
+        pt.boneNode.getWorldPosition(bonePos);
+        pt.boneNode.getWorldQuaternion(boneQuat);
+        // ワールドのドラッグ位置 → 関節ローカルオフセット（回転考慮）
+        pt.offset.copy(hit).sub(bonePos).applyQuaternion(boneQuat.invert()).clampScalar(-0.4, 0.4);
         _syncHgpOffsetUI(_hgpDragSide);
       }
       return;
@@ -1327,41 +1354,24 @@ function setupGrabEvents(canvas) {
 // Grip Key Events (L/R キー → VRM手ボーン位置でグリップ)
 // ============================================================
 
+// キー: R=右手 / L=左手 / E=R肘 / K=L肘（押下中、そのグループの全グリップ頂点を関節へ吸着）
 function setupGripKeyEvents() {
-  function _activateGrip(side) {
+  const _isField = (el) => el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+  function _activate(group) {
     if (!simRunning || !simData) return;
-    const set = side === 'left' ? leftGripSet : rightGripSet;
-    if (set.size === 0) {
-      showToast(`${side === 'left' ? 'L' : 'R'}手グリップ頂点が未設定です`, 'warn');
-      return;
-    }
-    const hp = handGrabPoints[side];
-    if (!hp.boneNode) {
-      showToast(`VRMの${side === 'left' ? '左' : '右'}手ボーンが見つかりません`, 'warn');
-      return;
-    }
-    hp.active = true;
-    if (side === 'left') simData.leftGripActiveUniform.value  = 1;
-    else                 simData.rightGripActiveUniform.value = 1;
+    if (!gripPt[group].boneNode) { showToast(`${GRIP_LABEL[group]}のボーンがVRMにありません`, 'warn'); return; }
+    let n = 0; for (const e of gripMap.values()) if (e.group === group) n++;
+    if (n === 0) { showToast(`${GRIP_LABEL[group]}グリップ頂点が未設定です`, 'warn'); return; }
+    gripActive[group] = true;
   }
-
-  function _deactivateGrip(side) {
-    handGrabPoints[side].active = false;
-    if (simData) {
-      if (side === 'left') simData.leftGripActiveUniform.value  = 0;
-      else                 simData.rightGripActiveUniform.value = 0;
-    }
-  }
-
   window.addEventListener('keydown', e => {
-    if (e.repeat || e.ctrlKey || e.altKey) return;
-    if (e.code === 'KeyL') _activateGrip('left');
-    if (e.code === 'KeyR') _activateGrip('right');
+    if (e.repeat || e.ctrlKey || e.altKey || e.metaKey || _isField(e.target)) return;
+    const g = GRIP_KEY[e.code];
+    if (g) _activate(g);
   });
-
   window.addEventListener('keyup', e => {
-    if (e.code === 'KeyL') _deactivateGrip('left');
-    if (e.code === 'KeyR') _deactivateGrip('right');
+    const g = GRIP_KEY[e.code];
+    if (g) gripActive[g] = false;
   });
 }
 
@@ -1371,16 +1381,15 @@ function setupGripKeyEvents() {
 
 function _setGripEditMode(mode) {
   gripEditMode = mode;
-  const gripLBtn = document.getElementById('btn-grip-left-mode');
-  const gripRBtn = document.getElementById('btn-grip-right-mode');
-  if (!gripLBtn || !gripRBtn) return;
+  for (const g of GRIP_GROUPS) {
+    const btn = document.getElementById(`btn-grip-${g}`);
+    if (!btn) continue;
+    btn.classList.toggle('active', mode === g);
+    btn.textContent = `${GRIP_LABEL[g]} ${mode === g ? 'ON' : 'OFF'}`;
+  }
 
-  gripLBtn.classList.toggle('active', mode === 'left');
-  gripRBtn.classList.toggle('active', mode === 'right');
-  gripLBtn.textContent = mode === 'left' ? 'L手グリップ編集 ON' : 'L手グリップ編集 OFF';
-  gripRBtn.textContent = mode === 'right' ? 'R手グリップ編集 ON' : 'R手グリップ編集 OFF';
-
-  // グリップ編集モードON時はピン/アンカー編集を解除
+  // グリップ編集モードON時はピン/アンカー編集を解除（移動ギズモも外す＝頂点クリックを妨げない）
+  if (mode && gripGizmo) gripGizmo.detach();
   if (mode) {
     pinMode = false;
     const pinBtn = document.getElementById('btn-pin-mode');
@@ -1401,18 +1410,25 @@ function buildMantleExport() {
   const anchorAssignments = [...anchorMap.entries()].map(([idx, { boneName, localOffset }]) => ({
     vertexIdx: idx, boneName, localOffset: [localOffset.x, localOffset.y, localOffset.z],
   }));
-  const handGrabOffsets = {
-    left:  [handGrabPoints.left.offset.x,  handGrabPoints.left.offset.y,  handGrabPoints.left.offset.z],
-    right: [handGrabPoints.right.offset.x, handGrabPoints.right.offset.y, handGrabPoints.right.offset.z],
-  };
+  // グリップ：グループごとの頂点index一覧 + グラブ点オフセット（関節基準・回転追従）
+  const gripIndices = { leftHand: [], rightHand: [], leftLowerArm: [], rightLowerArm: [] };
+  for (const [idx, { group }] of gripMap) gripIndices[group].push(idx);
+  const gripOffsets = {};
+  for (const g of GRIP_GROUPS) gripOffsets[g] = [gripPt[g].offset.x, gripPt[g].offset.y, gripPt[g].offset.z];
+  // 互換: ゲーム/cloth-preview 用に leftHand/rightHand を従来フィールドでも書き出す
+  const leftGripIndices  = gripIndices.leftHand;
+  const rightGripIndices = gripIndices.rightHand;
+  const handGrabOffsets  = { left: gripOffsets.leftHand, right: gripOffsets.rightHand };
   // 球コライダー：ボーン相対オフセット + 半径で保存（ボーン名で再バインドするため絶対座標は保存しない）
   const colliderData = colliders
     .filter(c => c.boneName)
     .map(c => ({ boneName: c.boneName, r: c.r, offset: [c.localOffset.x, c.localOffset.y, c.localOffset.z] }));
   return {
     ...mantleData,
-    leftGripIndices:  [...leftGripSet],
-    rightGripIndices: [...rightGripSet],
+    gripIndices,
+    gripOffsets,
+    leftGripIndices,
+    rightGripIndices,
     anchorAssignments,
     handGrabOffsets,
     editorTransform:  { ...mantleTransform },
@@ -1432,7 +1448,9 @@ function exportMantleWithGrips() {
   a.download = 'mantle_with_grips.cloth.json';
   a.click();
   URL.revokeObjectURL(a.href);
-  showToast(`エクスポート完了 (L手:${leftGripSet.size}頂点 / R手:${rightGripSet.size}頂点)`);
+  const _lh = [...gripMap.values()].filter(g => g.group === 'leftHand').length;
+  const _rh = [...gripMap.values()].filter(g => g.group === 'rightHand').length;
+  showToast(`エクスポート完了 (グリップ${gripMap.size}点 / L手:${_lh} R手:${_rh})`);
 }
 
 // ArrayBuffer → base64（大きいVRMでもスタック溢れしないようチャンク処理）
@@ -1680,8 +1698,8 @@ function selectMesh(idx) {
   disposeSimulation();
   disposeMarkers();
   pinnedSet.clear();
-  leftGripSet.clear();
-  rightGripSet.clear();
+  gripMap.clear();
+  updateGripCounts();
 
   selectedMeshIdx = idx;
   updateMeshList();
@@ -1884,19 +1902,11 @@ function setupUI() {
   });
   document.getElementById('btn-anchor-clear').addEventListener('click', clearAnchorMap);
 
-  // グリップ編集モード
-  const gripLBtn = document.getElementById('btn-grip-left-mode');
-  const gripRBtn = document.getElementById('btn-grip-right-mode');
-
-  gripLBtn.addEventListener('click', () => {
-    const next = gripEditMode === 'left' ? null : 'left';
-    _setGripEditMode(next);
-  });
-  gripRBtn.addEventListener('click', () => {
-    const next = gripEditMode === 'right' ? null : 'right';
-    _setGripEditMode(next);
-  });
-
+  // グリップ編集モード（4グループ）
+  for (const g of GRIP_GROUPS) {
+    const btn = document.getElementById(`btn-grip-${g}`);
+    if (btn) btn.addEventListener('click', () => _setGripEditMode(gripEditMode === g ? null : g));
+  }
   document.getElementById('btn-grip-reset').addEventListener('click', () => {
     resetGrips();
     showToast('グリップをリセットしました');
@@ -1958,31 +1968,44 @@ function setupUI() {
   bindTransform('mt-ry',    'mt-ry-val',    'ry',    parseFloat, v => String(Math.round(v)));
   bindTransform('mt-scale', 'mt-scale-val', 'scale', parseFloat, v => v.toFixed(2));
 
-  // ハンドグラブポイント オフセットスライダー
-  for (const side of ['left', 'right']) {
-    const prefix = side === 'left' ? 'hgp-l' : 'hgp-r';
+  // グラブ点オフセット行を動的生成（4グループ × XYZ）
+  (function buildGripOffsetRows() {
+    const host = document.getElementById('grip-offset-rows');
+    if (!host) return;
+    const labelColor = { leftHand: '#6af', rightHand: '#f84', leftLowerArm: '#3db', rightLowerArm: '#fc3' };
+    const keyHint    = { leftHand: 'L', rightHand: 'R', leftLowerArm: 'K', rightLowerArm: 'E' };
+    let html = '';
+    for (const g of GRIP_GROUPS) {
+      html += `<div style="font-size:10px;color:${labelColor[g]};margin:4px 0 2px;">■ ${GRIP_LABEL[g]} (${keyHint[g]}キー)</div>`;
+      html += '<div style="display:flex;flex-direction:column;gap:2px;margin-bottom:4px;">';
+      for (const axis of ['x', 'y', 'z']) {
+        html += `<div class="ui-row-left"><label style="font-size:10px;color:#888;width:14px;">${axis.toUpperCase()}</label>`
+              + `<input type="range" id="grip-off-${g}-${axis}" min="-0.4" max="0.4" step="0.005" value="0" style="flex:1;">`
+              + `<span class="val" id="grip-off-${g}-${axis}-val" style="font-size:10px;min-width:30px;">0.00</span></div>`;
+      }
+      html += '</div>';
+    }
+    host.innerHTML = html;
+  })();
+
+  // グラブ点オフセットスライダー（4グループ）
+  for (const g of GRIP_GROUPS) {
     for (const axis of ['x', 'y', 'z']) {
-      const sl = document.getElementById(`${prefix}-${axis}`);
-      const vl = document.getElementById(`${prefix}-${axis}-val`);
+      const sl = document.getElementById(`grip-off-${g}-${axis}`);
+      const vl = document.getElementById(`grip-off-${g}-${axis}-val`);
       if (!sl) continue;
       sl.addEventListener('input', () => {
-        handGrabPoints[side].offset[axis] = parseFloat(sl.value);
-        vl.textContent = parseFloat(sl.value).toFixed(2);
+        gripPt[g].offset[axis] = parseFloat(sl.value);
+        if (vl) vl.textContent = parseFloat(sl.value).toFixed(2);
       });
     }
   }
   document.getElementById('hgp-visible')?.addEventListener('change', e => {
-    for (const side of ['left', 'right']) {
-      if (handGrabPoints[side].markerMesh)
-        handGrabPoints[side].markerMesh.visible = e.target.checked;
-    }
+    for (const g of GRIP_GROUPS) if (gripPt[g].markerMesh) gripPt[g].markerMesh.visible = e.target.checked;
   });
   document.getElementById('btn-hgp-reset')?.addEventListener('click', () => {
-    for (const side of ['left', 'right']) {
-      handGrabPoints[side].offset.set(0, 0, 0);
-      _syncHgpOffsetUI(side);
-    }
-    showToast('グラブポイントオフセットをリセットしました');
+    for (const g of GRIP_GROUPS) { gripPt[g].offset.set(0, 0, 0); _syncHgpOffsetUI(g); }
+    showToast('グラブ点オフセットをリセットしました');
   });
 
   // コライダー表示切替
@@ -2046,8 +2069,12 @@ async function render() {
   if (simRunning && simData) {
     const timePerStep = 1 / 360;
     timeSinceLastStep += dt;
-    // ボーンスロット座標を更新（ユニークボーン数×vec3、グリップuniform更新と同等のコスト）
-    updateAnchorPositions();
+    // グリップ活性マスク(x=L手,y=R手,z=L肘,w=R肘)とアンカー/グリップのターゲット座標を更新
+    simData.gripMaskUniform.value.set(
+      gripActive.leftHand ? 1 : 0, gripActive.rightHand ? 1 : 0,
+      gripActive.leftLowerArm ? 1 : 0, gripActive.rightLowerArm ? 1 : 0,
+    );
+    updatePinTargets();
     while (timeSinceLastStep >= timePerStep) {
       timeSinceLastStep -= timePerStep;
       renderer.compute(simData.computeSpringForces);
@@ -2120,6 +2147,14 @@ async function init() {
   controls.target.set(0, 1, 0);
   controls.update();
 
+  // グラブ点の移動ギズモ（マーカーをクリックでアタッチ、矢印ドラッグで offset 調整）
+  gripGizmo = new TransformControls(camera, renderer.domElement);
+  gripGizmo.setMode('translate');
+  gripGizmo.setSize(0.6);
+  gripGizmo.addEventListener('dragging-changed', (e) => { controls.enabled = !e.value; });
+  gripGizmo.addEventListener('objectChange', onGripGizmoChange);
+  scene.add(gripGizmo.getHelper ? gripGizmo.getHelper() : gripGizmo);
+
   // 共有 uniform 初期化
   stiffnessUniform = uniform(0.2);
   dampeningUniform = uniform(0.99);
@@ -2131,34 +2166,14 @@ async function init() {
   setupGrabEvents(renderer.domElement);
   setupGripKeyEvents();
 
-  // ゲームコードから呼び出せる公開 API
+  // ゲーム/デバッグから呼び出せる公開 API（グループ単位でグリップ活性化）
   window.clothAPI = {
-    /** 左手グリップをアクティブにし、指定ワールド座標へ頂点を引き寄せる */
-    gripLeft(x, y, z) {
-      if (!simData) return;
-      simData.leftGripActiveUniform.value = 1;
-      simData.leftGripTargetUniform.value.set(x, y, z);
-    },
-    /** 右手グリップをアクティブにし、指定ワールド座標へ頂点を引き寄せる */
-    gripRight(x, y, z) {
-      if (!simData) return;
-      simData.rightGripActiveUniform.value = 1;
-      simData.rightGripTargetUniform.value.set(x, y, z);
-    },
-    /** 左手グリップを解放する */
-    releaseLeft() {
-      if (!simData) return;
-      simData.leftGripActiveUniform.value = 0;
-    },
-    /** 右手グリップを解放する */
-    releaseRight() {
-      if (!simData) return;
-      simData.rightGripActiveUniform.value = 0;
-    },
-    /** 左手グリップ頂点数を返す */
-    get leftGripCount() { return leftGripSet.size; },
-    /** 右手グリップ頂点数を返す */
-    get rightGripCount() { return rightGripSet.size; },
+    /** 指定グループ(leftHand/rightHand/leftLowerArm/rightLowerArm)のグリップを有効化 */
+    grip(group) { if (GRIP_GROUPS.includes(group)) gripActive[group] = true; },
+    /** 指定グループのグリップを解放 */
+    release(group) { if (GRIP_GROUPS.includes(group)) gripActive[group] = false; },
+    /** 指定グループのグリップ頂点数 */
+    gripCount(group) { let n = 0; for (const e of gripMap.values()) if (e.group === group) n++; return n; },
   };
 
   window.addEventListener('resize', () => {

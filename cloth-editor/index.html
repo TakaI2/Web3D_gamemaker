@@ -110,6 +110,11 @@
       border-color: rgba(80,160,255,0.6);
       color: #adf;
     }
+    .btn-grip.active {
+      background: rgba(120,170,255,0.35);
+      border-color: rgba(120,170,255,0.6);
+      color: #cef;
+    }
     .btn-grip-r.active {
       background: rgba(255,80,50,0.35);
       border-color: rgba(255,120,80,0.6);
@@ -376,15 +381,17 @@
 
     <div class="p-section">
       <div class="p-section-title">グリップ頂点 (シミュ停止中に編集)</div>
-      <div class="pin-controls">
-        <button class="btn-sm btn-grip-l" id="btn-grip-left-mode">L手グリップ編集 OFF</button>
-        <button class="btn-sm btn-grip-r" id="btn-grip-right-mode">R手グリップ編集 OFF</button>
-        <button class="btn-sm" id="btn-grip-reset">グリップをリセット</button>
+      <div class="pin-controls" style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+        <button class="btn-sm btn-grip" id="btn-grip-leftHand">L手 OFF</button>
+        <button class="btn-sm btn-grip" id="btn-grip-rightHand">R手 OFF</button>
+        <button class="btn-sm btn-grip" id="btn-grip-leftLowerArm">L肘 OFF</button>
+        <button class="btn-sm btn-grip" id="btn-grip-rightLowerArm">R肘 OFF</button>
       </div>
-      <div style="margin-top:5px;font-size:10px;color:#666;line-height:1.4;">
-        青=L手 / 橙=R手<br>
-        <code style="font-size:10px;color:#68a;">clothAPI.gripLeft(x,y,z)</code><br>
-        <code style="font-size:10px;color:#68a;">clothAPI.releaseLeft()</code>
+      <button class="btn-sm" id="btn-grip-reset" style="width:100%;margin-top:4px;">グリップをリセット</button>
+      <div id="grip-counts" style="margin-top:4px;font-size:10px;color:#8ab;"></div>
+      <div style="margin-top:4px;font-size:10px;color:#666;line-height:1.5;">
+        青=L手 / 橙=R手 / 緑=L肘 / 黄=R肘。グループを選び頂点をクリックで割当（重複不可）。<br>
+        グリップ実行(押下中): <b>R</b>=右手 <b>L</b>=左手 <b>E</b>=R肘 <b>K</b>=L肘
       </div>
     </div>
 
@@ -481,50 +488,15 @@
 
     <div id="hand-grab-section" style="display:none;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;margin-top:4px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-        <span style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;">ハンドグラブ位置</span>
+        <span style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;">グラブ点オフセット</span>
         <label style="font-size:11px;color:#aaa;display:flex;align-items:center;gap:4px;cursor:pointer;">
           <input type="checkbox" id="hgp-visible" checked style="width:13px;height:13px;">表示
         </label>
       </div>
-      <div style="font-size:10px;color:#68f;margin-bottom:4px;">■ 左手 (Lキー長押し)</div>
-      <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:7px;">
-        <div class="ui-row-left">
-          <label style="font-size:10px;color:#888;width:14px;">X</label>
-          <input type="range" id="hgp-l-x" min="-0.3" max="0.3" step="0.005" value="0" style="flex:1;">
-          <span class="val" id="hgp-l-x-val" style="font-size:10px;min-width:30px;">0.00</span>
-        </div>
-        <div class="ui-row-left">
-          <label style="font-size:10px;color:#888;width:14px;">Y</label>
-          <input type="range" id="hgp-l-y" min="-0.3" max="0.3" step="0.005" value="0" style="flex:1;">
-          <span class="val" id="hgp-l-y-val" style="font-size:10px;min-width:30px;">0.00</span>
-        </div>
-        <div class="ui-row-left">
-          <label style="font-size:10px;color:#888;width:14px;">Z</label>
-          <input type="range" id="hgp-l-z" min="-0.3" max="0.3" step="0.005" value="0" style="flex:1;">
-          <span class="val" id="hgp-l-z-val" style="font-size:10px;min-width:30px;">0.00</span>
-        </div>
-      </div>
-      <div style="font-size:10px;color:#f84;margin-bottom:4px;">■ 右手 (Rキー長押し)</div>
-      <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px;">
-        <div class="ui-row-left">
-          <label style="font-size:10px;color:#888;width:14px;">X</label>
-          <input type="range" id="hgp-r-x" min="-0.3" max="0.3" step="0.005" value="0" style="flex:1;">
-          <span class="val" id="hgp-r-x-val" style="font-size:10px;min-width:30px;">0.00</span>
-        </div>
-        <div class="ui-row-left">
-          <label style="font-size:10px;color:#888;width:14px;">Y</label>
-          <input type="range" id="hgp-r-y" min="-0.3" max="0.3" step="0.005" value="0" style="flex:1;">
-          <span class="val" id="hgp-r-y-val" style="font-size:10px;min-width:30px;">0.00</span>
-        </div>
-        <div class="ui-row-left">
-          <label style="font-size:10px;color:#888;width:14px;">Z</label>
-          <input type="range" id="hgp-r-z" min="-0.3" max="0.3" step="0.005" value="0" style="flex:1;">
-          <span class="val" id="hgp-r-z-val" style="font-size:10px;min-width:30px;">0.00</span>
-        </div>
-      </div>
+      <div id="grip-offset-rows"></div>
       <button class="btn-sm" id="btn-hgp-reset" style="width:100%;">オフセットをリセット</button>
       <div style="margin-top:5px;font-size:10px;color:#555;line-height:1.5;">
-        球をドラッグしても微調整できます
+        各グループのグラブ点(色付き球)へ頂点が吸着。球をドラッグ or スライダーで関節からの位置を調整。
       </div>
     </div>
   </div>
