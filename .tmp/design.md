@@ -1,69 +1,65 @@
-# 設計 — cloth-editor グリップ刷新 ＋ cloth-preview VRMAドロップダウン
+# 設計 — グリップの名前付きグループ化 ＋ タイムライン グループ単位有効化
 
-## A. cloth-editor グリップ刷新
+決定: 名前付きグループを任意数 / ゲーム(lib/vrm-cloth)でも動く。後方互換は維持。
 
-### 現状
-- 2グループ（左手/右手）。`leftGripSet`/`rightGripSet`（頂点index集合）。
-- GPU: vertexParams.w の gripCode(0/1/2/3) で識別。グループの全頂点が**単一の手ターゲット**(leftGripTargetUniform 等＝手位置＋単一offset)へ吸着（回転なし）。
-- キー: L=左手、R=右手（押下中ON）。
-- cloth.json: `leftGripIndices`/`rightGripIndices`/`handGrabOffsets{left,right}`。
-- 消費: lib/vrm-cloth.js, fps-cloth-vrm, swing-catch がこの形式を読む（timeline grip トラックで左右手をON）。
+## 現状
+- cloth-editor: グリップは L手/R手/L肘/R肘 の**4固定グループ**（各=ボーン+グラブ点offset+頂点集合）。GPUは per-vertexターゲット+vec4マスク。
+- cloth-preview / lib/vrm-cloth(ゲーム): **旧2ハンドモデル**（leftGripSet/rightGripSet, leftGripActiveUniform, timeline grip track は side:left/right）。
+- ゲームは npc.json の timeline grip(left/right) で NPC が自分のマントを握る（lib/vrm-cloth）。
 
-### 新仕様（要件）
-1. グループを4つに: **L手(leftHand) / R手(rightHand) / L肘(leftLowerArm) / R肘(rightLowerArm)**。
-2. 各グループは**任意数のグリップ頂点**を持てる（L手_1, L手_2…）。
-3. **頂点の重複禁止**: 1頂点は1グリップ点のみ（他グループ・アンカー・ピンとも排他）。
-4. 各頂点は**対応関節の位置＋回転**でオフセット吸着（＝ボーンアンカーと同じ方式。割当時に localOffset を捕捉）。
-5. キー: **R=右手 / L=左手 / E=R肘 / K=L肘**（押下中、そのグループの全点をグリップ）。
+## 新データモデル
+### grip グループ（任意数・名前付き）
+1グループ = `{ id, name, bone, offset:[x,y,z], vertices:[..] }`。
+- bone: VRM humanoid ボーン名（leftHand/rightHand/leftLowerArm/rightLowerArm/… 既定4つ＋任意）。
+- 同じ bone に複数グループ可（例 L手_開 / L手_閉）。
+- グラブ点 worldPos = boneWorldPos + boneWorldQuat × offset（位置+回転追従）。各グループの全頂点がその点に吸着。
+- 頂点は1グループのみ（重複禁止、ピン/アンカーとも排他）。
 
-### データモデル（cloth-editor 内部）
-- `gripMap: Map<vertexIdx, { group, boneName, boneNode, localOffset:Vector3 }>`
-  - group ∈ {'leftHand','rightHand','leftLowerArm','rightLowerArm'}
-  - 割当時に `localOffset = inverse(boneWorldQuat) * (vertexWorld - boneWorld)` を捕捉（位置＋回転追従）。
-- 排他: 割当時に当該頂点を pinnedSet / anchorMap / 既存gripMap から除去。
+### cloth.json（後方互換）
+```jsonc
+"gripGroups": [ { "id":"leftHand","name":"L手","bone":"leftHand","offset":[x,y,z],"vertices":[..] }, … ],
+// 互換(旧games/preview): leftHand/rightHand bone のグループから合成
+"leftGripIndices":[..], "rightGripIndices":[..], "handGrabOffsets":{ "left":[..],"right":[..] }
+```
+読込: gripGroups があれば優先。無ければ旧 leftGripIndices/rightGripIndices → 既定 leftHand/rightHand グループへ。
 
-### GPU シミュ改修（グリップ＝活性化アンカー化）
-- vertexParams.w(コード) を再定義: `0=なし / 1=アンカー(常時) / 2=L手 / 3=R手 / 4=L肘 / 5=R肘`。
-- 既存の per-vertex `bonePinTargetBuffer`(vec3) を **アンカー＋グリップ共用**にする（頂点の吸着先ワールド座標）。
-  - 毎フレームCPU更新: アンカー頂点＝従来通り。グリップ頂点＝`boneWorldPos + boneWorldQuat * localOffset` を書く。
-- グループ活性マスク `gripMaskUniform`(vec4: x=L手,y=R手,z=L肘,w=R肘, 各0/1)。
-- シェーダ: code==1 → 常時 target へ吸着。code 2..5 → 対応マスク>0.5 のとき target へ吸着（力0・位置直接）。
-- 旧 leftGrip*/rightGrip* の単一uniformは廃止（per-vertex buffer + mask に統合）。
+### timeline.json（後方互換）
+```jsonc
+{ "kind":"grip", "groupId":"leftHand", "ranges":[{start,end}] }
+```
+読込: groupId があれば優先。無ければ旧 `side:'left'/'right'` → groupId 'leftHand'/'rightHand'。
 
-### UI（左パネル グリップ節を作り替え）
-- 編集グループ選択（4ボタン: L手/R手/L肘/R肘 のトグル編集モード）。
-- マーカー頂点クリックで現在グループへ追加/削除（重複は自動排他）。色でグループ識別（L手=青/R手=橙/L肘=水/R肘=黄）。
-- 各グループの点数表示＋「グリップをリセット」。
-- offset は割当時に自動捕捉（手動微調整UIは初版なし）。
+## GPU モデル（3アプリ共通へ統一）
+グループ数に依存しない per-vertex 方式に統一（vec4マスクを廃止）:
+- vertexParams.w(code): 0=なし / 1=アンカー(常時) / 2=グリップ。
+- `pinTargetBuffer`(vec3, per-vertex): アンカー=bone+rot×localOffset / グリップ=所属グループのグラブ点worldPos。
+- `gripActiveBuffer`(float, per-vertex): グリップ頂点で「所属グループがactiveなら1」。アンカーは無視。
+- シェーダ: code==1 → 常時 target吸着。code==2 && active>0.5 → target吸着。
+- CPU毎フレーム: アンカー target更新／各グループのグラブ点worldPos算出→所属頂点の target & active を書く。
 
-### キー（押下中グリップ）
-- keydown: R/L/E/K → 対応グループの mask=1。keyup → 0。シミュ実行中のみ有効。
+## cloth-editor UI
+- 「グリップグループ」セクション: グループ一覧（追加/複製/削除/リネーム）。各行: 色・名前・bone選択・頂点数・選択(編集対象)・active(プレビュー)トグル。
+- 選択グループが編集対象: マント頂点クリックで割当/解除（重複排他）。色付きマーカー＋オフセットスライダー＋直接ドラッグ＋移動ギズモはその選択グループに対して動作。
+- プレビュー: 各グループ active トグル or キー（既定4つは R/L/E/K を割当、追加グループはトグル）。シミュ中に吸着確認。
+- 既定で4グループ(L手/R手/L肘/R肘)を自動生成。
 
-### cloth.json 形式（後方互換）
-- **追加**: `gripPoints: [{ vertexIdx, group, boneName, localOffset:[x,y,z] }]`（新リッチ形式）。
-- **維持(互換)**: `leftGripIndices`/`rightGripIndices` は leftHand/rightHand グループの頂点で引き続き書き出す。`handGrabOffsets` も維持（左右手グループ先頭点の offset 等で代表値）。
-  → これにより **ゲーム(lib/vrm-cloth)・cloth-preview は無改修で従来通り左右手グリップを消費可能**。肘グリップはエディタ専用の新機能（games未対応）。
-- 読み込み: `gripPoints` があれば優先（4グループ復元）。無ければ legacy(leftGripIndices/rightGripIndices)＋handGrabOffsets から leftHand/rightHand を復元。
+## cloth-preview
+- timeline grip トラックを**グループ単位**に: グループごとに1トラック（範囲ON/OFF）。グループ一覧から追加。
+- 適用: lib同様 per-vertex active/target。マント読込時に gripGroups からトラック候補を作る。
+- 後方互換: 旧 side:left/right トラックは groupId leftHand/rightHand として読む。
 
-### 影響範囲（games は無改修）
-- lib/vrm-cloth.js / fps-cloth-vrm / swing-catch は legacy フィールドを読むので**変更不要**。
-- 注意: ゲームは従来の「単一手ターゲット」挙動のまま（per-vertex回転offsetはエディタ表示のみ）。リッチ形式をゲームにも反映するのは別タスク。
-
-## B. cloth-preview VRMAドロップダウン
-- 現状: VRMA はファイル選択(input file)のみ。
-- 変更: `/vrma/manifest.json` を取得し**ドロップダウン**に一覧表示。選択で `/vrma/<name>` を fetch→Blob→既存 `loadVRMA(file)` で読込（cloth-editor と同じ作法）。
-- 既存のファイル読込ボタンは残す（任意）。
+## lib/vrm-cloth.js（ゲーム）
+- gripGroups を読み、per-vertex target/active(GPU)化。timeline の groupId 範囲で各グループ ON/OFF。
+- 後方互換: cloth.leftGripIndices/rightGripIndices + timeline side:left/right を leftHand/rightHand グループとして扱う。
+- これで fps-cloth-vrm/swing-catch は無改修で従来の左右手グリップ継続＋新グループも反映。
 
 ## 段階実装
-1. (A) gripMap データモデル＋排他ロジック。
-2. (A) GPU: vertexParams コード再定義・target buffer 共用・mask uniform・シェーダ分岐。
-3. (A) 毎フレーム grip target 更新（位置＋回転）。
-4. (A) UI（4グループ編集・色・一覧・リセット）。
-5. (A) キー R/L/E/K。
-6. (A) cloth.json 書出/読込（gripPoints＋legacy互換）。
-7. (B) cloth-preview VRMAドロップダウン。
-8. 実機確認（編集→キーでグリップ→書出→再インポート→games読込が壊れない）。
+- **Stage 1**: データモデル＋cloth-editor（名前付きグループUI・GPU per-vertex active化・cloth.json gripGroups）。
+- **Stage 2**: cloth-preview（timeline グループ単位・GPU更新・互換読込）。
+- **Stage 3**: lib/vrm-cloth（ゲーム）名前付きグループ＋per-group timeline。fps-cloth-vrm/swing-catch で確認。
+- 各 Stage 後に実機確認。後方互換（既存 npc.json/cloth.json/timeline.json）を全 Stage で担保。
 
-## 確認したい点
-- A-6 の互換方針（legacy維持＋gripPoints追加）でよいか。肘グリップは当面エディタ専用（games未対応）で良いか。
-- offset は割当時自動捕捉のみ（手動微調整UIなし）で良いか。
+## リスク・留意
+- cloth-editor の GPU を vec4マスク→per-vertex active へ作り替え（既存4グループ動作を維持）。
+- 旧 cloth.json（leftGripIndices）・旧 timeline（side）・旧 npc.json は読めること。
+- グループ数の上限は設けない（per-vertex方式のため）。

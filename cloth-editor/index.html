@@ -20,6 +20,8 @@
       position: fixed;
       top: 0; left: 0;
       width: 210px;
+      min-width: 180px;
+      max-width: 60vw;
       height: 100%;
       z-index: 20;
       background: rgba(10,10,24,0.82);
@@ -29,6 +31,15 @@
       overflow-x: hidden;
       overflow-y: auto;
     }
+    #panel-left-resizer {
+      position: fixed;
+      top: 0; height: 100%;
+      width: 7px;
+      z-index: 21;
+      cursor: ew-resize;
+      background: transparent;
+    }
+    #panel-left-resizer:hover { background: rgba(120,170,255,0.35); }
     #panel-left h2 {
       margin: 0;
       padding: 12px 14px 8px;
@@ -308,6 +319,7 @@
 </head>
 <body>
   <div id="app"></div>
+  <div id="panel-left-resizer" title="ドラッグで幅を調整"></div>
 
   <!-- 左パネル -->
   <div id="panel-left">
@@ -380,18 +392,17 @@
     </div>
 
     <div class="p-section">
-      <div class="p-section-title">グリップ頂点 (シミュ停止中に編集)</div>
-      <div class="pin-controls" style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
-        <button class="btn-sm btn-grip" id="btn-grip-leftHand">L手 OFF</button>
-        <button class="btn-sm btn-grip" id="btn-grip-rightHand">R手 OFF</button>
-        <button class="btn-sm btn-grip" id="btn-grip-leftLowerArm">L肘 OFF</button>
-        <button class="btn-sm btn-grip" id="btn-grip-rightLowerArm">R肘 OFF</button>
+      <div class="p-section-title">グリップグループ (シミュ停止中に編集)</div>
+      <div id="grip-group-list" style="display:flex;flex-direction:column;gap:1px;max-height:160px;overflow-y:auto;"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:4px;">
+        <button class="btn-sm" id="btn-grip-add">＋グループ追加</button>
+        <button class="btn-sm btn-grip" id="btn-grip-mode">頂点割当モード OFF</button>
       </div>
-      <button class="btn-sm" id="btn-grip-reset" style="width:100%;margin-top:4px;">グリップをリセット</button>
-      <div id="grip-counts" style="margin-top:4px;font-size:10px;color:#8ab;"></div>
+      <button class="btn-sm" id="btn-grip-reset" style="width:100%;margin-top:4px;">割当を全リセット</button>
       <div style="margin-top:4px;font-size:10px;color:#666;line-height:1.5;">
-        青=L手 / 橙=R手 / 緑=L肘 / 黄=R肘。グループを選び頂点をクリックで割当（重複不可）。<br>
-        グリップ実行(押下中): <b>R</b>=右手 <b>L</b>=左手 <b>E</b>=R肘 <b>K</b>=L肘
+        各行: ✎=編集対象選択 / 名前 / ボーン / 頂点数 / ☑=有効(プレビュー) / ×=削除。<br>
+        ✎で選び「頂点割当モード ON」→ マント頂点クリックで割当（重複不可）。<br>
+        テスト(押下中): <b>R</b>=右手 <b>L</b>=左手 <b>E</b>=R肘 <b>K</b>=L肘 のボーンを有効化。
       </div>
     </div>
 
@@ -488,22 +499,26 @@
 
     <div id="hand-grab-section" style="display:none;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;margin-top:4px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-        <span style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;">グラブ点オフセット</span>
+        <span style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;">グラブ点オフセット (選択グループ)</span>
         <label style="font-size:11px;color:#aaa;display:flex;align-items:center;gap:4px;cursor:pointer;">
           <input type="checkbox" id="hgp-visible" checked style="width:13px;height:13px;">表示
         </label>
       </div>
-      <div id="grip-offset-rows"></div>
-      <button class="btn-sm" id="btn-hgp-reset" style="width:100%;">オフセットをリセット</button>
+      <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:4px;">
+        <div class="ui-row-left"><label style="font-size:10px;color:#888;width:14px;">X</label><input type="range" id="grip-off-x" min="-0.4" max="0.4" step="0.005" value="0" style="flex:1;"><span class="val" id="grip-off-x-val" style="font-size:10px;min-width:30px;">0.00</span></div>
+        <div class="ui-row-left"><label style="font-size:10px;color:#888;width:14px;">Y</label><input type="range" id="grip-off-y" min="-0.4" max="0.4" step="0.005" value="0" style="flex:1;"><span class="val" id="grip-off-y-val" style="font-size:10px;min-width:30px;">0.00</span></div>
+        <div class="ui-row-left"><label style="font-size:10px;color:#888;width:14px;">Z</label><input type="range" id="grip-off-z" min="-0.4" max="0.4" step="0.005" value="0" style="flex:1;"><span class="val" id="grip-off-z-val" style="font-size:10px;min-width:30px;">0.00</span></div>
+      </div>
+      <button class="btn-sm" id="btn-hgp-reset" style="width:100%;">選択グループのオフセットをリセット</button>
       <div style="margin-top:5px;font-size:10px;color:#555;line-height:1.5;">
-        各グループのグラブ点(色付き球)へ頂点が吸着。球をドラッグ or スライダーで関節からの位置を調整。
+        選択グループのグラブ点(色付き球)へ頂点が吸着。球をドラッグ / スライダー / 移動ギズモで関節からの位置を調整。
       </div>
     </div>
   </div>
 
   <a id="back-btn" href="../hub/">← 戻る</a>
   <div id="fps-counter">-- FPS</div>
-  <div id="hint">P: ピン編集 &nbsp;|&nbsp; L/R手グリップ割り当て: 左パネルで編集 &nbsp;|&nbsp; シミュ中 L/R 長押し: 手ボーンにグリップ &nbsp;|&nbsp; 青/橙の球をドラッグ: グラブ位置微調整</div>
+  <div id="hint">P: ピン編集 &nbsp;|&nbsp; グリップ: 左パネルでグループ作成→✎選択→割当モードで頂点クリック &nbsp;|&nbsp; シミュ中 R/L/E/K 長押し or 各行☑: グリップ実行 &nbsp;|&nbsp; 球ドラッグ/ギズモ: グラブ位置調整</div>
 
   <div id="webgpu-warning">⚠ WebGPU 非対応: シミュレーションは使用できません</div>
   <div id="toast"></div>
