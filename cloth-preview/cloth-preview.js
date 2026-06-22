@@ -129,6 +129,7 @@ async function loadVRM(file) {
     populateBlendShapeDropdown(vrm);
 
     document.getElementById('btn-vrma-load').disabled = false;
+    document.getElementById('vrma-select').disabled = false;
     showToast('VRM 読み込み完了');
     return vrm;
   } finally {
@@ -157,6 +158,8 @@ function unloadVRM() {
   const sel = document.getElementById('bs-select');
   if (sel) sel.innerHTML = '<option value="">-- VRM読込後 --</option>';
   document.getElementById('btn-vrma-load').disabled = true;
+  const vsel = document.getElementById('vrma-select');
+  if (vsel) vsel.disabled = true;
 }
 
 // ============================================================
@@ -1468,6 +1471,22 @@ function setupUI() {
     catch (err) { showToast(`VRMA 読み込み失敗: ${err.message}`, 'error'); console.error(err); }
   });
   document.getElementById('btn-vrma-load').addEventListener('click', () => vrmaFile.click());
+
+  // ── VRMA ドロップダウン（vrmaフォルダのモーションを選択） ──
+  const vrmaSelect = document.getElementById('vrma-select');
+  fetch('/vrma/manifest.json')
+    .then(r => r.ok ? r.json() : [])
+    .then(files => { for (const f of files) { const o = document.createElement('option'); o.value = f; o.textContent = f.replace(/\.vrma$/, ''); vrmaSelect.appendChild(o); } })
+    .catch(() => {});
+  vrmaSelect.addEventListener('change', async () => {
+    if (!vrmaSelect.value) return;
+    showToast('VRMA 読み込み中…');
+    try {
+      const res = await fetch('/vrma/' + vrmaSelect.value);
+      if (!res.ok) throw new Error('取得失敗');
+      await loadVRMA(new File([await res.blob()], vrmaSelect.value, { type: 'application/octet-stream' }));
+    } catch (err) { showToast(`VRMA 読み込み失敗: ${err.message}`, 'error'); console.error(err); }
+  });
 
   // ── マント読み込み ──
   const mantleFile = document.getElementById('mantle-file');
