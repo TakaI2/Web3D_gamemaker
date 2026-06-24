@@ -255,20 +255,27 @@ export function createAnimEditorScene(
       const hits = raycaster.intersectObject(skeletonHelper, true);
       if (hits.length > 0) {
         const point = hits[0].point;
+        // 最も近い「ヒューマノイドボーン」を選ぶ。名前は three.js のノード名ではなく
+        // VRM HumanBoneName を使う（getRawBoneNode が解決でき、seekToFrame でキーフレームが再適用される）。
+        // ノード名のままだと getRawBoneNode が null を返し、vrm.update() の normalized→raw 上書きで
+        // ギズモ編集が即座に消える＝ポーズが動かせない不具合になる。
+        const bp = new THREE.Vector3();
         let nearestBone: THREE.Bone | null = null;
         let nearestBoneName: string | null = null;
         let minDist = Infinity;
-        vrm.scene.traverse((obj) => {
-          if (!(obj as THREE.Bone).isBone) return;
-          const bp = new THREE.Vector3();
-          obj.getWorldPosition(bp);
+        for (const name of Object.keys(vrm.humanoid.humanBones)) {
+          const node = vrm.humanoid.getRawBoneNode(
+            name as Parameters<typeof vrm.humanoid.getRawBoneNode>[0],
+          ) as THREE.Bone | null;
+          if (!node) continue;
+          node.getWorldPosition(bp);
           const dist = bp.distanceTo(point);
           if (dist < minDist) {
             minDist = dist;
-            nearestBone = obj as THREE.Bone;
-            nearestBoneName = obj.name;
+            nearestBone = node;
+            nearestBoneName = name;
           }
-        });
+        }
         if (nearestBone && nearestBoneName) {
           selectBoneInternal(nearestBone, nearestBoneName);
           handle.onBoneClicked(nearestBoneName);

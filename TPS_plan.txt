@@ -1,0 +1,32 @@
+
+SwingCatchをベースに
+TPS視点のゲームを作りたいです。
+
+今度は、サイキッカーを操作し、空を舞ったりするゲームにしたい。
+
+ステージは、とりあえずSwingCatchと同じものでいい。
+浮いているオブジェクトはそのまま。　NPC達はまだいなくていい。
+
+プレイヤーキャラは、Joy_reborn.npc
+
+操作方法はよくある感じで。　
+
+（W, ↑）前進　再生アニメーションはJoy_reborn_Fly_f.timeline  グラブ中はJoy_reborn_Fly_f2.timeline
+　(s,↓)バック、 再生アニメーションはJoy_reborn_Fly_back.timeline グラブ中はJoy_reborn_Fly_f2.timeline
+(a,←)左に平行移動　再生アニメーションはJoy_reborn_Fly_L.timeline グラブ中はJoy_reborn_Fly_f2.timeline
+(d,→)右に平行移動　再生アニメーションはJoy_reborn_Fly_R.timeline グラブ中はJoy_reborn_Fly_f2.timeline
+
+静止中の再生アニメーションはJoy_reborn_Fly_idle.timeline
+
+またマウスを動かしたらキャラを中心にカメラが球面座標で移動し、前進ボタンを押すとプレイヤーキャラはそちらに体の向きを変え前進する。　
+
+カメラはスプリングのように、キャラの移動にわずかに遅れて追従するように。 (カメラ視点を調整できるようにエディタがあるといいかも)　
+
+キャッチやショットは、これまで通りマウスのボタンで出来るように。　
+
+浮いているオブジェクトを引き寄せると、プレイヤーキャラの目の前に吸着するようにしてほしい。　joy_rebornが引き寄せている感じにする。
+
+グラブの時にはJoy_reborn_capcher1.timeline
+ショットの時にはJoy_reborn_cape_attack_L.timeline
+
+

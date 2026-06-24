@@ -1,67 +1,96 @@
-# 要件定義 — Ragdoll Editor（ラグドール調整エディタ）
+# 要件定義 — サイキッカー空中アクション（TPS / swing-catch ベース）
 
-## 背景・目的
-swing-catch / fps-cloth-vrm のラグドール（`lib/vrm-ragdoll.js`・自前PBD）が、被弾/掴みで崩れる際に
-**関節が不自然な方向に曲がる**。原因は角度制限が「レスト方向からの対称コーン（`maxBend`半角）」のため、
-膝・肘が横や逆方向にも許容角内で曲がること。これを **対象NPCで実際に崩しながら、関節ごとに回転制限を
-調整し、即シミュレーションで確認** できる専用エディタを作る。チューニング結果はゲーム側で読み込んで適用する。
+## 概要
+`swing-catch`（FPS視点のキャッチ＆投げサンドボックス）をベースに、**TPS（三人称）視点でサイキッカーを操作して空を舞う**アクションを新規作成する。
+プレイヤーキャラは可視の VRM（**Joy_reborn**）。ステージは swing-catch と同じ（浮遊オブジェクトもそのまま）、NPC は今回いない。
 
-## 対象ユーザー・利用文脈
-- 開発者（本人）が hub から開いて、各NPCのラグドール挙動を視覚的に詰める。
+- 新ディレクトリ: `tps-flight/`（仮。`index.html` + `tps-flight.js`）。hub に登録。
+- 既存資産を最大限流用: アリーナ生成・浮遊オブジェクト生成・グラブ/発射ロジック・VRMマント(lib/vrm-cloth)・VRMアニメ。
+- レンダラは WebGPU（swing-catch と同じ）。
 
-## 機能要件（FR）
+## 確定した方針（ユーザ確認済み）
+1. **アニメ紐付け**: `timeline.json` に **VRMA 参照(`vrma` フィールド)を埋め込む**。cloth-preview を拡張して保存/読込時に保持し、既存 `Joy_reborn_*.timeline.json` にも付与。ゲームは timeline を読むだけで「体(VRMA)＋マント(grip)」を再生。
+2. **高度(上下)移動**: **カメラのピッチに追従**。前進方向＝カメラ視線の3D方向（上を向いて前進＝上昇）。
+3. **カメラ調整**: ゲーム内に**簡易調整UI**（距離・高さ・追従遅れ・FOV 等、localStorage保存）。専用エディタは作らない。
 
-### FR-1 hub への追加・新規ページ
-- `ragdoll-editor/`（index.html + ragdoll-editor.js）を新設し、hub の「エディタ」セクションにカードを追加。
-- WebGPU、OrbitControls、床・ライト・HDR は character-editor の定型を踏襲。
+## 機能要件
 
-### FR-2 NPC 選択と読込
-- `public/npc/manifest.json` から `.npc.json` 一覧を取得し select で選択。
-- npc.json の base64 VRM を Blob 化 → GLTFLoader+VRMLoaderPlugin で読込（character-editor の `fetchBundle`/`dataURIToBlob`/`loadBundleObject` 準拠）。
-- VRMA（アイドル）があれば再生（ラグドール解除時の見栄え用）。
-- VRMファイルの直接読込（`<input type=file accept=.vrm>`）も可能にする（任意のVRMで試せる）。
+### FR-1 プレイヤー（Joy_reborn）
+- 起動時に `public/npc/Joy_reborn.npc.json` を読み込み、VRM＋マント(cloth)を生成して可視表示。
+- 初期位置はアリーナ中央付近の空中。重力なし（飛行）。
 
-### FR-3 ラグドール ON/OFF
-- ボタンで `setRagdollActive(rd, true/false)` を切替。ON中はアニメmixerを止め `updateRagdoll` を毎フレーム実行、
-  OFFで `updateRagdollRecovery` により姿勢復帰（character-editor の update 順序準拠）。
-- 「もう一度落とす（Re-drop）」: 現在のボーン姿勢から再スナップして落下し直す。
+### FR-2 TPS カメラ
+- キャラを中心に**球面座標（yaw/pitch/距離）**でカメラが回る。マウス移動で yaw/pitch を変更。
+- カメラは**スプリング的にキャラ移動へわずかに遅れて追従**（位置・注視点ともに減衰補間）。
+- ピッチには上下limitを設ける（真上/真下で破綻しない）。
+- 簡易調整UI: 距離 / 高さオフセット / 追従の遅れ(減衰) / FOV / マウス感度 を調整、localStorageに保存・復元。
 
-### FR-4 グラブポイント固定シミュレーション
-- 主要ボーン（hand/foot/head/hips/chest 等）をチェックで **ピン対象** に指定。
-- ピンしたボーン粒子をその時点のワールド位置に固定し、そこから吊り下がるようにシミュレーション。
-  - 単一ピン＝既存 `env.pinBone/pinPos`。
-  - **複数ピン**＝`lib/vrm-ragdoll.js` に `env.pins=[{bone,pos}]`（配列）対応を追加（後方互換・加点的拡張）。
-- ピン位置はギズモ等で動かせると理想だが、初版は「現在位置で固定」で可（移動は任意）。
+### FR-3 移動操作（飛行）
+- 入力: `W/↑`前進 `S/↓`後退 `A/←`左平行移動 `D/→`右平行移動。
+- 前進方向は**カメラの視線方向(3D)**、左右はカメラ右方向。前進時はキャラの体の向きをその方向へ滑らかに向ける。
+- 移動は加減速（加速・減衰）あり。最大速度・加速度はパラメータ化。
+- 各状態に対応アニメを再生（下表）。グラブ中は移動アニメを `Fly_f2` に差し替え。
 
-### FR-5 関節・剛体の可視化
-- ラグドール中、`rd.particles`（関節）を球、`rd.constraints`（骨リンク）を線で重畳表示（トグルON/OFF）。
-- 可能なら各関節の角度制限（コーン）を半透明で可視化（任意・段階実装）。
-- 可視化は VRMメッシュの上に `renderOrder` を上げて描画（cloth-editor のマーカー球準拠）。
+### FR-4 アニメ状態機械（timeline 駆動）
+状態ごとに対応 timeline を再生。timeline は `vrma`(体) + grip(マント) を内包。
+状態遷移はブレンド（クロスフェード）でなめらかに。
 
-### FR-6 関節ごとの回転制限調整（即シミュ）
-- 関節（angleLimits の対象＝childを持つ関節）ごとに **`maxBend`(度)** スライダーを用意。
-- スライダー変更を **走行中のラグドールへ即反映**（`rd.angleLimits` の該当 maxBend を live 更新）。
-- 「全リセット（既定値へ）」ボタン。
+| 状態 | トリガ | timeline (cloth+vrma) | 備考 |
+|---|---|---|---|
+| 静止 | 入力なし | `Joy_reborn_Fly_idle` | ループ |
+| 前進 | W/↑ | `Joy_reborn_Fly_f` | ループ |
+| 後退 | S/↓ | `Joy_reborn_Fly_back` | ループ |
+| 左移動 | A/← | `Joy_reborn_Fly_L` | ループ |
+| 右移動 | D/→ | `Joy_reborn_Fly_R` | ループ |
+| グラブ中の移動(全方向共通) | グラブ状態＋移動入力 | `Joy_reborn_Fly_f2` | ループ |
+| グラブ動作 | キャッチ発動 | `Joy_reborn_capcher1` | ワンショット |
+| ショット | ショット発動 | `Joy_reborn_cas1_L1` | ワンショット（cape_attack_L から変更） |
 
-### FR-7 保存・読込
-- 調整した `boneMaxBend`（関節名→度）と主要パラメータ（gravity/stiffness/iterations/foldLimit など任意）を
-  JSON として保存。保存先は `public/ragdoll/<npc名>.ragdoll.json`（保存API許可dirに `ragdoll` を追加）。
-- 同ファイルを読込して再現できる。
-- ゲーム側（swing-catch / fps-cloth-vrm）が createRagdoll 時に `boneMaxBend` を読み込んで適用できる導線
-  （初版はエディタでの保存まで。ゲーム側適用は別タスクでも可）。
+### FR-5 キャッチ / ショット（マウス）
+- swing-catch 同様にマウスボタンで**キャッチ（引き寄せ）**と**ショット（発射）**。
+- 対象は浮遊オブジェクト（NPCは今回なし）。
+- **キャッチ時**: 引き寄せたオブジェクトは**プレイヤーの目の前に吸着**（Joy_reborn が抱える/引き寄せている見た目）。吸着位置＝キャラ前方の固定アンカー（体の向きに追従）。`capcher1` を再生。
+- **ショット時**: 抱えているオブジェクトを前方（カメラ視線方向）へ発射。`cape_attack_L` を再生。
+- グラブ中は移動アニメが `Fly_f2` 系に切替（FR-3/FR-4）。
 
-## 非機能要件（NFR）
-- WebGPU（`three@0.184/webgpu`）。既存 `lib/vrm-ragdoll.js` を再利用（lib改変は後方互換の加点のみ）。
-- 60fps を維持（1体・可視化込み）。重い依存を増やさない。
-- 既存ゲームの挙動を壊さない（lib拡張は引数追加で既存呼び出しに無影響）。
+### FR-6 ステージ / オブジェクト
+- アリーナ・浮遊オブジェクトは swing-catch のものをそのまま流用（`buildArena` / `spawnObject` / `loadStage` / models）。
+- 当たり判定・反射・スピンなど既存挙動を維持。
 
-## スコープ外（初版では実装しない／論点B次第）
-- 「曲げの方向（軸）」を限定する **ヒンジ型/非対称の角度制限**（膝・肘を一方向のみに）→ 効果が大きいが lib の
-  制約モデル拡張が必要。
-- ツイスト（捻り）制限の追加。
-- npc.json への埋め込み保存（初版は別ファイル `ragdoll.json`）。
+### FR-7 cloth-preview 拡張（前提作業）
+- VRMA をドロップダウン/ファイルで読み込んだとき、その**ファイル名を保持**。
+- `exportTimeline()` に `vrma` フィールド（例 `"move_Flying_front.vrma"`）を追加保存。
+- timeline 読込時に `vrma` があれば**対応VRMAを自動ロード**（任意）。
+- 既存 `Joy_reborn_*.timeline.json` に `vrma` を付与（下記マッピングをユーザ確認のうえバックフィル、または cloth-preview で再保存）。
 
-## 確認したい論点（設計前に決めたい）
-- **A. 出力と消費**: 別ファイル `public/ragdoll/<npc>.ragdoll.json` に保存しゲームが読込適用、で良いか。
-- **B. 回転制限の深さ**: 初版は「関節ごとの maxBend(度) 調整」までか、「膝/肘を一方向のみに曲げるヒンジ型制限」まで含めるか。
-- **C. 複数ピン**: グラブ点固定は複数同時対応すべきか（lib拡張要）。単一でも良いか。
+## VRMA マッピング（要ユーザ確認）
+`public/vrma/` に存在する飛行モーション候補から提案。※印は確証なし、確認/指定が必要。
+
+| timeline | 提案する体VRMA | 状態 |
+|---|---|---|
+| Joy_reborn_Fly_f | `move_Flying_front.vrma` | 前進 |
+| Joy_reborn_Fly_back | `move_Flying_back.vrma` | 後退 |
+| Joy_reborn_Fly_L | `move_Flying_left.vrma` | 左 |
+| Joy_reborn_Fly_R | `move_Flying_right.vrma` | 右 |
+| Joy_reborn_Fly_idle | `idle.vrma` ※（浮遊idle、仮。要確認） | 静止 |
+| Joy_reborn_Fly_f2 | `move_Flying_front02.vrma` ※（仮。要確認） | グラブ中移動 |
+| Joy_reborn_capcher1 | `attack01.vrma` ✅確定 | グラブ |
+| Joy_reborn_cas1_L1 | `HumanF@MagicAttackDirect1H01_L - Cast.vrma` ✅確定 | ショット（cape_attack_L から変更） |
+
+→ ✅は確定。※（idle / f2）は仮置き。idleは飛行向きの浮遊idleが望ましいが専用VRMAが無いため `idle.vrma` を仮採用（後で差し替え容易）。
+→ VRMA名にスペース/`@`を含むもの（Cast）は fetch 時に `encodeURI` で URL エンコードする。
+
+## 非機能要件
+- 60fps目標。WebGPU/TSL。マント布シミュは既存どおり（重くしない）。
+- TS/型の制約・class禁止（lib流用部分はJS）。CLAUDE.md準拠。
+- モバイル(タッチ)対応は今回は必須としない（将来課題。swing-catchのタッチは流用検討）。
+
+## スコープ外 / 将来課題
+- NPC（敵）戦闘、ダメージ/HUD、フロー連携（勝敗postMessage）は今回対象外（土台は残すが無効化）。
+- 上下移動の専用キー、カメラ専用エディタ、タッチ最適化。
+
+## 主要リスク / 設計で詰める点
+- `lib/vrm-cloth` の `createVRMCloth({timeline})` は生成時に1つの timeline 前提。**状態ごとに grip(掴み)トラックを切り替える**必要 → ランタイムで timeline/グリップ有効グループを差し替えるAPIが要るか確認（Stage2）。
+- 体VRMAの**クロスフェード**（AnimationMixer の複数Action / fadeIn/Out）。
+- timeline 駆動でのマント grip 再生（フレーム同期）と、移動による基準位置の追従。
+- 「目の前に吸着」アンカーの位置・補間と、ショット発射の初速。

@@ -153,8 +153,9 @@ export const animEditorStore = {
     },
     vrm: VRM,
   ): void {
-    // T-pose にリセットして rest quaternion を取得
+    // T-pose にリセットして rest quaternion を取得（update() で raw ボーンへ反映してから読む）
     vrm.humanoid.resetNormalizedPose();
+    vrm.humanoid.update();
     vrm.scene.updateWorldMatrix(true, true);
 
     const restQuats = new Map<string, THREE.Quaternion>();

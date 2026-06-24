@@ -19,8 +19,11 @@
   function toggleLoop(): void { animEditorStore.setLooping(!state.isLooping); }
 
   function download(): void {
-    // T-pose 時の rest quaternion を取得（ヒューマノイドボーン名でルックアップ）
+    // T-pose 時の rest quaternion を取得（ヒューマノイドボーン名でルックアップ）。
+    // resetNormalizedPose だけでは raw ボーンに反映されない（normalized→raw のコピーは update が行う）。
+    // update() を呼ばないと、編集中の「現在ポーズ」が rest として読まれ、書き出しが現在ポーズぶんズレる。
     vrm.humanoid.resetNormalizedPose();
+    vrm.humanoid.update();
     vrm.scene.updateWorldMatrix(true, true);
 
     // ボーントラックを構築（delta = restQuat_inv ⊗ frameQuat）

@@ -1,0 +1,50 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 60,
+  "trimIn": 0,
+  "trimOut": 60,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g7",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 59
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 59
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g9",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 59
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 59
+        }
+      ]
+    }
+  ],
+  "vrma": "idle.vrma"
+}

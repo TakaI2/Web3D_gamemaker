@@ -149,12 +149,13 @@ export default defineConfig({
           res.end(JSON.stringify(files));
         });
 
-        // タイムライン(VRMA モーション)一覧
+        // タイムライン一覧: 既定は VRMA モーション(.vrma)。?ext=timeline.json で TL(JSON) を返す
         server.middlewares.use((req, res, next) => {
-          const url = (req.url || '').split('?')[0];
-          if (!url.endsWith('/timeline/manifest.json')) return next();
+          const [urlPath, query] = (req.url || '').split('?');
+          if (!urlPath.endsWith('/timeline/manifest.json')) return next();
+          const ext = new URLSearchParams(query || '').get('ext') === 'timeline.json' ? '.timeline.json' : '.vrma';
           const dir = path.join(pub, 'timeline');
-          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.vrma')) : [];
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(ext)) : [];
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
         });

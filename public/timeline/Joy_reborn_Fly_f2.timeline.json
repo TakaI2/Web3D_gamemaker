@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 48,
+  "trimIn": 0,
+  "trimOut": 48,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g7",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 47
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 47
+        }
+      ]
+    }
+  ],
+  "vrma": "move_Flying_front02.vrma"
+}

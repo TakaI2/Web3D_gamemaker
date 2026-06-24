@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 27,
+  "trimIn": 0,
+  "trimOut": 27,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g5",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 26
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 26
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 4,
+          "end": 9
+        }
+      ]
+    }
+  ],
+  "vrma": "HumanF@MagicAttackDirect1H01_L - Cast.vrma"
+}

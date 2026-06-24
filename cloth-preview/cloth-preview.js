@@ -11,9 +11,10 @@ import {
 import { OrbitControls }    from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader }       from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin }  from 'https://esm.sh/@pixiv/three-vrm@3.4.0?deps=three@0.184.0';
+import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
+import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
-  from 'https://esm.sh/@pixiv/three-vrm-animation?deps=three@0.184.0,@pixiv/three-vrm@3.4.0';
+  from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 
 // ── 定数 ─────────────────────────────────────────────────────────
 const MAX_COLLIDERS = 16;
@@ -70,6 +71,7 @@ let vrmaClip   = null;
 let vrmaAction = null;
 let vrmaPlaying = false;
 let vrmaLoop    = true;
+let currentVrmaName = '';   // 直近に読み込んだ VRMA のファイル名（public/vrma 基準）。timeline.json に保存。
 
 // ── Readback（HGPドラッグ用スナップショット）───────────────────
 const grab = { snapshot: null, snapshotPending: false, snapshotAge: 999 };
@@ -79,6 +81,8 @@ const timeline = {
   fps:           30,
   durationFrames: 90,
   currentFrame:  0,
+  trimIn:        0,   // 再生区間 In（フレーム）。VRMA本体は不変、再生のみこの区間でループ
+  trimOut:       90,  // 再生区間 Out（フレーム）
   grip: {},     // groupId → [{start, end}]（グリップ有効範囲）
   gripPos: {},  // groupId → Map<frame, {x,y,z}>（グラブ点オフセットのキーフレーム）
   blendShape: new Map(),  // name → Map<frame, value>
@@ -92,6 +96,7 @@ let tlScrollX    = 0;
 const HEADER_W = 160;
 const ROW_H    = 22;
 const RULER_H  = 24;
+const TRIM_HANDLE_W = 9;   // ルーラー上の In/Out 三角ハンドル幅
 // グリップ行はグループから動的生成（各グループ: 有効範囲 行 ＋ 位置キーフレーム 行）
 function gripRows() {
   const rows = [];
@@ -116,7 +121,12 @@ let fpsLastTime   = performance.now();
 
 async function loadVRM(file) {
   const loader = new GLTFLoader();
-  loader.register(parser => new VRMLoaderPlugin(parser));
+  // WebGPU 互換の MToonNodeMaterial を指定して、本来の MToon 見た目を保持する
+  loader.register(parser => new VRMLoaderPlugin(parser, {
+    mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, {
+      materialType: MToonNodeMaterial,
+    }),
+  }));
   const url = URL.createObjectURL(file);
   try {
     const gltf = await loader.loadAsync(url);
@@ -454,10 +464,14 @@ function dataURIToBlob(uri) {
   return new Blob([arr], { type: mime });
 }
 
+let lastBundleName = '';   // TL保存時の既定ファイル名に使う（直近に読み込んだNPC名）
+let lastTlName     = '';   // 直近に読み込んだTL名（拡張子なし）。VRMA差し替え→上書き保存の既定名に使う
+
 // NPCバンドル(.npc.json)を一括読込：VRM → マント(cloth) → VRMA → timeline。
 async function importNPCBundle(bundle) {
   if (!bundle || !bundle.vrm) { showToast('VRM を含まないファイルです', 'error'); return; }
   const name = bundle.name || 'imported';
+  lastBundleName = name;
   showToast('NPC読み込み中…');
   try {
     // 1) VRM（先に読む＝マントのボーンアンカー解決に必要）
@@ -806,7 +820,18 @@ function setupGrabEvents(canvas) {
 // VRMA Player
 // ============================================================
 
-async function loadVRMA(file) {
+// public/vrma の名前を指定して VRMA を読み込む（timeline の vrma 参照からの自動ロード用）
+async function loadVrmaByName(name) {
+  try {
+    const res = await fetch('/vrma/' + encodeURIComponent(name));
+    if (!res.ok) throw new Error('取得失敗');
+    await loadVRMA(new File([await res.blob()], name, { type: 'application/octet-stream' }), name);
+    const sel = document.getElementById('vrma-select');
+    if (sel) sel.value = name;
+  } catch (err) { showToast(`VRMA自動読込失敗: ${name}`, 'warn'); console.warn(err); }
+}
+
+async function loadVRMA(file, srcName) {
   if (!currentVRM) { showToast('先にVRMを読み込んでください', 'error'); return; }
   const loader = new GLTFLoader();
   loader.register(parser => new VRMAnimationLoaderPlugin(parser));
@@ -817,6 +842,7 @@ async function loadVRMA(file) {
     if (!vrmAnims?.length) throw new Error('VRMAアニメーションデータが見つかりません');
 
     unloadVRMA();
+    currentVrmaName = srcName || '';   // public/vrma のファイル名（bundle埋込など不明な場合は空）
     vrmaClip   = createVRMAnimationClip(vrmAnims[0], currentVRM);
     mixer      = new THREE.AnimationMixer(currentVRM.scene);
     vrmaAction = mixer.clipAction(vrmaClip);
@@ -825,9 +851,12 @@ async function loadVRMA(file) {
     vrmaAction.play();
     vrmaAction.paused = true;  // 読み込み直後は停止
 
-    // タイムライン尺を更新
+    // タイムライン尺を更新（トリム区間は全体にリセット）
     timeline.durationFrames = Math.round(vrmaClip.duration * timeline.fps);
+    timeline.trimIn  = 0;
+    timeline.trimOut = timeline.durationFrames;
     document.getElementById('lbl-duration').textContent = timeline.durationFrames.toString();
+    updateTrimLabel();
 
     document.getElementById('btn-play').disabled  = false;
     document.getElementById('btn-pause').disabled = false;
@@ -841,6 +870,10 @@ async function loadVRMA(file) {
 function vrmaPlay() {
   if (!mixer || !vrmaAction) return;
   if (vrmaPlaying) return;
+  // 再生開始時、現在位置がトリム区間外なら In へ送る
+  if (timeline.currentFrame < timeline.trimIn || timeline.currentFrame >= timeline.trimOut) {
+    vrmaSeek(timeline.trimIn);
+  }
   vrmaPlaying = true;
   vrmaAction.paused = false;
   _lastDispatchedFrame = timeline.currentFrame - 1;
@@ -876,13 +909,10 @@ function vrmaSetSpeed(speed) {
 
 function vrmaSetLoop(enabled) {
   vrmaLoop = enabled;
+  // トリム区間の末尾は render 側で手動処理するため、ミキサーは常に LoopRepeat（クリップ末で勝手にクランプさせない）
   if (vrmaAction) {
-    if (enabled) {
-      vrmaAction.setLoop(THREE.LoopRepeat, Infinity);
-    } else {
-      vrmaAction.setLoop(THREE.LoopOnce, 1);
-      vrmaAction.clampWhenFinished = true;
-    }
+    vrmaAction.setLoop(THREE.LoopRepeat, Infinity);
+    vrmaAction.clampWhenFinished = false;
   }
 }
 
@@ -983,7 +1013,13 @@ function exportTimeline() {
       });
     }
   }
-  return { version: 2, fps: timeline.fps, durationFrames: timeline.durationFrames, tracks };
+  const out = {
+    version: 2, fps: timeline.fps, durationFrames: timeline.durationFrames,
+    trimIn: timeline.trimIn, trimOut: timeline.trimOut,
+    tracks,
+  };
+  if (currentVrmaName) out.vrma = currentVrmaName;   // 体モーション(VRMA)の参照。ゲームはこれで本体アニメを再生。
+  return out;
 }
 
 function importTimeline(json) {
@@ -995,6 +1031,10 @@ function importTimeline(json) {
 
   if (json.fps)            timeline.fps            = json.fps;
   if (json.durationFrames) timeline.durationFrames = json.durationFrames;
+  if (json.vrma)           currentVrmaName         = json.vrma;   // 体モーション参照（再エクスポートで保持）
+  // トリム区間（無ければ全体）
+  timeline.trimIn  = Number.isFinite(json.trimIn)  ? Math.max(0, Math.min(json.trimIn, timeline.durationFrames)) : 0;
+  timeline.trimOut = Number.isFinite(json.trimOut) ? Math.max(timeline.trimIn + 1, Math.min(json.trimOut, timeline.durationFrames)) : timeline.durationFrames;
 
   const byBone = (bone) => gripGroups.find(g => g.bone === bone)?.id;
   for (const track of json.tracks) {
@@ -1027,6 +1067,7 @@ function importTimeline(json) {
   }
 
   document.getElementById('lbl-duration').textContent = timeline.durationFrames.toString();
+  updateTrimLabel();
   document.getElementById('kf-section').style.display = 'none';
   renderTimeline();
 }
@@ -1218,8 +1259,49 @@ function renderTimeline() {
   ctx.beginPath(); ctx.moveTo(HEADER_W - 0.5, 0); ctx.lineTo(HEADER_W - 0.5, H); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0, RULER_H - 0.5); ctx.lineTo(W, RULER_H - 0.5); ctx.stroke();
 
+  // トリム区間（淡色オーバーレイ＋In/Outハンドル）
+  _drawTrim(ctx, W, H);
+
   // プレイヘッド
   _drawPlayhead(ctx, W, H);
+}
+
+function _drawTrim(ctx, W, H) {
+  const xIn  = frameToX(timeline.trimIn);
+  const xOut = frameToX(timeline.trimOut);
+
+  // 区間外を暗くする（行領域のみ）
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  if (xIn > HEADER_W) {
+    ctx.fillRect(HEADER_W, RULER_H, Math.min(xIn, W) - HEADER_W, H - RULER_H);
+  }
+  if (xOut < W) {
+    const x0 = Math.max(xOut, HEADER_W);
+    ctx.fillRect(x0, RULER_H, W - x0, H - RULER_H);
+  }
+
+  // 区間境界の縦線
+  ctx.strokeStyle = '#33cc88';
+  ctx.lineWidth = 1.5;
+  if (xIn >= HEADER_W && xIn <= W) {
+    ctx.beginPath(); ctx.moveTo(xIn + 0.5, RULER_H); ctx.lineTo(xIn + 0.5, H); ctx.stroke();
+  }
+  if (xOut >= HEADER_W && xOut <= W) {
+    ctx.beginPath(); ctx.moveTo(xOut - 0.5, RULER_H); ctx.lineTo(xOut - 0.5, H); ctx.stroke();
+  }
+
+  // ルーラー上のハンドル（In=右向き / Out=左向きの三角）
+  ctx.fillStyle = '#33cc88';
+  if (xIn >= HEADER_W && xIn <= W) {
+    ctx.beginPath();
+    ctx.moveTo(xIn, RULER_H - 14); ctx.lineTo(xIn + TRIM_HANDLE_W, RULER_H - 14);
+    ctx.lineTo(xIn, RULER_H); ctx.closePath(); ctx.fill();
+  }
+  if (xOut >= HEADER_W && xOut <= W) {
+    ctx.beginPath();
+    ctx.moveTo(xOut, RULER_H - 14); ctx.lineTo(xOut - TRIM_HANDLE_W, RULER_H - 14);
+    ctx.lineTo(xOut, RULER_H); ctx.closePath(); ctx.fill();
+  }
 }
 
 function _drawPlayhead(ctx, W, H) {
@@ -1253,17 +1335,42 @@ function screenToTrack(offsetX, offsetY) {
 }
 
 let _gripDrag = null; // { groupId, startFrame, endFrame }
+let _trimDrag = null; // 'in' | 'out' | null
+
+function maxScrollX() {
+  const canvas = document.getElementById('timeline');
+  const visible = (canvas?.width ?? 0) - HEADER_W;
+  const content = (timeline.durationFrames + 5) * tlPxPerFrame; // 末尾に 5f ぶんの余白
+  return Math.max(0, content - visible);
+}
 
 function setupTimelineEvents(canvas) {
   let _tlDragging = false;
+  let _panDrag = null; // { startX, startScroll } 中ボタン/Alt+左ドラッグでの平行移動
 
   canvas.addEventListener('mousedown', e => {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // ルーラードラッグ → シーク
+    // 中ボタン or Alt+左ドラッグ → タイムラインを平行移動（パン）
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      e.preventDefault();
+      _panDrag = { startX: x, startScroll: tlScrollX };
+      return;
+    }
+
+    // ルーラー領域：In/Out ハンドルのドラッグを優先、無ければシーク
     if (y < RULER_H && x >= HEADER_W) {
+      const xIn  = frameToX(timeline.trimIn);
+      const xOut = frameToX(timeline.trimOut);
+      const TOL  = TRIM_HANDLE_W + 3;
+      const dIn  = Math.abs(x - xIn);
+      const dOut = Math.abs(x - xOut);
+      if (dIn <= TOL || dOut <= TOL) {
+        _trimDrag = (dIn <= dOut) ? 'in' : 'out';
+        return;
+      }
       _tlDragging = true;
       const f = Math.max(0, Math.min(xToFrame(x), timeline.durationFrames));
       vrmaSeek(f);
@@ -1306,7 +1413,19 @@ function setupTimelineEvents(canvas) {
   canvas.addEventListener('mousemove', e => {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
+    if (_panDrag) {
+      tlScrollX = Math.max(0, Math.min(maxScrollX(), _panDrag.startScroll - (x - _panDrag.startX)));
+      renderTimeline();
+      return;
+    }
     const f = Math.max(0, Math.min(xToFrame(x), timeline.durationFrames));
+    if (_trimDrag) {
+      if (_trimDrag === 'in')  timeline.trimIn  = Math.max(0, Math.min(f, timeline.trimOut - 1));
+      else                     timeline.trimOut = Math.min(timeline.durationFrames, Math.max(f, timeline.trimIn + 1));
+      updateTrimLabel();
+      renderTimeline();
+      return;
+    }
     if (_tlDragging) {
       vrmaSeek(f);
       return;
@@ -1324,6 +1443,8 @@ function setupTimelineEvents(canvas) {
       renderTimeline();
     }
     _tlDragging = false;
+    _trimDrag = null;
+    _panDrag = null;
   });
   canvas.addEventListener('mouseleave', () => {
     if (_gripDrag) {
@@ -1332,6 +1453,8 @@ function setupTimelineEvents(canvas) {
       renderTimeline();
     }
     _tlDragging = false;
+    _trimDrag = null;
+    _panDrag = null;
   });
 
   canvas.addEventListener('contextmenu', e => {
@@ -1353,8 +1476,8 @@ function setupTimelineEvents(canvas) {
     const x = e.clientX - rect.left;
 
     if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey) {
-      // 横スクロール
-      tlScrollX = Math.max(0, tlScrollX + (e.shiftKey ? e.deltaY : e.deltaX));
+      // 横スクロール（平行移動）
+      tlScrollX = Math.max(0, Math.min(maxScrollX(), tlScrollX + (e.shiftKey ? e.deltaY : e.deltaX)));
     } else {
       // ズーム（カーソル下のフレームを中心に）
       if (x < HEADER_W) { tlScrollX = Math.max(0, tlScrollX + e.deltaY); }
@@ -1494,6 +1617,47 @@ function updateFrameLabel() {
   document.getElementById('lbl-frame').textContent = timeline.currentFrame.toString();
 }
 
+function updateTrimLabel() {
+  const el = document.getElementById('lbl-trim');
+  if (el) el.textContent = `${timeline.trimIn} – ${timeline.trimOut}`;
+}
+
+// タイムライン下部パネルを上下ドラッグで伸縮
+function setupTimelineResize() {
+  const resizer = document.getElementById('timeline-resizer');
+  const section = document.getElementById('timeline-section');
+  if (!resizer || !section) return;
+
+  let startY = 0, startH = 0, dragging = false;
+
+  const onMove = e => {
+    if (!dragging) return;
+    const delta  = startY - e.clientY;                 // 上ドラッグで＋（高くなる）
+    const maxH   = Math.max(160, window.innerHeight - 140); // ビューポートの最低限を確保
+    const newH   = Math.max(120, Math.min(maxH, startH + delta));
+    section.style.height = `${newH}px`;
+    window.dispatchEvent(new Event('resize'));          // 3Dビューポート＋canvas を追従
+  };
+  const onUp = () => {
+    dragging = false;
+    resizer.classList.remove('dragging');
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    document.body.style.userSelect = '';
+  };
+
+  resizer.addEventListener('mousedown', e => {
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY;
+    startH = section.clientHeight;
+    resizer.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+}
+
 function resizeTimeline() {
   const section = document.getElementById('timeline-section');
   const canvas  = document.getElementById('timeline');
@@ -1514,17 +1678,28 @@ function setupUI() {
   });
   document.getElementById('btn-vrm-load').addEventListener('click', () => vrmFile.click());
 
-  // ── NPCバンドル(.npc.json) 一括読み込み ──
-  const npcFile = document.getElementById('npc-file');
-  npcFile.addEventListener('change', async e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    npcFile.value = '';
+  // ── NPCバンドル(.npc.json) ドロップダウン（public/npc から選択）──
+  const npcSelect = document.getElementById('npc-select');
+  fetch('../npc/manifest.json')
+    .then(r => r.ok ? r.json() : [])
+    .then(files => {
+      for (const f of files) {
+        if (!f.endsWith('.npc.json')) continue;
+        const o = document.createElement('option');
+        o.value = f; o.textContent = f.replace(/\.npc\.json$/, '');
+        npcSelect.appendChild(o);
+      }
+    })
+    .catch(() => {});
+  npcSelect.addEventListener('change', async () => {
+    if (!npcSelect.value) return;
     showToast('NPC読み込み中…');
-    try { await importNPCBundle(JSON.parse(await file.text())); }
-    catch (err) { showToast(`NPC読み込み失敗: ${err.message}`, 'error'); console.error(err); }
+    try {
+      const res = await fetch('../npc/' + npcSelect.value);
+      if (!res.ok) throw new Error('取得失敗');
+      await importNPCBundle(await res.json());
+    } catch (err) { showToast(`NPC読み込み失敗: ${err.message}`, 'error'); console.error(err); }
   });
-  document.getElementById('btn-npc-load').addEventListener('click', () => npcFile.click());
 
   // ── VRMA 読み込み ──
   const vrmaFile = document.getElementById('vrma-file');
@@ -1533,7 +1708,7 @@ function setupUI() {
     if (!file) return;
     vrmaFile.value = '';
     showToast('読み込み中…');
-    try { await loadVRMA(file); }
+    try { await loadVRMA(file, file.name); }
     catch (err) { showToast(`VRMA 読み込み失敗: ${err.message}`, 'error'); console.error(err); }
   });
   document.getElementById('btn-vrma-load').addEventListener('click', () => vrmaFile.click());
@@ -1548,9 +1723,9 @@ function setupUI() {
     if (!vrmaSelect.value) return;
     showToast('VRMA 読み込み中…');
     try {
-      const res = await fetch('/vrma/' + vrmaSelect.value);
+      const res = await fetch('/vrma/' + encodeURIComponent(vrmaSelect.value));
       if (!res.ok) throw new Error('取得失敗');
-      await loadVRMA(new File([await res.blob()], vrmaSelect.value, { type: 'application/octet-stream' }));
+      await loadVRMA(new File([await res.blob()], vrmaSelect.value, { type: 'application/octet-stream' }), vrmaSelect.value);
     } catch (err) { showToast(`VRMA 読み込み失敗: ${err.message}`, 'error'); console.error(err); }
   });
 
@@ -1569,31 +1744,54 @@ function setupUI() {
   });
   document.getElementById('btn-mantle-load').addEventListener('click', () => mantleFile.click());
 
-  // ── TL 読み込み ──
-  const tlFile = document.getElementById('tl-file');
-  tlFile.addEventListener('change', e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    tlFile.value = '';
-    const reader = new FileReader();
-    reader.onload = ev => {
-      try { importTimeline(JSON.parse(ev.target.result)); showToast('タイムライン読み込み完了'); }
-      catch (err) { showToast(`TL 読み込み失敗: ${err.message}`, 'error'); }
-    };
-    reader.readAsText(file);
+  // ── TL 読み込み（public/timeline の *.timeline.json をドロップダウンから）──
+  const tlSelect = document.getElementById('tl-select');
+  function populateTlSelect(selectName) {
+    fetch('../timeline/manifest.json?ext=timeline.json')
+      .then(r => r.ok ? r.json() : [])
+      .then(files => {
+        tlSelect.innerHTML = '<option value="">-- TL読込 (timeline) --</option>';
+        for (const f of files) {
+          const o = document.createElement('option');
+          o.value = f; o.textContent = f.replace(/\.timeline\.json$/, '');
+          if (f === selectName) o.selected = true;
+          tlSelect.appendChild(o);
+        }
+      })
+      .catch(() => {});
+  }
+  populateTlSelect();
+  tlSelect.addEventListener('change', async () => {
+    if (!tlSelect.value) return;
+    try {
+      const res = await fetch('../timeline/' + tlSelect.value);
+      if (!res.ok) throw new Error('取得失敗');
+      const j = await res.json();
+      importTimeline(j);
+      lastTlName = tlSelect.value.replace(/\.timeline\.json$/, '');
+      showToast(`TL読み込み: ${lastTlName}`);
+      // timeline に vrma 参照があり VRM 読込済みなら、その体モーションを自動ロード
+      if (j.vrma && currentVRM) await loadVrmaByName(j.vrma);
+    } catch (err) { showToast(`TL読み込み失敗: ${err.message}`, 'error'); console.error(err); }
   });
-  document.getElementById('btn-tl-load').addEventListener('click', () => tlFile.click());
 
-  // ── TL 保存 ──
-  document.getElementById('btn-tl-save').addEventListener('click', () => {
-    const json = exportTimeline();
-    const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
-    const a    = document.createElement('a');
-    a.href     = URL.createObjectURL(blob);
-    a.download = 'timeline.timeline.json';
-    a.click();
-    URL.revokeObjectURL(a.href);
-    showToast('タイムライン保存完了');
+  // ── TL 保存（public/timeline へ /api/save 経由で書き込み）──
+  document.getElementById('btn-tl-save').addEventListener('click', async () => {
+    const def  = lastTlName || lastBundleName || 'timeline';
+    const name = prompt('保存名（public/timeline に <名前>.timeline.json で保存）', def);
+    if (name === null) return;
+    const base = name.trim().replace(/\.timeline\.json$/, '').replace(/[^\w\-]/g, '_');
+    if (!base) { showToast('名前が不正です', 'warn'); return; }
+    const filename = `${base}.timeline.json`;
+    try {
+      const r = await fetch('../api/save', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: 'timeline', filename, content: JSON.stringify(exportTimeline(), null, 2) }),
+      });
+      const j = await r.json();
+      if (j.ok) { lastTlName = base; showToast(`保存: ${j.path}`); populateTlSelect(filename); }
+      else showToast('保存失敗', 'error');
+    } catch (e) { showToast(`保存失敗: ${e}`, 'error'); }
   });
 
   // ── 再生コントロール ──
@@ -1601,6 +1799,21 @@ function setupUI() {
   document.getElementById('btn-pause').addEventListener('click', vrmaPause);
   document.getElementById('cb-loop').addEventListener('change', e => vrmaSetLoop(e.target.checked));
   document.getElementById('sel-speed').addEventListener('change', e => vrmaSetSpeed(parseFloat(e.target.value)));
+
+  // ── トリム（再生範囲）──
+  document.getElementById('btn-trim-in').addEventListener('click', () => {
+    timeline.trimIn = Math.min(timeline.currentFrame, timeline.trimOut - 1);
+    updateTrimLabel(); renderTimeline();
+  });
+  document.getElementById('btn-trim-out').addEventListener('click', () => {
+    timeline.trimOut = Math.max(timeline.currentFrame, timeline.trimIn + 1);
+    updateTrimLabel(); renderTimeline();
+  });
+  document.getElementById('btn-trim-reset').addEventListener('click', () => {
+    timeline.trimIn = 0;
+    timeline.trimOut = timeline.durationFrames;
+    updateTrimLabel(); renderTimeline();
+  });
 
   // ── 布シミュ ──
   document.getElementById('btn-sim-start').addEventListener('click', startSim);
@@ -1668,23 +1881,28 @@ async function render() {
 
   updateFPS();
 
-  // VRMA 再生
+  // VRMA 再生（トリム区間 [trimIn, trimOut] 内でループ。VRMA本体は不変）
   if (mixer && vrmaAction && vrmaPlaying) {
+    const inT  = timeline.trimIn  / timeline.fps;
+    const outT = timeline.trimOut / timeline.fps;
     const prevTime = vrmaAction.time;
     mixer.update(dt);
-    const curTime = vrmaAction.time;
+    let curTime = vrmaAction.time;
 
-    // ループ折り返し検出
-    if (vrmaLoop && curTime < prevTime - 0.001) {
-      _lastDispatchedFrame = -1;
-    }
-
-    // LoopOnce 終端検出
-    if (!vrmaLoop && curTime >= (vrmaClip?.duration ?? 0) - 0.001) {
-      vrmaPlaying = false;
-      timeline.currentFrame = timeline.durationFrames;
-      _lastDispatchedFrame  = timeline.currentFrame;
-      updatePlayButtons();
+    // 区間末尾に到達 or クリップが折り返した → 区間 In へ
+    if (curTime >= outT - 0.0005 || curTime < prevTime - 0.001) {
+      if (vrmaLoop) {
+        curTime = inT;
+        vrmaAction.time = inT;
+        _lastDispatchedFrame = -1;
+      } else {
+        vrmaPlaying = false;
+        curTime = outT;
+        vrmaAction.time = outT;
+        timeline.currentFrame = timeline.trimOut;
+        _lastDispatchedFrame  = timeline.currentFrame;
+        updatePlayButtons();
+      }
     }
 
     const newFrame = Math.min(Math.floor(curTime * timeline.fps), timeline.durationFrames);
@@ -1796,6 +2014,7 @@ async function init() {
   setupUI();
   setupGrabEvents(renderer.domElement);
   setupTimelineEvents(document.getElementById('timeline'));
+  setupTimelineResize();
 
   window.addEventListener('resize', () => {
     setRendererSize();

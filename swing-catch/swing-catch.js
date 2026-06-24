@@ -6,9 +6,10 @@ import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import { Octree }  from 'https://esm.sh/three@0.184.0/examples/jsm/math/Octree.js';
 import { Capsule } from 'https://esm.sh/three@0.184.0/examples/jsm/math/Capsule.js';
 import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.4.0?deps=three@0.184.0';
+import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
+import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
-  from 'https://esm.sh/@pixiv/three-vrm-animation?deps=three@0.184.0,@pixiv/three-vrm@3.4.0';
+  from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse }
   from '../lib/vrm-ragdoll.js';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
@@ -473,7 +474,10 @@ async function fetchBundle(filename) {
 // バンドルから NPC を1体生成して返す（VRM は個体ごとに別インスタンス）。speechData は分離した反応セリフ。
 async function createMegu(bundle, pos, speechData) {
   const loader = new GLTFLoader();
-  loader.register(p => new VRMLoaderPlugin(p));
+  // WebGPU 互換の MToonNodeMaterial を指定して、本来の MToon 見た目を保持する
+  loader.register(p => new VRMLoaderPlugin(p, {
+    mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }),
+  }));
   const gltf = await loader.loadAsync(URL.createObjectURL(dataURIToBlob(bundle.vrm)));
   const vrm = gltf.userData.vrm;
   if (!vrm) return null;

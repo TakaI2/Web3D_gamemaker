@@ -1,0 +1,78 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 48,
+  "trimIn": 0,
+  "trimOut": 48,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g5",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 48
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g6",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 48
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g9",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 47
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g9",
+      "keyframes": [
+        {
+          "frame": 0,
+          "offset": [
+            0.4,
+            -0.08259573141033577,
+            -0.027096489204910697
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 47
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g10",
+      "keyframes": [
+        {
+          "frame": 0,
+          "offset": [
+            -0.3876334375501435,
+            -0.15391625707955794,
+            -0.04828613651420193
+          ]
+        }
+      ]
+    }
+  ],
+  "vrma": "Joy_Fly_down.vrma"
+}

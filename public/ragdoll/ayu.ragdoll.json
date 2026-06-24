@@ -1,0 +1,1 @@
+{"version":1,"id":"ayu","boneMaxBend":{"leftLowerLeg":130,"chest":43,"leftUpperArm":180,"rightUpperArm":180,"rightLowerLeg":120,"upperChest":141,"leftLowerArm":53},"params":{"gravity":-22,"stiffness":1,"iterations":8,"foldLimit":0.9,"drag":0.015,"limitDamp":0.4,"selfCollision":true,"bodyScale":1,"rigidBones":["leftShoulder","rightShoulder","leftUpperLeg","rightUpperLeg"]}}

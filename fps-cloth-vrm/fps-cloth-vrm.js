@@ -14,9 +14,10 @@ import { Octree }  from 'https://esm.sh/three@0.184.0/examples/jsm/math/Octree.j
 import { Capsule } from 'https://esm.sh/three@0.184.0/examples/jsm/math/Capsule.js';
 import { GLTFLoader }             from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
 import { UltraHDRLoader }         from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
-import { VRMLoaderPlugin }        from 'https://esm.sh/@pixiv/three-vrm@3.4.0?deps=three@0.184.0';
+import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
+import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
-  from 'https://esm.sh/@pixiv/three-vrm-animation?deps=three@0.184.0,@pixiv/three-vrm@3.4.0';
+  from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll }
   from '../lib/vrm-ragdoll.js';
 
@@ -494,7 +495,10 @@ function stepProjectiles(dt) {
 
 async function loadVRM(file) {
   const loader = new GLTFLoader();
-  loader.register(parser => new VRMLoaderPlugin(parser));
+  // WebGPU 互換の MToonNodeMaterial を指定して、本来の MToon 見た目を保持する
+  loader.register(parser => new VRMLoaderPlugin(parser, {
+    mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, { materialType: MToonNodeMaterial }),
+  }));
   const url = URL.createObjectURL(file);
   try {
     const gltf = await loader.loadAsync(url);
@@ -1578,7 +1582,10 @@ async function render() {
 // VRM を1体ロードして指定位置に配置（グローバルには触らない＝NPC#0 と独立）。
 async function loadVRMFromBlob(blob, position) {
   const loader = new GLTFLoader();
-  loader.register(p => new VRMLoaderPlugin(p));
+  // WebGPU 互換の MToonNodeMaterial を指定して、本来の MToon 見た目を保持する
+  loader.register(p => new VRMLoaderPlugin(p, {
+    mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }),
+  }));
   const url = URL.createObjectURL(blob);
   try {
     const gltf = await loader.loadAsync(url);

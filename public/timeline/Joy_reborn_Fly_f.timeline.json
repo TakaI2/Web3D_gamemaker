@@ -1,0 +1,78 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 40,
+  "trimIn": 0,
+  "trimOut": 40,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g5",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 47
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g6",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 47
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g9",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 39
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g9",
+      "keyframes": [
+        {
+          "frame": 1,
+          "offset": [
+            0.4,
+            0.05504505137367921,
+            -0.19239752458234768
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 39
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g10",
+      "keyframes": [
+        {
+          "frame": 1,
+          "offset": [
+            0.14255724449022655,
+            0.4,
+            0.4
+          ]
+        }
+      ]
+    }
+  ],
+  "vrma": "move_Flying_front.vrma"
+}

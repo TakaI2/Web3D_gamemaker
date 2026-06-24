@@ -80,6 +80,12 @@
     input[type=checkbox] { cursor: pointer; accent-color: #5580cc; }
 
     /* ── Timeline ── */
+    #timeline-resizer {
+      flex-shrink: 0; height: 6px; cursor: ns-resize;
+      background: #2a2a44; border-top: 1px solid #1a1a2e;
+      transition: background .12s;
+    }
+    #timeline-resizer:hover, #timeline-resizer.dragging { background: #4a6aa0; }
     #timeline-section {
       flex-shrink: 0; height: 240px;
       background: #08081a; border-top: 1px solid #2a2a44;
@@ -113,8 +119,9 @@
 
 <!-- ── Toolbar ── -->
 <div id="toolbar">
-  <button id="btn-npc-load" style="background:#1f3050;color:#bdf;border:1px solid #3a5a8a;">NPC読込 (.npc.json)</button>
-  <input type="file" id="npc-file" accept=".json" style="display:none">
+  <select id="npc-select" title="public/npc から選択" style="background:#1f3050;color:#bdf;border:1px solid #3a5a8a;border-radius:4px;padding:3px 6px;font-size:12px;max-width:180px;">
+    <option value="">-- NPC選択 (npc) --</option>
+  </select>
   <div class="sep"></div>
   <button id="btn-vrm-load">VRM読込</button>
   <input type="file" id="vrm-file" accept=".vrm" style="display:none">
@@ -127,9 +134,10 @@
   <button id="btn-mantle-load">マント読込</button>
   <input type="file" id="mantle-file" accept=".json" style="display:none">
   <div class="sep"></div>
-  <button id="btn-tl-load">TL読込</button>
-  <input type="file" id="tl-file" accept=".json" style="display:none">
-  <button id="btn-tl-save">TL保存</button>
+  <select id="tl-select" title="public/timeline から選択" style="background:#16162c;color:#ccc;border:1px solid #3a3a60;border-radius:4px;padding:3px 6px;font-size:12px;max-width:160px;">
+    <option value="">-- TL読込 (timeline) --</option>
+  </select>
+  <button id="btn-tl-save" title="public/timeline に保存">TL保存</button>
   <div class="sep"></div>
   <a href="../fps-cloth-vrm/" style="padding:4px 9px;background:#442028;color:#ffaaaa;border:1px solid #663040;border-radius:4px;text-decoration:none;font-size:12px;white-space:nowrap;">FPS NPC ↗</a>
   <span class="fps" id="fps-toolbar">-- FPS</span>
@@ -169,6 +177,16 @@
         <span style="color:#555;font-size:11px;">/</span>
         <span id="lbl-duration" style="color:#666;font-size:12px;">90</span>
       </div>
+      <div class="row" style="margin-top:4px;">
+        <label>トリム</label>
+        <span id="lbl-trim" style="color:#33cc88;font-size:12px;font-variant-numeric:tabular-nums;">0 – 90</span>
+      </div>
+      <div class="row-wrap">
+        <button id="btn-trim-in" title="現在フレームを In に設定">⟦ In=現在</button>
+        <button id="btn-trim-out" title="現在フレームを Out に設定">Out=現在 ⟧</button>
+        <button id="btn-trim-reset" title="トリムを全体に戻す">全体</button>
+      </div>
+      <div style="font-size:10px;color:#556;margin-top:2px;">※ トリムは再生範囲（タイムライン）のみ。元の VRMA は編集されません。</div>
     </div>
 
     <!-- Cloth simulation -->
@@ -224,6 +242,7 @@
 </div><!-- /main -->
 
 <!-- ── Timeline ── -->
+<div id="timeline-resizer" title="ドラッグでタイムラインの高さを変更"></div>
 <div id="timeline-section">
   <canvas id="timeline"></canvas>
 </div>

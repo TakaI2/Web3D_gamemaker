@@ -5,9 +5,10 @@ import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import { OrbitControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.4.0?deps=three@0.184.0';
+import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
+import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
-  from 'https://esm.sh/@pixiv/three-vrm-animation?deps=three@0.184.0,@pixiv/three-vrm@3.4.0';
+  from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 import {
   createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery,
   setBoneMaxBend, listBoneLimits, disposeRagdoll, applyRagdollImpulse,
@@ -73,7 +74,10 @@ async function loadVrmFromBlobUrl(url, vrmaUrl) {
   // 既存を破棄
   teardownModel();
   const loader = new GLTFLoader();
-  loader.register((p) => new VRMLoaderPlugin(p));
+  // WebGPU 互換の MToonNodeMaterial を指定して、本来の MToon 見た目を保持する
+  loader.register((p) => new VRMLoaderPlugin(p, {
+    mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }),
+  }));
   const gltf = await loader.loadAsync(url);
   vrm = gltf.userData.vrm;
   scene.add(vrm.scene);

@@ -1,0 +1,1023 @@
+// tps-flight.js — サイキッカー空中アクション（TPS）。swing-catch ベース。
+// Three.js v0.184 (WebGPU)。設計: .tmp/design.md
+//
+// 構成: プレイヤー=可視VRM(Joy_reborn) を飛行操作。球面カメラ＋スプリング追従。
+//       状態別 VRMA を crossFade、マント(lib/vrm-cloth)は timeline の grip グループを状態ごとに切替。
+//       浮遊オブジェクトを目の前へ引き寄せ(グラブ)・前方へ射出(ショット)。
+
+import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
+import { positionWorld, mix, color } from 'https://esm.sh/three@0.184.0/tsl';
+import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
+import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
+import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
+import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
+import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
+  from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
+import { createVRMCloth } from '../lib/vrm-cloth.js';
+import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse } from '../lib/vrm-ragdoll.js';
+
+// ── アリーナ ───────────────────────────────────────────────────
+const ROOM = { x: 30, y: 30, z: 30 };
+
+// ── 飛行パラメータ（UIで一部上書き）─────────────────────────────
+const flight = {
+  accel:    32,    // 加速度
+  drag:     2.4,   // 速度減衰（exp(-drag*dt)）
+  maxSpeed: 9,     // 速度上限（NPC同等の体感。UIの「速度」スライダー＝最大m/s）
+  turn:     8,     // 体の向きの追従速度
+};
+// プレイヤーキャラは ?npc= で切替（既定 Joy_reborn）。UIのキャラ選択から変更可。
+const PLAYER_NPC = new URLSearchParams(location.search).get('npc') || 'Joy_reborn.npc.json';
+// 体向き補正：VRMの正面が逆に焼かれている個体だけ180°回す（既定0、Joy_rebornのみπ）。
+const NPC_FACE_OFFSET = { 'Joy_reborn.npc.json': Math.PI };
+const FACE_OFFSET = NPC_FACE_OFFSET[PLAYER_NPC] ?? 0;
+
+// ── カメラ（UIで上書き・localStorage保存）───────────────────────
+const cam = {
+  dist:   4.0,
+  height: 1.2,    // 注視点の高さ（プレイヤー原点からのオフセット）
+  follow: 8.0,    // スプリング追従の速さ
+  fov:    70,
+  sens:   1.0,    // マウス感度倍率
+};
+const CAM_PITCH_MIN = -1.25, CAM_PITCH_MAX = 1.35;
+const MOUSE_SENS_BASE = 0.0024;
+
+// ── グラブ / ショット ───────────────────────────────────────────
+const GRAB_RANGE       = 40;
+const GRAB_FRONT_DIST  = 1.9;   // 体の前方アンカー距離（実際はさらに掴んだ物の半径を加算）
+const GRAB_FRONT_Y     = 1.0;   // アンカーの高さ（原点から）
+
+// ── NPC（swing-catch 流用）──
+const NPC_RADIUS        = 0.55;   // 当たり/掴み判定の体半径
+const NPC_CENTER_Y      = 1.0;    // 飛行時の判定中心の高さ（root からのオフセット）
+const NPC_RECOVER_DELAY = 2.5;    // 被弾→ラグドール継続時間(秒)
+const LOOK_DURATION     = 1.5;    // 復帰前に見つめる時間(秒)
+const RAGDOLL_IMPULSE   = 0.3;    // 命中時の速度キック
+const ARENA_BOUNDS = {
+  min: new THREE.Vector3(-ROOM.x / 2, 0, -ROOM.z / 2),
+  max: new THREE.Vector3( ROOM.x / 2, ROOM.y, ROOM.z / 2),
+};
+const HEAD_FWD       = new THREE.Vector3(0, 0, 1);   // VRM の顔正面（+Z）
+const HEAD_MAX_ANGLE = Math.PI * 0.6;
+const HEAD_LOOK_TAU  = 0.6;
+const GRAB_STIFFNESS   = 60;
+const GRAB_DAMPING     = 6;
+const SHOT_SPEED       = 34;
+const MAX_OBJ_SPEED    = 40;
+
+// ── 物理ステップ ───────────────────────────────────────────────
+const STEP_HZ = 120, MAX_STEPS_FRAME = 5;
+let timeSinceLastStep = 0;
+
+// ── プレイヤー初期位置（空中）──────────────────────────────────
+const PLAYER_SPAWN = new THREE.Vector3(0, ROOM.y * 0.5, ROOM.z / 2 - 4);
+
+// ── globals ─────────────────────────────────────────────────────
+let renderer, scene, camera;
+const objects     = [];
+const projectiles = [];
+let   grabbed     = null;
+
+const keysDown = {};
+let   isLocked = false;
+
+// プレイヤー（VRM）
+const player = {
+  vrm: null, cloth: null, mixer: null,
+  states: {}, current: null,
+  pos: PLAYER_SPAWN.clone(),
+  vel: new THREE.Vector3(),
+  yaw: Math.PI,            // 体の向き（faceDir = (sin,0,cos)）
+  fwdY: 0,                 // カメラ前方ベクトルのY成分（降下判定用。下向き=負）
+  oneShot: null,           // { name, until } 一発再生（grab/shot）
+  ready: false,
+};
+const DESCEND_SIN = 0.3;   // 前進方向がこれ以上下を向いていたら「降下」とみなす（約17°）
+
+// NPC（1体・idle浮遊。プレイヤーと別キャラ）
+let npc = null;
+
+// カメラ状態（球面 + スプリング現在値）
+let camYaw = Math.PI, camPitch = 0.15;
+const camPosCur    = new THREE.Vector3();
+const camTargetCur = new THREE.Vector3();
+const frontAnchor  = new THREE.Vector3();
+
+// 再利用テンポラリ
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _move = new THREE.Vector3();
+const _hitDir = new THREE.Vector3();
+const _desiredPos = new THREE.Vector3();
+const _desiredTarget = new THREE.Vector3();
+const _npcC  = new THREE.Vector3();
+const _grabV = new THREE.Vector3();
+const _force = new THREE.Vector3();
+const _hPos = new THREE.Vector3(), _hDir = new THREE.Vector3(), _hFwd = new THREE.Vector3();
+const _hqCur = new THREE.Quaternion(), _hqPar = new THREE.Quaternion(), _hqDelta = new THREE.Quaternion(), _hqDes = new THREE.Quaternion();
+const raycaster = new THREE.Raycaster();
+const screenCenter = new THREE.Vector2(0, 0);
+
+const timer = new THREE.Timer();
+timer.connect(document);
+
+let fpsFrameCount = 0, fpsLastTime = performance.now();
+
+// ============================================================
+// アリーナ構築（swing-catch 流用：床のみ表示・壁/天井は不可視の境界）
+// ============================================================
+function buildArena() {
+  const group = new THREE.Group();
+  const mFloor = new THREE.MeshStandardMaterial({ color: 0x2a2e44, roughness: 0.95 });
+  const mWall  = new THREE.MeshStandardMaterial({ color: 0x3a3f5e, roughness: 0.9 });
+  const hx = ROOM.x / 2, hz = ROOM.z / 2, t = 0.5;
+  const box = (x, y, z, w, h, d, mat, vis = true) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.position.set(x, y, z); mesh.visible = vis; group.add(mesh); return mesh;
+  };
+  box(0, -t / 2, 0, ROOM.x + t * 2, t, ROOM.z + t * 2, mFloor);                 // 床（表示）
+  box(0, ROOM.y + t / 2, 0, ROOM.x + t * 2, t, ROOM.z + t * 2, mWall, false);   // 天井
+  box( hx + t / 2, ROOM.y / 2, 0, t, ROOM.y, ROOM.z + t * 2, mWall, false);
+  box(-hx - t / 2, ROOM.y / 2, 0, t, ROOM.y, ROOM.z + t * 2, mWall, false);
+  box(0, ROOM.y / 2,  hz + t / 2, ROOM.x + t * 2, ROOM.y, t, mWall, false);
+  box(0, ROOM.y / 2, -hz - t / 2, ROOM.x + t * 2, ROOM.y, t, mWall, false);
+  scene.add(group);
+}
+
+// ============================================================
+// 浮遊オブジェクト（swing-catch 流用）
+// ============================================================
+const SHAPES = [
+  { make: () => new THREE.IcosahedronGeometry(0.42, 2), radius: 0.42 },
+  { make: () => new THREE.BoxGeometry(0.7, 0.7, 0.7),   radius: 0.6 },
+  { make: () => new THREE.OctahedronGeometry(0.55, 0),  radius: 0.55 },
+  { make: () => new THREE.DodecahedronGeometry(0.5, 0), radius: 0.5 },
+];
+const modelTemplates = [];
+const MODEL_TARGET_SIZE = 1.4;
+const RESTITUTION = 0.92;
+
+function randRange(min, max) { return min + Math.random() * (max - min); }
+function randomDir() {
+  const u = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, s = Math.sqrt(1 - u * u);
+  return new THREE.Vector3(s * Math.cos(a), u, s * Math.sin(a));
+}
+function clampSpeed(vel, max = MAX_OBJ_SPEED) { const s = vel.length(); if (s > max) vel.multiplyScalar(max / s); }
+
+function prepTemplate(gltfScene, scale) {
+  const box = new THREE.Box3().setFromObject(gltfScene);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const s = (scale && scale > 0) ? scale : (MODEL_TARGET_SIZE / maxDim);
+  gltfScene.position.sub(center);
+  const group = new THREE.Group(); group.add(gltfScene); group.scale.setScalar(s);
+  return { group, radius: Math.max(0.3, maxDim * s * 0.5) };
+}
+
+async function loadSelectedModels() {
+  let list = [], scaleMap = {};
+  try { const r = await fetch('../models/selection.json'); if (r.ok) { const j = await r.json(); list = j.models || []; scaleMap = j.scales || {}; } } catch { /* 無ければ空 */ }
+  if (!list.length) return;
+  const loader = new GLTFLoader();
+  for (const file of list) {
+    try {
+      const url = new URL('../models/' + file.split('/').map(encodeURIComponent).join('/'), window.location.href).href;
+      const gltf = await loader.loadAsync(url);
+      modelTemplates.push(prepTemplate(gltf.scene, scaleMap[file]));
+    } catch (e) { console.warn('モデル読込失敗:', file, e); }
+  }
+}
+
+async function loadStage() {
+  let stageItems = [];
+  try { const r = await fetch('../models/stage.json'); if (r.ok) { const j = await r.json(); stageItems = j.items || []; } } catch { /* 無ければ空 */ }
+  if (!stageItems.length) return;
+  const loader = new GLTFLoader();
+  const cache = new Map();
+  const decor = new THREE.Group();
+  for (const it of stageItems) {
+    try {
+      let tpl = cache.get(it.model);
+      if (!tpl) {
+        const url = new URL('../models/' + it.model.split('/').map(encodeURIComponent).join('/'), window.location.href).href;
+        const gltf = await loader.loadAsync(url);
+        const obj = gltf.scene;
+        const box = new THREE.Box3().setFromObject(obj);
+        const c = box.getCenter(new THREE.Vector3());
+        obj.position.set(-c.x, -box.min.y, -c.z);
+        tpl = new THREE.Group(); tpl.add(obj); cache.set(it.model, tpl);
+      }
+      const mesh = tpl.clone(true);
+      mesh.scale.setScalar(it.scale || 1);
+      mesh.position.set(it.x, it.y || 0, it.z);
+      mesh.rotation.y = it.ry || 0;
+      decor.add(mesh);
+    } catch (e) { console.warn('ステージ置物の読込失敗:', it.model, e); }
+  }
+  scene.add(decor);
+}
+
+function spawnModelObject(idx) {
+  const tpl = (idx != null) ? modelTemplates[idx] : modelTemplates[Math.floor(Math.random() * modelTemplates.length)];
+  const mesh = tpl.group.clone(true);
+  const r = tpl.radius;
+  const hx = ROOM.x / 2 - r - 0.3, hz = ROOM.z / 2 - r - 0.3;
+  const pos = new THREE.Vector3(randRange(-hx, hx), randRange(r + 1, ROOM.y - r - 1), randRange(-hz, hz));
+  mesh.position.copy(pos);
+  scene.add(mesh);
+  const obj = { mesh, radius: r, pos, vel: randomDir().multiplyScalar(randRange(3, 6)), spin: randomDir().multiplyScalar(randRange(0.5, 1.5)), grabbed: false, isGLB: true };
+  mesh.userData.obj = obj; objects.push(obj); return obj;
+}
+
+function spawnObject() {
+  if (modelTemplates.length) return spawnModelObject();
+  const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+  const col = new THREE.Color().setHSL(Math.random(), 0.72, 0.56);
+  const mesh = new THREE.Mesh(shape.make(), new THREE.MeshStandardMaterial({ color: col, roughness: 0.5, metalness: 0.1 }));
+  const r = shape.radius, hx = ROOM.x / 2 - r - 0.3, hz = ROOM.z / 2 - r - 0.3;
+  const pos = new THREE.Vector3(randRange(-hx, hx), randRange(r + 1, ROOM.y - r - 1), randRange(-hz, hz));
+  mesh.position.copy(pos); scene.add(mesh);
+  const obj = { mesh, radius: r, pos, vel: randomDir().multiplyScalar(randRange(3, 6)), spin: randomDir().multiplyScalar(randRange(0.5, 2.0)), grabbed: false };
+  mesh.userData.obj = obj; objects.push(obj); return obj;
+}
+
+function clearObjects() {
+  for (const obj of objects) {
+    scene.remove(obj.mesh);
+    if (!obj.isGLB) { obj.mesh.geometry.dispose(); obj.mesh.material.dispose(); }
+  }
+  objects.length = 0; grabbed = null;
+}
+
+function setObjectCount(n) {
+  clearObjects();
+  if (modelTemplates.length) {
+    for (let i = 0; i < modelTemplates.length && i < n; i++) spawnModelObject(i);
+    for (let i = modelTemplates.length; i < n; i++) spawnModelObject();
+  } else {
+    for (let i = 0; i < n; i++) spawnObject();
+  }
+}
+
+function bounceAxis(obj, key, lo, hi) {
+  if (obj.pos[key] < lo)      { obj.pos[key] = lo; if (obj.vel[key] < 0) obj.vel[key] = -obj.vel[key] * RESTITUTION; }
+  else if (obj.pos[key] > hi) { obj.pos[key] = hi; if (obj.vel[key] > 0) obj.vel[key] = -obj.vel[key] * RESTITUTION; }
+}
+function clampInside(obj) {
+  const r = obj.radius;
+  obj.pos.x = Math.min(ROOM.x / 2 - r, Math.max(-ROOM.x / 2 + r, obj.pos.x));
+  obj.pos.y = Math.min(ROOM.y - r, Math.max(r, obj.pos.y));
+  obj.pos.z = Math.min(ROOM.z / 2 - r, Math.max(-ROOM.z / 2 + r, obj.pos.z));
+}
+
+function stepObjects(dt) {
+  for (const obj of objects) {
+    if (obj.grabbed) {
+      _v1.copy(frontAnchor).sub(obj.pos).multiplyScalar(GRAB_STIFFNESS);
+      _v1.addScaledVector(obj.vel, -GRAB_DAMPING);
+      obj.vel.addScaledVector(_v1, dt);
+      clampSpeed(obj.vel);
+      obj.pos.addScaledVector(obj.vel, dt);
+      clampInside(obj);
+    } else {
+      obj.pos.addScaledVector(obj.vel, dt);
+      const r = obj.radius;
+      bounceAxis(obj, 'x', -ROOM.x / 2 + r, ROOM.x / 2 - r);
+      bounceAxis(obj, 'y', r, ROOM.y - r);
+      bounceAxis(obj, 'z', -ROOM.z / 2 + r, ROOM.z / 2 - r);
+    }
+  }
+}
+
+function stepProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.pos.addScaledVector(p.vel, dt); p.ttl -= dt;
+    let dead = p.ttl <= 0 || Math.abs(p.pos.x) > ROOM.x / 2 || p.pos.y < 0 || p.pos.y > ROOM.y || Math.abs(p.pos.z) > ROOM.z / 2;
+    if (!dead) {
+      for (const obj of objects) {
+        const rr = p.radius + obj.radius;
+        if (p.pos.distanceToSquared(obj.pos) <= rr * rr) {
+          _hitDir.copy(obj.pos).sub(p.pos); if (_hitDir.lengthSq() < 1e-8) _hitDir.copy(p.vel); _hitDir.normalize();
+          obj.vel.addScaledVector(_hitDir, 18); clampSpeed(obj.vel); dead = true; break;
+        }
+      }
+    }
+    // NPC 命中：未発動ならラグドール発動、発動中なら追加の撃力（掴み中は自弾で当てない）
+    if (!dead && npc && !npc.grabbed && !npc.clothGrabbed) {
+      npcCenter(npc, _npcC);
+      const rr = p.radius + NPC_RADIUS;
+      if (p.pos.distanceToSquared(_npcC) <= rr * rr) {
+        _hitDir.copy(p.vel).normalize();
+        if (npc.ragdoll.active) applyRagdollImpulse(npc.ragdoll, _hitDir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'hips');
+        else hitNpc(npc, _hitDir);
+        dead = true;
+      }
+    }
+    if (dead) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); projectiles.splice(i, 1); }
+    else p.mesh.position.copy(p.pos);
+  }
+}
+
+function physicsStep(dt) {
+  stepObjects(dt);
+  stepProjectiles(dt);
+  for (const obj of objects) {
+    obj.mesh.rotation.x += obj.spin.x * dt; obj.mesh.rotation.y += obj.spin.y * dt; obj.mesh.rotation.z += obj.spin.z * dt;
+  }
+}
+function syncObjectMeshes() { for (const obj of objects) obj.mesh.position.copy(obj.pos); }
+
+// ============================================================
+// プレイヤー（Joy_reborn）＋ アニメ状態機械
+// ============================================================
+const FADE = 0.16;
+
+// 状態 → timeline ファイル（vrma 参照は timeline 内）/ loop
+const STATE_DEFS = {
+  idle:      { tl: 'Joy_reborn_Fly_idle',   loop: true  },
+  fwd:       { tl: 'Joy_reborn_Fly_f',      loop: true  },
+  frontDown: { tl: 'Joy_reborn_front_down', loop: true  },   // 前進＋降下
+  back:     { tl: 'Joy_reborn_Fly_back',   loop: true  },
+  left:     { tl: 'Joy_reborn_Fly_L',      loop: true  },
+  right:    { tl: 'Joy_reborn_Fly_R',      loop: true  },
+  grabMove: { tl: 'Joy_reborn_Fly_f2',     loop: true  },
+  grab:     { tl: 'Joy_reborn_capcher1',   loop: false },
+  shot:     { tl: 'Joy_reborn_cas1_L1',    loop: false },
+};
+
+function dataURIToBlob(uri) {
+  const [head, data] = uri.split(',');
+  const mime = (head.match(/:(.*?);/) || [])[1] || 'application/octet-stream';
+  const bin = atob(data); const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// ルートモーション除去：hips(=唯一の position トラック)の水平(X,Z)をフレーム0で固定。
+// 位置はゲーム側(player.pos)が制御するため、アニメ由来の平行移動をなくす（縦Yの上下動は残す）。
+function stripRootMotion(clip) {
+  for (const t of clip.tracks) {
+    if (!t.name.endsWith('.position')) continue;
+    const v = t.values;
+    const x0 = v[0], z0 = v[2];
+    for (let i = 0; i < v.length; i += 3) { v[i] = x0; v[i + 2] = z0; }
+  }
+}
+
+async function loadPlayer() {
+  const bundle = await (await fetch('../npc/' + PLAYER_NPC)).json();
+  // VRM
+  const loader = new GLTFLoader();
+  loader.register(p => new VRMLoaderPlugin(p, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }) }));
+  const gltf = await loader.loadAsync(URL.createObjectURL(dataURIToBlob(bundle.vrm)));
+  const vrm = gltf.userData.vrm;
+  vrm.scene.position.copy(player.pos);
+  vrm.scene.rotation.y = player.yaw + FACE_OFFSET;
+  scene.add(vrm.scene);
+  vrm.scene.updateMatrixWorld(true);
+  player.vrm = vrm;
+  player.mixer = new THREE.AnimationMixer(vrm.scene);
+
+  // マント（cloth）。floorY を無効化して空中でも落ちないように。初期 timeline は idle。
+  if (bundle.cloth) {
+    try {
+      player.cloth = createVRMCloth({ renderer, scene, vrm, cloth: bundle.cloth, basePos: player.pos, floorY: -1e9 });
+    } catch (e) { console.warn('マント生成失敗:', e); }
+  }
+
+  // 状態ごとの VRMA クリップ／アクションをロード
+  for (const [name, def] of Object.entries(STATE_DEFS)) {
+    try {
+      const tl = await (await fetch('../timeline/' + def.tl + '.timeline.json')).json();
+      const vrmaName = tl.vrma;
+      if (!vrmaName) { console.warn('timeline に vrma 参照がありません:', def.tl); continue; }
+      const vres = await fetch('../vrma/' + encodeURIComponent(vrmaName));
+      if (!vres.ok) { console.warn('VRMA 取得失敗:', vrmaName); continue; }
+      const al = new GLTFLoader();
+      al.register(p => new VRMAnimationLoaderPlugin(p));
+      const ag = await al.loadAsync(URL.createObjectURL(await vres.blob()));
+      const anims = ag.userData.vrmAnimations;
+      if (!anims?.length) { console.warn('VRMA にアニメがありません:', vrmaName); continue; }
+      const clip = createVRMAnimationClip(anims[0], vrm);
+      stripRootMotion(clip);   // アニメのルートモーション(平行移動)を除去
+      const action = player.mixer.clipAction(clip);
+      action.setLoop(def.loop ? THREE.LoopRepeat : THREE.LoopOnce, def.loop ? Infinity : 1);
+      action.clampWhenFinished = !def.loop;
+      player.states[name] = { action, timeline: tl, fps: tl.fps || 30, dur: clip.duration, loop: def.loop };
+    } catch (e) { console.warn('状態ロード失敗:', name, e); }
+  }
+
+  // 初期状態 = idle
+  const idle = player.states.idle;
+  if (idle) {
+    idle.action.play(); idle.action.setEffectiveWeight(1);
+    player.current = 'idle';
+    if (player.cloth) player.cloth.setTimeline(idle.timeline);
+  }
+  player.ready = true;
+}
+
+function setState(name) {
+  if (!player.states[name] || player.current === name) return;
+  const prev = player.current ? player.states[player.current].action : null;
+  const next = player.states[name];
+  next.action.reset();
+  next.action.setEffectiveTimeScale(1);
+  next.action.setEffectiveWeight(1);
+  next.action.enabled = true;
+  next.action.play();
+  if (prev && prev !== next.action) prev.crossFadeTo(next.action, FADE, false);
+  player.current = name;
+  if (player.cloth) player.cloth.setTimeline(next.timeline);
+}
+
+// 入力＋保持状況から望ましい状態を決定
+function desiredState() {
+  if (player.oneShot) return player.oneShot.name;
+  const moving = keysDown['KeyW'] || keysDown['ArrowUp'] || keysDown['KeyS'] || keysDown['ArrowDown']
+              || keysDown['KeyA'] || keysDown['ArrowLeft'] || keysDown['KeyD'] || keysDown['ArrowRight'];
+  if (isHolding()) return moving ? 'grabMove' : 'idle';
+  const fwd = keysDown['KeyW'] || keysDown['ArrowUp'];
+  if (fwd && player.fwdY < -DESCEND_SIN)          return 'frontDown';   // 前進＋降下
+  if (fwd)                                        return 'fwd';
+  if (keysDown['KeyS'] || keysDown['ArrowDown'])  return 'back';
+  if (keysDown['KeyA'] || keysDown['ArrowLeft'])  return 'left';
+  if (keysDown['KeyD'] || keysDown['ArrowRight']) return 'right';
+  return 'idle';
+}
+
+function triggerOneShot(name) {
+  const st = player.states[name];
+  if (!st) return;
+  player.oneShot = { name, until: (st.dur || 1) };
+  st.action.reset();
+  setState(name);
+}
+
+function updatePlayerAnim(dt) {
+  if (!player.ready) return;
+  // 一発再生の終了判定
+  if (player.oneShot) {
+    player.oneShot.until -= dt;
+    if (player.oneShot.until <= 0) player.oneShot = null;
+  }
+  setState(desiredState());
+  player.mixer.update(dt);
+  player.vrm.update(dt);
+  // マント：現在状態の timeline フレームで grip を更新
+  if (player.cloth) {
+    const st = player.states[player.current];
+    let frame = 0;
+    if (st) frame = Math.floor(player.states[player.current].action.time * st.fps);
+    player.cloth.update(dt, frame);
+  }
+}
+
+// ── NPC（1体。swing-catch の挙動：浮遊移動＋掴める/撃てる＋ラグドール復帰）──
+// プレイヤーと別キャラ。camera.position → player.pos に置換。ステート/セリフ/オーラは省略。
+const NPC_CHAR = (PLAYER_NPC === 'megu.npc.json') ? 'lily.npc.json' : 'megu.npc.json';
+
+async function loadNpc() {
+  let bundle;
+  try { bundle = await (await fetch('../npc/' + NPC_CHAR)).json(); } catch { return; }
+  if (!bundle?.vrm) return;
+  const loader = new GLTFLoader();
+  loader.register(p => new VRMLoaderPlugin(p, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }) }));
+  const gltf = await loader.loadAsync(URL.createObjectURL(dataURIToBlob(bundle.vrm)));
+  const vrm = gltf.userData.vrm;
+  const pos = new THREE.Vector3(3.5, ROOM.y * 0.5, -3);
+  vrm.scene.position.copy(pos);
+  scene.add(vrm.scene); vrm.scene.updateMatrixWorld(true);
+
+  let mixer = null, action = null;
+  try {
+    const vres = await fetch('../vrma/' + encodeURIComponent('idle.vrma'));
+    if (vres.ok) {
+      const al = new GLTFLoader();
+      al.register(p => new VRMAnimationLoaderPlugin(p));
+      const ag = await al.loadAsync(URL.createObjectURL(await vres.blob()));
+      const anims = ag.userData.vrmAnimations;
+      if (anims?.length) {
+        const clip = createVRMAnimationClip(anims[0], vrm);
+        stripRootMotion(clip);
+        mixer = new THREE.AnimationMixer(vrm.scene);
+        action = mixer.clipAction(clip);
+        action.setLoop(THREE.LoopRepeat, Infinity).play();
+        action.time = Math.random() * (clip.duration || 1);
+      }
+    }
+  } catch (e) { console.warn('NPC idle 読込失敗:', e); }
+
+  const ragdoll = createRagdoll(vrm, { gravity: -6, boundsMargin: 0.4 });
+
+  let cloth = null;
+  if (bundle.cloth) { try { cloth = createVRMCloth({ renderer, scene, vrm, cloth: bundle.cloth, basePos: pos, floorY: 0, timeline: bundle.timeline }); } catch (e) { console.warn('NPC マント失敗:', e); } }
+
+  npc = {
+    vrm, ragdoll, mixer, action, cloth, pos,
+    faceOff: NPC_FACE_OFFSET[NPC_CHAR] ?? 0,
+    tlFps: bundle.timeline?.fps ?? 30,
+    vel: randomDir().multiplyScalar(randRange(2, 4)),
+    grabbed: false, clothGrabbed: false, grabBone: 'chest', recoverTimer: 0,
+    idleMode: 'drift', idleTimer: randRange(3, 6), bobPhase: Math.random() * 10, dashTarget: new THREE.Vector3(),
+    headLookW: 0,
+  };
+}
+
+function grabbedNpc() { return (npc && (npc.grabbed || npc.clothGrabbed)) ? npc : null; }
+
+function npcCenter(m, out) {
+  const rd = m.ragdoll;
+  if (rd.active && rd.idxOf.hips != null) out.copy(rd.particles[rd.idxOf.hips].pos);
+  else { out.copy(m.pos); out.y += NPC_CENTER_Y; }
+  return out;
+}
+
+// 照準レイに最も近い NPC 関節（飛行中=ボーン位置 / ラグドール中=粒子位置）。{bone, along}|null
+function nearestNpcJoint(m) {
+  const rd = m.ragdoll;
+  const orig = raycaster.ray.origin, dir = raycaster.ray.direction;
+  let best = null, bestAlong = Infinity;
+  for (const p of rd.particles) {
+    if (rd.active) _grabV.copy(p.pos);
+    else { const node = m.vrm.humanoid?.getNormalizedBoneNode(p.bone); if (!node) continue; node.getWorldPosition(_grabV); }
+    _grabV.sub(orig);
+    const along = _grabV.dot(dir);
+    if (along < 0 || along > GRAB_RANGE) continue;
+    const perp2 = _grabV.lengthSq() - along * along;
+    if (perp2 < 0.25 && along < bestAlong) { bestAlong = along; best = p.bone; }
+  }
+  return best ? { bone: best, along: bestAlong } : null;
+}
+
+// 照準レイに最も近いマント頂点（CPU読み戻し必須）。{index, along}|null
+function nearestNpcCloth(m) {
+  if (!m.cloth || !m.cloth.cpuReady) return null;
+  const cp = m.cloth.cpuPositions;
+  const orig = raycaster.ray.origin, dir = raycaster.ray.direction;
+  let best = -1, bestAlong = Infinity;
+  for (let i = 0; i < m.cloth.vertexCount; i++) {
+    _grabV.set(cp[i*3], cp[i*3+1], cp[i*3+2]).sub(orig);
+    const along = _grabV.dot(dir);
+    if (along < 0 || along > GRAB_RANGE) continue;
+    const perp2 = _grabV.lengthSq() - along * along;
+    if (perp2 < 0.16 && along < bestAlong) { bestAlong = along; best = i; }
+  }
+  return best >= 0 ? { index: best, along: bestAlong } : null;
+}
+
+function grabNpcBody(m, bone) {
+  m.grabbed = true;
+  if (!m.ragdoll.active) setRagdollActive(m.ragdoll, true);
+  m.grabBone = bone || 'chest';
+  updateCrosshair();
+}
+function grabNpcCloth(m, idx) {
+  if (!m.cloth) return;
+  m.cloth.grab(idx, frontAnchor);
+  m.clothGrabbed = true;
+  if (!m.ragdoll.active) setRagdollActive(m.ragdoll, true);
+  updateCrosshair();
+}
+function releaseNpc(m) {
+  if (m.clothGrabbed) { m.cloth.releaseGrab(); m.clothGrabbed = false; }
+  m.grabbed = false;
+  m.recoverTimer = NPC_RECOVER_DELAY + LOOK_DURATION;
+  updateCrosshair();
+}
+function hitNpc(m, dir) {
+  if (m.ragdoll.active) return;
+  setRagdollActive(m.ragdoll, true);
+  applyRagdollImpulse(m.ragdoll, dir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'chest');
+  m.recoverTimer = NPC_RECOVER_DELAY + LOOK_DURATION;
+}
+function onNpcRecovered(m) {
+  m.vel.copy(randomDir()).multiplyScalar(randRange(2, 4));
+  m.idleMode = 'drift'; m.idleTimer = randRange(3, 6);
+}
+
+// 頭をプレイヤーへ向ける（weight 0-1）。mixer/ラグドール後・vrm.update 前に呼ぶ。
+function applyNpcHeadLook(m, weight) {
+  if (weight <= 0) return;
+  const head = m.vrm.humanoid?.getNormalizedBoneNode('head');
+  if (!head) return;
+  head.updateWorldMatrix(true, false);
+  head.getWorldPosition(_hPos);
+  _hDir.copy(player.pos).setY(player.pos.y + 1.2).sub(_hPos);
+  if (_hDir.lengthSq() < 1e-8) return;
+  _hDir.normalize();
+  head.getWorldQuaternion(_hqCur);
+  _hFwd.copy(HEAD_FWD).applyQuaternion(_hqCur).normalize();
+  const ang = _hFwd.angleTo(_hDir);
+  if (ang < 1e-4) return;
+  let w = weight;
+  if (ang > HEAD_MAX_ANGLE) w *= HEAD_MAX_ANGLE / ang;
+  _hqDelta.setFromUnitVectors(_hFwd, _hDir);
+  _hqDes.identity().slerp(_hqDelta, w).multiply(_hqCur);
+  if (head.parent) { head.parent.getWorldQuaternion(_hqPar); head.quaternion.copy(_hqPar.invert().multiply(_hqDes)); }
+  else head.quaternion.copy(_hqDes);
+}
+
+// idle 挙動：float(静止ふわふわ)/drift(緩い巡航)/dash(地点へ素早く)を3〜6秒で切替
+function updateNpcIdle(m, dt) {
+  m.idleTimer -= dt;
+  if (m.idleTimer <= 0) {
+    m.idleMode = ['float', 'drift', 'dash'][Math.floor(Math.random() * 3)];
+    m.idleTimer = randRange(3, 6);
+    if (m.idleMode === 'dash') {
+      m.dashTarget.set(randRange(-ROOM.x/2 + 1, ROOM.x/2 - 1), randRange(1.2, ROOM.y - 2), randRange(-ROOM.z/2 + 1, ROOM.z/2 - 1));
+    } else if (m.idleMode === 'drift') {
+      const d = randomDir(); d.y *= 0.4; m.vel.copy(d.normalize()).multiplyScalar(3);
+    }
+  }
+  const k = 1 - Math.exp(-dt / 0.6);
+  if (m.idleMode === 'float') {
+    m.vel.x += (0 - m.vel.x) * k; m.vel.z += (0 - m.vel.z) * k;
+    m.bobPhase += dt; m.vel.y = Math.sin(m.bobPhase * 1.6) * 0.35;
+  } else if (m.idleMode === 'dash') {
+    _force.copy(m.dashTarget).sub(m.pos);
+    const dist = _force.length();
+    if (dist < 0.6) { m.vel.multiplyScalar(1 - k); }
+    else { _force.multiplyScalar(7 / dist); m.vel.x += (_force.x - m.vel.x) * k; m.vel.y += (_force.y - m.vel.y) * k; m.vel.z += (_force.z - m.vel.z) * k; }
+  } else {
+    if (m.vel.lengthSq() < 1.0) { const d = randomDir(); d.y *= 0.4; m.vel.copy(d.normalize()).multiplyScalar(3); }
+  }
+}
+
+// 進行方向へ体を向ける（VRM 前方 +Z＋faceOff）。低速時は維持。
+function faceNpcMove(m, dt) {
+  const sp2 = m.vel.x * m.vel.x + m.vel.z * m.vel.z;
+  if (sp2 < 0.09) return;
+  const targetYaw = Math.atan2(m.vel.x, m.vel.z) + m.faceOff;
+  let diff = targetYaw - m.vrm.scene.rotation.y;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  m.vrm.scene.rotation.y += diff * (1 - Math.exp(-dt / 0.4));
+}
+
+function updateNpc(dt) {
+  if (!npc) return;
+  const m = npc, rd = m.ragdoll;
+  const held = m.grabbed || m.clothGrabbed;
+
+  if (rd.active) {
+    const env = { floorY: 0, bounds: ARENA_BOUNDS };
+    if (m.grabbed)          { env.pinBone = m.grabBone || 'chest'; env.pinPos = frontAnchor; }
+    else if (m.clothGrabbed) { env.tetherBone = 'chest'; env.tetherPos = frontAnchor; env.tetherStrength = 0.03; }
+    updateRagdoll(rd, dt, env);
+    if (!held) { m.recoverTimer -= dt; if (m.recoverTimer <= 0) setRagdollActive(rd, false); }
+  } else if (rd.recovering) {
+    if (m.mixer) m.mixer.update(dt);
+    updateRagdollRecovery(rd, dt);
+    if (!rd.recovering) onNpcRecovered(m);
+  } else {
+    if (m.mixer) m.mixer.update(dt);
+    updateNpcIdle(m, dt);
+    m.pos.addScaledVector(m.vel, dt);
+    bounceAxis(m, 'x', -ROOM.x/2 + NPC_RADIUS, ROOM.x/2 - NPC_RADIUS);
+    bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
+    bounceAxis(m, 'z', -ROOM.z/2 + NPC_RADIUS, ROOM.z/2 - NPC_RADIUS);
+    m.vrm.scene.position.copy(m.pos);
+    faceNpcMove(m, dt);
+  }
+
+  // 頭をプレイヤーへゆるく（飛行中のみ）
+  const targetHeadW = (held || rd.active) ? 0 : 0.55;
+  m.headLookW += (targetHeadW - m.headLookW) * (1 - Math.exp(-dt / HEAD_LOOK_TAU));
+  if (m.headLookW > 0.01) applyNpcHeadLook(m, m.headLookW);
+
+  m.vrm.update(dt);
+  if (m.cloth) {
+    if (m.clothGrabbed) m.cloth.moveGrab(frontAnchor);
+    let frame = null;
+    if (m.action && !rd.active) frame = Math.floor(m.action.time * m.tlFps);
+    m.cloth.update(dt, frame);
+    m.cloth.refresh();   // マント掴み用に CPU 位置を読み戻し（単体なので毎フレーム）
+  }
+}
+
+// ============================================================
+// 飛行移動
+// ============================================================
+function lerpAngle(a, b, t) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}
+
+function camForwardRight() {
+  const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
+  _fwd.set(cp * Math.sin(camYaw), sp, cp * Math.cos(camYaw)).normalize();
+  _right.set(-_fwd.z, 0, _fwd.x).normalize();   // 水平右（cross(forward, up)）
+}
+
+function updateFlight(dt) {
+  if (!player.ready) return;
+  camForwardRight();
+  player.fwdY = _fwd.y;   // 前進方向の上下（降下判定用）
+  _move.set(0, 0, 0);
+  const fwdPressed = keysDown['KeyW'] || keysDown['ArrowUp'];
+  if (fwdPressed)                                 _move.add(_fwd);
+  if (keysDown['KeyS'] || keysDown['ArrowDown'])  _move.sub(_fwd);
+  if (keysDown['KeyD'] || keysDown['ArrowRight']) _move.add(_right);
+  if (keysDown['KeyA'] || keysDown['ArrowLeft'])  _move.sub(_right);
+
+  if (_move.lengthSq() > 1e-6) {
+    _move.normalize();
+    player.vel.addScaledVector(_move, flight.accel * dt);
+  }
+  // 体の向きは「前進キー」を押したときだけカメラの水平正面へ向ける（カーソル移動だけ／横移動では向けない）
+  if (fwdPressed) {
+    const targetYaw = Math.atan2(_fwd.x, _fwd.z);
+    player.yaw = lerpAngle(player.yaw, targetYaw, Math.min(1, flight.turn * dt));
+  }
+  // 減衰 + 速度制限
+  player.vel.multiplyScalar(Math.exp(-flight.drag * dt));
+  clampSpeed(player.vel, flight.maxSpeed);
+
+  player.pos.addScaledVector(player.vel, dt);
+  // アリーナ内に収める（壁で停止）
+  const m = 0.6;
+  for (const [k, lo, hi] of [['x', -ROOM.x / 2 + m, ROOM.x / 2 - m], ['y', m, ROOM.y - m], ['z', -ROOM.z / 2 + m, ROOM.z / 2 - m]]) {
+    if (player.pos[k] < lo) { player.pos[k] = lo; if (player.vel[k] < 0) player.vel[k] = 0; }
+    else if (player.pos[k] > hi) { player.pos[k] = hi; if (player.vel[k] > 0) player.vel[k] = 0; }
+  }
+
+  player.vrm.scene.position.copy(player.pos);
+  player.vrm.scene.rotation.y = player.yaw + FACE_OFFSET;
+
+  // 前方アンカー（グラブ吸着点）
+  // 掴んだ物が大きいほど前方アンカーを離す（自キャラに埋まらないように）
+  const reach = GRAB_FRONT_DIST + (grabbed ? grabbed.radius : 0);
+  frontAnchor.set(Math.sin(player.yaw), 0, Math.cos(player.yaw)).multiplyScalar(reach);
+  frontAnchor.add(player.pos); frontAnchor.y += GRAB_FRONT_Y;
+}
+
+// ============================================================
+// TPS カメラ（球面 + スプリング追従）
+// ============================================================
+function updateCamera(dt) {
+  camForwardRight();
+  _desiredTarget.copy(player.pos); _desiredTarget.y += cam.height;
+  _desiredPos.copy(_desiredTarget).addScaledVector(_fwd, -cam.dist);
+  // 床より下に潜らない
+  if (_desiredPos.y < 0.4) _desiredPos.y = 0.4;
+  const k = 1 - Math.exp(-cam.follow * dt);
+  camPosCur.lerp(_desiredPos, k);
+  camTargetCur.lerp(_desiredTarget, k);
+  camera.position.copy(camPosCur);
+  camera.lookAt(camTargetCur);
+}
+
+// ============================================================
+// グラブ / ショット
+// ============================================================
+function resolveObj(o) { let n = o; while (n) { if (n.userData && n.userData.obj) return n.userData.obj; n = n.parent; } return null; }
+function isHolding() { return !!grabbed || !!grabbedNpc(); }
+function updateCrosshair() { const el = document.getElementById('crosshair'); if (el) el.classList.toggle('grabbing', isHolding()); }
+
+function tryGrab() {
+  if (grabbed || grabbedNpc()) return;
+  raycaster.setFromCamera(screenCenter, camera);
+  raycaster.far = GRAB_RANGE;
+  const hits = raycaster.intersectObjects(objects.map(o => o.mesh), true);
+  const obj = hits.length ? resolveObj(hits[0].object) : null;
+  let kind = obj ? 'obj' : null;
+  let dist = obj ? hits[0].distance : Infinity;
+  let clothIdx = -1, grabBone = null;
+  // NPC の本体（関節）/マントも判定し、最も手前を採用
+  if (npc) {
+    const jb = nearestNpcJoint(npc);
+    if (jb && jb.along < dist) { kind = 'body'; dist = jb.along; grabBone = jb.bone; }
+    const cl = nearestNpcCloth(npc);
+    if (cl && cl.along < dist) { kind = 'cloth'; dist = cl.along; clothIdx = cl.index; }
+  }
+  if (kind === 'cloth')      grabNpcCloth(npc, clothIdx);
+  else if (kind === 'body')  grabNpcBody(npc, grabBone);
+  else if (kind === 'obj' && obj) { obj.grabbed = true; grabbed = obj; updateCrosshair(); }
+  if (kind) triggerOneShot('grab');
+}
+function release() {
+  const m = grabbedNpc();
+  if (m) { releaseNpc(m); return; }
+  if (!grabbed) return;
+  grabbed.grabbed = false; clampSpeed(grabbed.vel); grabbed = null; updateCrosshair();
+}
+function shoot() {
+  camForwardRight();
+  if (grabbed) {
+    // 抱えた物をカメラ前方へ射出
+    grabbed.grabbed = false;
+    grabbed.vel.copy(_fwd).multiplyScalar(SHOT_SPEED);
+    grabbed = null; updateCrosshair();
+  } else {
+    // 何も持っていなければ小弾を発射
+    const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.18, 2), new THREE.MeshStandardMaterial({ color: 0xffe070, roughness: 0.3, metalness: 0.3, emissive: 0x554400 }));
+    const pos = frontAnchor.clone();
+    mesh.position.copy(pos); scene.add(mesh);
+    projectiles.push({ mesh, radius: 0.18, pos, vel: _fwd.clone().multiplyScalar(SHOT_SPEED), ttl: 3.0 });
+  }
+  triggerOneShot('shot');
+}
+
+// ============================================================
+// 入力（ポインタロック）
+// ============================================================
+function setupControls() {
+  const canvas = renderer.domElement;
+  canvas.addEventListener('click', () => { if (!isLocked) canvas.requestPointerLock(); });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  document.addEventListener('pointerlockchange', () => {
+    isLocked = document.pointerLockElement === canvas;
+    const overlay = document.getElementById('lock-overlay');
+    if (overlay) overlay.style.display = isLocked ? 'none' : 'flex';
+    const ui = document.getElementById('ui');
+    if (ui) ui.style.display = isLocked ? 'none' : 'flex';
+    if (!isLocked) release();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isLocked) return;
+    const s = MOUSE_SENS_BASE * cam.sens;
+    camYaw   -= e.movementX * s;
+    camPitch -= e.movementY * s;
+    camPitch  = Math.max(CAM_PITCH_MIN, Math.min(CAM_PITCH_MAX, camPitch));
+  });
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (!isLocked) return;
+    if (e.button === 0) tryGrab();
+    else if (e.button === 2) shoot();
+  });
+  window.addEventListener('mouseup', (e) => { if (e.button === 0) release(); });
+
+  document.addEventListener('keydown', (e) => { keysDown[e.code] = true; });
+  document.addEventListener('keyup',   (e) => { keysDown[e.code] = false; });
+  document.getElementById('ui')?.addEventListener('mousedown', () => { if (isLocked) document.exitPointerLock(); });
+}
+
+// ============================================================
+// カメラ調整 UI（localStorage 保存）
+// ============================================================
+function loadCamPrefs() {
+  try {
+    const j = JSON.parse(localStorage.getItem('tps-cam') || '{}');
+    for (const k of ['dist', 'height', 'follow', 'fov', 'sens']) if (Number.isFinite(j[k])) cam[k] = j[k];
+  } catch { /* noop */ }
+}
+function saveCamPrefs() {
+  try { localStorage.setItem('tps-cam', JSON.stringify({ dist: cam.dist, height: cam.height, follow: cam.follow, fov: cam.fov, sens: cam.sens })); } catch { /* noop */ }
+}
+
+function setupUI() {
+  const bind = (id, fmt, apply) => {
+    const sl = document.getElementById(id), vl = document.getElementById(id + '-val');
+    if (!sl) return;
+    const run = () => { const v = parseFloat(sl.value); if (vl) vl.textContent = fmt(v); apply(v); };
+    sl.addEventListener('input', run); run();
+  };
+  bind('cam-dist',   v => v.toFixed(1), v => { cam.dist = v; saveCamPrefs(); });
+  bind('cam-height', v => v.toFixed(2), v => { cam.height = v; saveCamPrefs(); });
+  bind('cam-follow', v => v.toFixed(1), v => { cam.follow = v; saveCamPrefs(); });
+  bind('cam-fov',    v => v.toFixed(0), v => { cam.fov = v; if (camera) { camera.fov = v; camera.updateProjectionMatrix(); } saveCamPrefs(); });
+  bind('cam-sens',   v => v.toFixed(1), v => { cam.sens = v; saveCamPrefs(); });
+  bind('fly-speed',  v => v.toFixed(0), v => { flight.maxSpeed = v; flight.accel = v * 3.5; });   // スライダー値＝最大m/s（永続化しない＝既定はNPC同等）
+  bind('obj-count',  v => v.toFixed(0), v => { setObjectCount(v | 0); });
+
+  // localStorage 値をスライダーへ反映
+  const set = (id, v) => { const sl = document.getElementById(id); if (sl) { sl.value = v; sl.dispatchEvent(new Event('input')); } };
+  set('cam-dist', cam.dist); set('cam-height', cam.height); set('cam-follow', cam.follow); set('cam-fov', cam.fov); set('cam-sens', cam.sens); set('fly-speed', flight.maxSpeed);
+
+  // キャラ選択（public/npc から。変更で ?npc= 付きリロード）
+  const npcSel = document.getElementById('npc-select');
+  if (npcSel) {
+    fetch('../npc/manifest.json').then(r => r.ok ? r.json() : []).then(files => {
+      for (const f of files) {
+        if (!f.endsWith('.npc.json')) continue;
+        const o = document.createElement('option');
+        o.value = f; o.textContent = f.replace(/\.npc\.json$/, '');
+        if (f === PLAYER_NPC) o.selected = true;
+        npcSel.appendChild(o);
+      }
+    }).catch(() => {});
+    npcSel.addEventListener('change', () => { location.search = '?npc=' + encodeURIComponent(npcSel.value); });
+  }
+}
+
+// ============================================================
+// レンダリング
+// ============================================================
+function updateFPS() {
+  fpsFrameCount++;
+  const now = performance.now(), el = now - fpsLastTime;
+  if (el >= 500) {
+    const fps = Math.round(fpsFrameCount / (el / 1000));
+    const c = document.getElementById('fps-counter'); if (c) c.textContent = `${fps} FPS`;
+    fpsFrameCount = 0; fpsLastTime = now;
+  }
+}
+
+function render() {
+  timer.update();
+  updateFPS();
+  const dt = Math.min(timer.getDelta(), 1 / 30);
+
+  if (isLocked) updateFlight(dt);
+  updatePlayerAnim(dt);
+  updateNpc(dt);
+  updateCamera(dt);
+
+  const tps = 1 / STEP_HZ; let steps = 0; timeSinceLastStep += dt;
+  while (timeSinceLastStep >= tps && steps < MAX_STEPS_FRAME) { physicsStep(tps); timeSinceLastStep -= tps; steps++; }
+  if (steps >= MAX_STEPS_FRAME) timeSinceLastStep = 0;
+  syncObjectMeshes();
+
+  renderer.render(scene, camera);
+}
+
+// ============================================================
+// 初期化
+// ============================================================
+async function init() {
+  const app = document.getElementById('app');
+  const loading = document.getElementById('loading');
+  if (!navigator.gpu) throw new Error('WebGPU 非対応のブラウザです');
+
+  renderer = new THREE.WebGPURenderer({ antialias: true, requiredLimits: { maxStorageBuffersInVertexStage: 1 } });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  app.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xbcd8ef);
+  scene.fog = new THREE.FogExp2(0xcfe3f5, 0.008);
+
+  loadCamPrefs();
+  camera = new THREE.PerspectiveCamera(cam.fov, window.innerWidth / window.innerHeight, 0.05, 600);
+
+  // 空（グラデーションのスカイドーム）
+  const skyMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, fog: false });
+  const skyT = positionWorld.normalize().y.mul(0.5).add(0.5).clamp(0, 1);
+  skyMat.colorNode = mix(color(0xeaf4fb), color(0x3f86d4), skyT);
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(90, 32, 16), skyMat);
+  sky.frustumCulled = false; scene.add(sky);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+  const keyLight = new THREE.DirectionalLight(0xfff6e6, 1.5);
+  keyLight.position.set(5, 12, 6); scene.add(keyLight);
+  try {
+    const hdr = await new UltraHDRLoader().loadAsync('https://threejs.org/examples/textures/equirectangular/royal_esplanade_2k.hdr.jpg');
+    hdr.mapping = THREE.EquirectangularReflectionMapping;
+    scene.environment = hdr;
+  } catch (e) { console.warn('HDR 環境マップ読み込み失敗:', e); }
+
+  buildArena();
+
+  // カメラ初期値
+  camPosCur.copy(player.pos).add(new THREE.Vector3(0, cam.height, -cam.dist));
+  camTargetCur.copy(player.pos);
+
+  // 浮遊オブジェクト
+  await loadSelectedModels();
+  setObjectCount(8);
+  loadStage().catch(e => console.warn('ステージ読み込み失敗:', e));
+
+  // プレイヤー
+  try { await loadPlayer(); }
+  catch (e) { console.error('プレイヤー読み込み失敗:', e); }
+
+  // NPC（1体）
+  loadNpc().catch(e => console.warn('NPC 読み込み失敗:', e));
+
+  setupUI();
+  setupControls();
+
+  const lockOverlay = document.getElementById('lock-overlay');
+  if (lockOverlay) lockOverlay.style.display = 'flex';
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  loading.classList.add('hidden');
+  setTimeout(() => { loading.style.display = 'none'; }, 500);
+  renderer.setAnimationLoop(render);
+}
+
+init().catch((err) => {
+  console.error(err);
+  const detail = document.getElementById('error-detail');
+  if (detail) detail.textContent = String(err);
+  document.getElementById('error-msg').classList.add('visible');
+});
