@@ -36,6 +36,7 @@ const GRIP_PALETTE = [0x44aaff, 0xff6644, 0x33ddbb, 0xffcc33, 0xcc66ff, 0x66ff88
 let gripGroups = [];          // [{id,name,bone,boneNode,offset,worldPos,markerMesh,active,color}]
 const gripMap = new Map();    // vertexIdx → groupId
 const groupById = (id) => gripGroups.find(g => g.id === id);
+let showColliders = true;     // コライダー可視化のトグル状態
 
 // ── ボーンアンカー（マントJSONから復元）─────────────────────────
 // vertexIdx → { boneName, boneNode, localOffset: THREE.Vector3 }
@@ -214,6 +215,8 @@ function buildCollidersFromVRM(vrm) {
     if (colliders.length >= MAX_COLLIDERS) break;
   }
   syncColliderDataArr();
+  // 表示トグルのあるセクションを出す（グリップが無くてもコライダー表示を操作できるように）
+  if (colliders.length) { const s = document.getElementById('hgp-section'); if (s) s.style.display = ''; }
 }
 
 function addCollider(x, y, z, r, boneNode = null, boneName = null, localOffset = null) {
@@ -225,6 +228,7 @@ function addCollider(x, y, z, r, boneNode = null, boneName = null, localOffset =
   mesh.position.set(x, y, z);
   mesh.scale.setScalar(r);
   mesh.renderOrder = 5;
+  mesh.visible = showColliders;
   scene.add(mesh);
   colliders.push({ x, y, z, r, boneNode, boneName, localOffset: localOffset ?? new THREE.Vector3(), helperMesh: mesh });
 }
@@ -1798,7 +1802,13 @@ function setupUI() {
   document.getElementById('btn-play').addEventListener('click', vrmaPlay);
   document.getElementById('btn-pause').addEventListener('click', vrmaPause);
   document.getElementById('cb-loop').addEventListener('change', e => vrmaSetLoop(e.target.checked));
-  document.getElementById('sel-speed').addEventListener('change', e => vrmaSetSpeed(parseFloat(e.target.value)));
+  const speedSlider = document.getElementById('sel-speed');
+  const speedVal    = document.getElementById('sel-speed-val');
+  speedSlider.addEventListener('input', e => {
+    const v = parseFloat(e.target.value);
+    if (speedVal) speedVal.textContent = `${v.toFixed(2).replace(/\.?0+$/, '')}×`;
+    vrmaSetSpeed(v);
+  });
 
   // ── トリム（再生範囲）──
   document.getElementById('btn-trim-in').addEventListener('click', () => {
@@ -1834,6 +1844,11 @@ function setupUI() {
   // ── グラブ点マーカー表示切替（オフセット編集は cloth-editor 側。ここは球ドラッグで微調整可）──
   document.getElementById('hgp-visible')?.addEventListener('change', e => {
     for (const g of gripGroups) if (g.markerMesh) g.markerMesh.visible = e.target.checked;
+  });
+  // ── コライダー（球）の表示切替 ──
+  document.getElementById('col-visible')?.addEventListener('change', e => {
+    showColliders = e.target.checked;
+    for (const c of colliders) if (c.helperMesh) c.helperMesh.visible = showColliders;
   });
   document.getElementById('btn-hgp-reset')?.addEventListener('click', () => {
     for (const g of gripGroups) g.offset.set(0, 0, 0);

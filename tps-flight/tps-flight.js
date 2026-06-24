@@ -65,6 +65,8 @@ const GRAB_STIFFNESS   = 60;
 const GRAB_DAMPING     = 6;
 const SHOT_SPEED       = 34;
 const MAX_OBJ_SPEED    = 40;
+const HOLD_TURN        = 18;     // グラブ中に体(=掴んだ物)をマウス方向へ向ける速さ（振り回し）
+const THROW_BOOST      = 1.6;    // 離したときの投擲ブースト（振り回した速度に乗算）
 
 // ── 物理ステップ ───────────────────────────────────────────────
 const STEP_HZ = 120, MAX_STEPS_FRAME = 5;
@@ -348,6 +350,7 @@ const STATE_DEFS = {
   grabMove: { tl: 'Joy_reborn_Fly_f2',     loop: true  },
   grab:     { tl: 'Joy_reborn_capcher1',   loop: false },
   shot:     { tl: 'Joy_reborn_cas1_L1',    loop: false },
+  throw:    { tl: 'Joy_reborn_throw',      loop: false },
 };
 
 function dataURIToBlob(uri) {
@@ -732,8 +735,13 @@ function updateFlight(dt) {
     _move.normalize();
     player.vel.addScaledVector(_move, flight.accel * dt);
   }
-  // 体の向きは「前進キー」を押したときだけカメラの水平正面へ向ける（カーソル移動だけ／横移動では向けない）
-  if (fwdPressed) {
+  // 体の向き
+  const holding = isHolding();
+  if (holding) {
+    // グラブ中：体(=掴んだ物)をマウス方向(カメラ水平正面=camYaw)へ素早く向ける＝振り回し
+    player.yaw = lerpAngle(player.yaw, camYaw, Math.min(1, HOLD_TURN * dt));
+  } else if (fwdPressed) {
+    // 前進キーを押したときだけカメラ正面へ（カーソル移動だけ／横移動では向けない）
     const targetYaw = Math.atan2(_fwd.x, _fwd.z);
     player.yaw = lerpAngle(player.yaw, targetYaw, Math.min(1, flight.turn * dt));
   }
@@ -752,11 +760,15 @@ function updateFlight(dt) {
   player.vrm.scene.position.copy(player.pos);
   player.vrm.scene.rotation.y = player.yaw + FACE_OFFSET;
 
-  // 前方アンカー（グラブ吸着点）
-  // 掴んだ物が大きいほど前方アンカーを離す（自キャラに埋まらないように）
+  // 前方アンカー（グラブ吸着点）。掴んだ物が大きいほど前へ離す（自キャラに埋まらないように）。
   const reach = GRAB_FRONT_DIST + (grabbed ? grabbed.radius : 0);
-  frontAnchor.set(Math.sin(player.yaw), 0, Math.cos(player.yaw)).multiplyScalar(reach);
-  frontAnchor.add(player.pos); frontAnchor.y += GRAB_FRONT_Y;
+  if (holding) {
+    // グラブ中はカメラの3D前方へ吸着＝マウスで上下左右に振り回せる（掴んだ物がスプリングで遅れて追従し勢いがつく）
+    frontAnchor.copy(_fwd).multiplyScalar(reach).add(player.pos);
+  } else {
+    frontAnchor.set(Math.sin(player.yaw), 0, Math.cos(player.yaw)).multiplyScalar(reach).add(player.pos);
+  }
+  frontAnchor.y += GRAB_FRONT_Y;
 }
 
 // ============================================================
@@ -805,9 +817,14 @@ function tryGrab() {
 }
 function release() {
   const m = grabbedNpc();
-  if (m) { releaseNpc(m); return; }
+  if (m) { releaseNpc(m); triggerOneShot('throw'); return; }   // NPC も振り回して放り投げ
   if (!grabbed) return;
-  grabbed.grabbed = false; clampSpeed(grabbed.vel); grabbed = null; updateCrosshair();
+  // 振り回した速度をブーストして投擲（swing-catch のぶん投げ）
+  grabbed.grabbed = false;
+  grabbed.vel.multiplyScalar(THROW_BOOST);
+  clampSpeed(grabbed.vel);
+  grabbed = null; updateCrosshair();
+  triggerOneShot('throw');
 }
 function shoot() {
   camForwardRight();

@@ -41,6 +41,21 @@ export default defineConfig({
       configureServer(server) {
         const pub = path.resolve(__dirname, 'public');
 
+        // VRMA 直接配信: ファイル名に '@' や空白を含む VRMA は vite/sirv が正しく解決できず
+        // SPA の index.html(HTML) を返してしまう（GLTFLoader が JSON.parse して "Unexpected token '<'"）。
+        // ここでデコードして public/vrma から直接ストリーミングし、確実に配信する。
+        server.middlewares.use((req, res, next) => {
+          const pathOnly = (req.url || '').split('?')[0];
+          const m = pathOnly.match(/\/vrma\/([^/]+\.vrma)$/i);
+          if (!m) return next();
+          let name = m[1];
+          try { name = decodeURIComponent(name); } catch { /* そのまま */ }
+          const file = path.join(pub, 'vrma', path.basename(name));
+          if (!fs.existsSync(file)) return next();
+          res.setHeader('Content-Type', 'model/gltf-binary');
+          fs.createReadStream(file).pipe(res);
+        });
+
         // 開発用 保存エンドポイント: エディタ出力を public/<dir>/ に書き込む（dir は npc / timeline のみ許可）
         server.middlewares.use((req, res, next) => {
           const url = (req.url || '').split('?')[0];

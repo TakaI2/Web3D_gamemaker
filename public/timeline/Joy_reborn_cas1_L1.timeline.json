@@ -1,9 +1,9 @@
 {
   "version": 2,
   "fps": 30,
-  "durationFrames": 27,
+  "durationFrames": 28,
   "trimIn": 0,
-  "trimOut": 27,
+  "trimOut": 28,
   "tracks": [
     {
       "kind": "grip",
@@ -32,6 +32,20 @@
         {
           "start": 4,
           "end": 9
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g10",
+      "keyframes": [
+        {
+          "frame": 0,
+          "offset": [
+            -0.16893459913360556,
+            -0.3932277077312912,
+            0.04614877545953819
+          ]
         }
       ]
     }

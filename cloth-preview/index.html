@@ -139,6 +139,9 @@
   </select>
   <button id="btn-tl-save" title="public/timeline に保存">TL保存</button>
   <div class="sep"></div>
+  <label style="font-size:12px;color:#cdd;display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer;"><input type="checkbox" id="hgp-visible" checked style="cursor:pointer;">グラブ点</label>
+  <label style="font-size:12px;color:#cdd;display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer;"><input type="checkbox" id="col-visible" checked style="cursor:pointer;">コライダー</label>
+  <div class="sep"></div>
   <a href="../fps-cloth-vrm/" style="padding:4px 9px;background:#442028;color:#ffaaaa;border:1px solid #663040;border-radius:4px;text-decoration:none;font-size:12px;white-space:nowrap;">FPS NPC ↗</a>
   <span class="fps" id="fps-toolbar">-- FPS</span>
 </div>
@@ -164,12 +167,10 @@
         <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:3px;">
           <input type="checkbox" id="cb-loop" checked> ループ
         </label>
-        <select id="sel-speed">
-          <option value="0.25">0.25×</option>
-          <option value="0.5">0.5×</option>
-          <option value="1" selected>1.0×</option>
-          <option value="2">2.0×</option>
-        </select>
+        <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#888;">速度
+          <input type="range" id="sel-speed" min="0.25" max="2" step="0.25" value="1" style="width:96px;accent-color:#5580cc;cursor:pointer;">
+          <span id="sel-speed-val" style="color:#bbb;min-width:34px;text-align:right;">1.0×</span>
+        </label>
       </div>
       <div class="row" style="margin-top:4px;">
         <label>フレーム</label>
@@ -212,10 +213,8 @@
     <div class="sec" id="hgp-section">
       <h3>グラブ点（グリップグループ）</h3>
       <div style="font-size:10px;color:#556;margin-bottom:5px;">色付き球＝各グループのグラブ点。球をドラッグで微調整（位置編集は主に cloth-editor）。タイムラインの各グループ行で有効化。</div>
+      <div style="font-size:10px;color:#667;margin-bottom:5px;">表示の ON/OFF は上部ツールバーの「グラブ点 / コライダー」チェックで切替。</div>
       <div class="row" style="margin-top:4px;">
-        <label style="min-width:0;">
-          <input type="checkbox" id="hgp-visible" checked style="margin-right:3px;">表示
-        </label>
         <button id="btn-hgp-reset" style="font-size:11px;">オフセットリセット</button>
       </div>
     </div>

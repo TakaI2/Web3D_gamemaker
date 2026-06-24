@@ -1,0 +1,44 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 92,
+  "trimIn": 0,
+  "trimOut": 92,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g7",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 97
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 97
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 11,
+          "end": 33
+        },
+        {
+          "start": 33,
+          "end": 39
+        }
+      ]
+    }
+  ],
+  "vrma": "attack01.vrma"
+}
