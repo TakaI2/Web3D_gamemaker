@@ -106,6 +106,23 @@ export const animEditorStore = {
     });
   },
 
+  setHipsPositionKeyframe(frame: number, pos: THREE.Vector3): void {
+    update((s) => {
+      const hipsPositionKeyframes: HipsPositionKeyframes = new Map(s.hipsPositionKeyframes);
+      hipsPositionKeyframes.set(frame, pos.clone());
+      return { ...s, hipsPositionKeyframes };
+    });
+  },
+
+  removeHipsPositionKeyframe(frame: number): void {
+    update((s) => {
+      const hipsPositionKeyframes: HipsPositionKeyframes = new Map(s.hipsPositionKeyframes);
+      if (!hipsPositionKeyframes.has(frame)) return s;
+      hipsPositionKeyframes.delete(frame);
+      return { ...s, hipsPositionKeyframes };
+    });
+  },
+
   setBlendShapeKeyframe(exprName: string, frame: number, value: number): void {
     update((s) => {
       const blendShapeKeyframes: BlendShapeKeyframes = new Map(s.blendShapeKeyframes);

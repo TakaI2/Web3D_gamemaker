@@ -84,6 +84,7 @@ const timeline = {
   currentFrame:  0,
   trimIn:        0,   // 再生区間 In（フレーム）。VRMA本体は不変、再生のみこの区間でループ
   trimOut:       90,  // 再生区間 Out（フレーム）
+  speed:         1,   // 再生速度（timeScale）。timeline.json に保存しゲーム側でも適用
   grip: {},     // groupId → [{start, end}]（グリップ有効範囲）
   gripPos: {},  // groupId → Map<frame, {x,y,z}>（グラブ点オフセットのキーフレーム）
   blendShape: new Map(),  // name → Map<frame, value>
@@ -195,6 +196,8 @@ const BONE_COLLIDER_DEFS = [
   { bone: 'rightUpperLeg', r: 0.09 },
   { bone: 'leftLowerLeg',  r: 0.07 },
   { bone: 'rightLowerLeg', r: 0.07 },
+  { bone: 'leftFoot',      r: 0.06 },
+  { bone: 'rightFoot',     r: 0.06 },
 ];
 
 function buildCollidersFromVRM(vrm) {
@@ -908,6 +911,7 @@ function vrmaSeek(frame) {
 }
 
 function vrmaSetSpeed(speed) {
+  timeline.speed = speed;
   if (vrmaAction) vrmaAction.timeScale = speed;
 }
 
@@ -1022,6 +1026,7 @@ function exportTimeline() {
     trimIn: timeline.trimIn, trimOut: timeline.trimOut,
     tracks,
   };
+  if (timeline.speed && timeline.speed !== 1) out.speed = timeline.speed;   // 再生速度（ゲーム側でも適用）
   if (currentVrmaName) out.vrma = currentVrmaName;   // 体モーション(VRMA)の参照。ゲームはこれで本体アニメを再生。
   return out;
 }
@@ -1036,6 +1041,14 @@ function importTimeline(json) {
   if (json.fps)            timeline.fps            = json.fps;
   if (json.durationFrames) timeline.durationFrames = json.durationFrames;
   if (json.vrma)           currentVrmaName         = json.vrma;   // 体モーション参照（再エクスポートで保持）
+  // 再生速度（あれば復元しスライダー/再生に反映）
+  if (Number.isFinite(json.speed) && json.speed > 0) {
+    timeline.speed = json.speed;
+    const sl = document.getElementById('sel-speed'), vl = document.getElementById('sel-speed-val');
+    if (sl) sl.value = String(json.speed);
+    if (vl) vl.textContent = `${json.speed.toFixed(2).replace(/\.?0+$/, '')}×`;
+    vrmaSetSpeed(json.speed);
+  }
   // トリム区間（無ければ全体）
   timeline.trimIn  = Number.isFinite(json.trimIn)  ? Math.max(0, Math.min(json.trimIn, timeline.durationFrames)) : 0;
   timeline.trimOut = Number.isFinite(json.trimOut) ? Math.max(timeline.trimIn + 1, Math.min(json.trimOut, timeline.durationFrames)) : timeline.durationFrames;

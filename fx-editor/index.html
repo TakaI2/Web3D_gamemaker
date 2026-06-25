@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>FX Editor — エフェクトタイムライン</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #1a1a2e; color: #ddd;
+      font-family: system-ui, sans-serif; font-size: 13px;
+    }
+    body { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      flex-shrink: 0; height: 44px;
+      background: #0e0e1e; border-bottom: 1px solid #2a2a44;
+      display: flex; align-items: center; gap: 6px; padding: 0 10px;
+    }
+    #toolbar .sep { width: 1px; height: 20px; background: #333; margin: 0 2px; }
+    #toolbar span.fps { font-size: 11px; color: #0f0; margin-left: auto; }
+
+    /* ── Main (viewport + panel) ── */
+    #main { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+
+    /* ── Viewport ── */
+    #app { flex: 0 0 70%; position: relative; overflow: hidden; }
+    #app canvas { display: block; }
+    #fps-counter {
+      position: absolute; top: 6px; left: 6px;
+      font-size: 11px; color: #0f0;
+      background: rgba(0,0,0,.6); padding: 2px 7px; border-radius: 3px;
+      pointer-events: none; z-index: 5;
+    }
+    #webgpu-warning {
+      display: none; position: absolute; top: 6px; left: 50%;
+      transform: translateX(-50%);
+      background: #604010; border: 1px solid #a06020; color: #ffc;
+      padding: 4px 14px; border-radius: 4px; font-size: 12px; z-index: 5;
+    }
+    #gizmo-hint {
+      position: absolute; bottom: 6px; left: 6px;
+      font-size: 11px; color: #9ab; background: rgba(0,0,0,.55);
+      padding: 3px 8px; border-radius: 3px; pointer-events: none; z-index: 5;
+    }
+
+    /* ── Right Panel ── */
+    #right-panel {
+      flex: 0 0 30%; background: #111325;
+      border-left: 1px solid #2a2a44;
+      overflow-y: auto; padding: 8px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .sec {
+      background: #0d0f22; border: 1px solid #252540;
+      border-radius: 6px; padding: 8px;
+    }
+    .sec h3 {
+      font-size: 10px; color: #556; text-transform: uppercase;
+      letter-spacing: .07em; margin-bottom: 7px;
+    }
+    .row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .row label { font-size: 11px; color: #888; min-width: 58px; }
+    .row input[type=range] { flex: 1; cursor: pointer; accent-color: #5580cc; }
+    .row .val { font-size: 11px; color: #bbb; min-width: 36px; text-align: right; }
+    .row-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-bottom: 4px; }
+
+    button {
+      padding: 4px 9px; background: #202040; color: #ccd;
+      border: 1px solid #3a3a60; border-radius: 4px;
+      cursor: pointer; font-size: 12px; white-space: nowrap;
+    }
+    button:hover { background: #2a2a58; }
+    button:disabled { opacity: 0.38; cursor: default; }
+    button.toggle-on { background: #2c4c7c; border-color: #4a6aa0; color: #dff; }
+    select {
+      background: #16162c; color: #ccc; border: 1px solid #3a3a60;
+      border-radius: 3px; padding: 3px 6px; font-size: 12px;
+    }
+    input[type=number] {
+      background: #16162c; color: #ccc; border: 1px solid #3a3a60;
+      border-radius: 3px; padding: 3px 5px; font-size: 12px; width: 60px;
+    }
+    input[type=checkbox] { cursor: pointer; accent-color: #5580cc; }
+
+    /* ── Effect list ── */
+    #fx-list { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow-y: auto; }
+    .fx-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 6px; border-radius: 4px; cursor: pointer;
+      background: #14162e; border: 1px solid #24264a;
+    }
+    .fx-item:hover { background: #1b1d3a; }
+    .fx-item.sel { background: #243a64; border-color: #4a6aa0; }
+    .fx-item .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .fx-item .nm { flex: 1; font-size: 11px; color: #cdd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fx-item .del { padding: 1px 6px; font-size: 11px; }
+    #fx-empty { font-size: 11px; color: #667; padding: 4px; }
+    #sel-editor { display: none; }
+
+    /* ── Timeline ── */
+    #timeline-resizer {
+      flex-shrink: 0; height: 6px; cursor: ns-resize;
+      background: #2a2a44; border-top: 1px solid #1a1a2e;
+      transition: background .12s;
+    }
+    #timeline-resizer:hover, #timeline-resizer.dragging { background: #4a6aa0; }
+    #timeline-section {
+      flex-shrink: 0; height: 220px;
+      background: #08081a; border-top: 1px solid #2a2a44;
+    }
+    #timeline { display: block; cursor: crosshair; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 232px; left: 50%; transform: translateX(-50%);
+      background: #282844; color: #eee; padding: 6px 16px; border-radius: 6px;
+      font-size: 13px; opacity: 0; transition: opacity .3s;
+      z-index: 200; pointer-events: none; white-space: nowrap;
+    }
+    #toast.visible { opacity: 1; }
+    #toast.error { background: #581818; color: #faa; }
+    #toast.warn  { background: #583800; color: #fca; }
+
+    /* ── Loading ── */
+    #loading {
+      position: fixed; inset: 0; background: #1a1a2e;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; color: #99a; z-index: 300; transition: opacity .4s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #bone-row { display: none; }
+  </style>
+</head>
+<body>
+
+<!-- ── Toolbar ── -->
+<div id="toolbar">
+  <select id="npc-select" title="public/npc から選択" style="background:#1f3050;color:#bdf;border:1px solid #3a5a8a;border-radius:4px;padding:3px 6px;font-size:12px;max-width:170px;">
+    <option value="">-- NPC選択 (npc) --</option>
+  </select>
+  <button id="btn-vrm-load">VRM読込</button>
+  <input type="file" id="vrm-file" accept=".vrm" style="display:none">
+  <div class="sep"></div>
+  <select id="vrma-select" disabled style="background:#1a1a2e;color:#ccc;border:1px solid #445;border-radius:4px;padding:3px 6px;font-size:12px;max-width:160px;">
+    <option value="">-- VRMA選択 --</option>
+  </select>
+  <button id="btn-vrma-load" disabled>VRMA(ファイル)</button>
+  <input type="file" id="vrma-file" accept=".vrma" style="display:none">
+  <div class="sep"></div>
+  <select id="tl-select" title="public/timeline から選択" style="background:#16162c;color:#ccc;border:1px solid #3a3a60;border-radius:4px;padding:3px 6px;font-size:12px;max-width:160px;">
+    <option value="">-- TL読込 (timeline) --</option>
+  </select>
+  <button id="btn-tl-save" title="public/timeline に保存">TL保存</button>
+  <div class="sep"></div>
+  <a href="../cloth-preview/" style="padding:4px 9px;background:#203028;color:#aaffcc;border:1px solid #305040;border-radius:4px;text-decoration:none;font-size:12px;white-space:nowrap;">布Preview ↗</a>
+  <span class="fps" id="fps-toolbar">-- FPS</span>
+</div>
+
+<!-- ── Main ── -->
+<div id="main">
+
+  <!-- 3-D Viewport -->
+  <div id="app">
+    <div id="fps-counter">-- FPS</div>
+    <div id="webgpu-warning">⚠ WebGPU非対応</div>
+    <div id="gizmo-hint">選択エフェクト: ギズモで発生位置を移動/回転（G=移動 R=回転）</div>
+  </div>
+
+  <!-- Right Panel -->
+  <div id="right-panel">
+
+    <!-- Playback controls -->
+    <div class="sec">
+      <h3>再生コントロール</h3>
+      <div class="row-wrap">
+        <button id="btn-play" disabled>▶ 再生</button>
+        <button id="btn-pause" disabled>⏸ 停止</button>
+        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:3px;">
+          <input type="checkbox" id="cb-loop" checked> ループ
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#888;">速度
+          <input type="range" id="sel-speed" min="0.25" max="2" step="0.25" value="1" style="width:90px;accent-color:#5580cc;cursor:pointer;">
+          <span id="sel-speed-val" style="color:#bbb;min-width:34px;text-align:right;">1.0×</span>
+        </label>
+      </div>
+      <div class="row" style="margin-top:4px;">
+        <label>フレーム</label>
+        <span id="lbl-frame" style="color:#ccc;font-size:12px;font-variant-numeric:tabular-nums;">0</span>
+        <span style="color:#555;font-size:11px;">/</span>
+        <span id="lbl-duration" style="color:#666;font-size:12px;">0</span>
+      </div>
+      <div class="row" style="margin-top:4px;">
+        <label>トリム</label>
+        <span id="lbl-trim" style="color:#33cc88;font-size:12px;font-variant-numeric:tabular-nums;">0 – 0</span>
+      </div>
+      <div class="row-wrap">
+        <button id="btn-trim-in" title="現在フレームを In に設定">⟦ In=現在</button>
+        <button id="btn-trim-out" title="現在フレームを Out に設定">Out=現在 ⟧</button>
+        <button id="btn-trim-reset" title="トリムを全体に戻す">全体</button>
+      </div>
+    </div>
+
+    <!-- Cloth (mantle) -->
+    <div class="sec">
+      <h3>マント（布）</h3>
+      <div style="font-size:10px;color:#667;margin-bottom:6px;">NPC(.npc.json)に布データがあれば自動で着せ、timelineのグリップで動かします。</div>
+      <div class="row">
+        <label>Wind</label>
+        <input type="range" id="cloth-wind" min="0" max="5" step="0.1" value="1">
+        <span class="val" id="cloth-wind-val">1.0</span>
+      </div>
+      <div class="row">
+        <label>Stiffness</label>
+        <input type="range" id="cloth-stiffness" min="0.01" max="0.8" step="0.01" value="0.2">
+        <span class="val" id="cloth-stiffness-val">0.20</span>
+      </div>
+    </div>
+
+    <!-- Add effect -->
+    <div class="sec">
+      <h3>エフェクト追加</h3>
+      <div class="row">
+        <label>プリセット</label>
+        <select id="add-preset" style="flex:1">
+          <option value="fire">🔥 fire（炎）</option>
+          <option value="smoke">💨 smoke（煙）</option>
+          <option value="spark">✨ spark（火花）</option>
+          <option value="frost">❄ frost（冷気）</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>発生</label>
+        <select id="add-mode" style="flex:1">
+          <option value="burst">単発（1フレーム）</option>
+          <option value="range">期間（開始〜終了）</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>基準</label>
+        <select id="add-anchor" style="flex:1">
+          <option value="world">ワールド固定</option>
+          <option value="bone">ボーン追従</option>
+        </select>
+      </div>
+      <div class="row" id="bone-row">
+        <label>ボーン</label>
+        <select id="add-bone" style="flex:1"></select>
+      </div>
+      <div class="row-wrap" style="margin-top:4px;">
+        <button id="btn-add-fx">＋ 現在フレームに追加</button>
+        <button id="btn-test-fire" title="選択エフェクトを今すぐ発生" disabled>テスト発生</button>
+      </div>
+    </div>
+
+    <!-- Effect list + selected editor -->
+    <div class="sec">
+      <h3>エフェクト一覧</h3>
+      <div id="fx-list"><div id="fx-empty">エフェクトはまだありません</div></div>
+
+      <div id="sel-editor" style="margin-top:8px;border-top:1px solid #24264a;padding-top:8px;">
+        <div class="row">
+          <label>ギズモ</label>
+          <button id="btn-gz-move" class="toggle-on">移動</button>
+          <button id="btn-gz-rot">回転</button>
+        </div>
+        <div class="row">
+          <label>プリセット</label>
+          <select id="sel-preset" style="flex:1">
+            <option value="fire">fire</option><option value="smoke">smoke</option>
+            <option value="spark">spark</option><option value="frost">frost</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>基準</label>
+          <select id="sel-anchor" style="flex:1">
+            <option value="world">ワールド固定</option>
+            <option value="bone">ボーン追従</option>
+          </select>
+        </div>
+        <div class="row" id="sel-bone-row">
+          <label>ボーン</label>
+          <select id="sel-bone" style="flex:1"></select>
+        </div>
+        <div class="row" id="sel-frame-row">
+          <label>フレーム</label>
+          <input type="number" id="sel-frame" min="0" step="1" value="0">
+          <button id="btn-frame-here" title="現在フレームに合わせる">現在へ</button>
+        </div>
+        <div class="row" id="sel-range-row" style="display:none;">
+          <label>区間</label>
+          <input type="number" id="sel-start" min="0" step="1" value="0">
+          <span style="color:#666;">〜</span>
+          <input type="number" id="sel-end" min="0" step="1" value="0">
+        </div>
+        <div class="row" id="sel-count-row">
+          <label>粒数</label>
+          <input type="number" id="sel-count" min="1" step="1" value="24">
+          <span style="color:#667;font-size:10px;">単発時の発生数</span>
+        </div>
+        <div class="row" style="margin-top:6px;">
+          <button id="btn-del-fx" style="background:#3a1f28;border-color:#5a3040;color:#fbb;">このエフェクトを削除</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /right-panel -->
+</div><!-- /main -->
+
+<!-- ── Timeline ── -->
+<div id="timeline-resizer" title="ドラッグでタイムラインの高さを変更"></div>
+<div id="timeline-section">
+  <canvas id="timeline"></canvas>
+</div>
+
+<div id="toast"></div>
+<div id="loading">読み込み中…</div>
+
+<script type="module" src="./fx-editor.js"></script>
+</body>
+</html>

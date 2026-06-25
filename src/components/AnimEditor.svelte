@@ -100,6 +100,38 @@
       activeIKTarget = target;
       if (target === null) ikGizmoMode = 'translate';
     };
+    scene.onHipsMoved = (pos) => {
+      animEditorStore.setHipsPositionKeyframe($animEditorStore.currentFrame, pos);
+    };
+  }
+
+  // ルート(腰)移動 / 背骨IK のトグル（互いに排他）
+  let rootMove = false;
+  let spineIK = false;
+  function toggleRootMove(): void {
+    rootMove = !rootMove;
+    if (rootMove) spineIK = false;
+    editorScene?.setRootEnabled(rootMove);
+  }
+  function toggleSpineIK(): void {
+    spineIK = !spineIK;
+    if (spineIK) rootMove = false;
+    editorScene?.setSpineEnabled(spineIK);
+  }
+
+  // LookAt（顔/視線）と 手グラブ（指の開閉）
+  let lookAt = false;
+  let leftGrab = 0;
+  let rightGrab = 0;
+  function toggleLookAt(): void {
+    lookAt = !lookAt;
+    if (lookAt) { rootMove = false; spineIK = false; }
+    editorScene?.setLookAtEnabled(lookAt);
+  }
+  function onGrab(side: 'left' | 'right', e: Event): void {
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (side === 'left') leftGrab = v; else rightGrab = v;
+    editorScene?.setHandGrab(side, v);
   }
 
   function toggleIK(target: IKTarget): void {
@@ -241,6 +273,36 @@
               </div>
             </div>
           {/if}
+
+          <!-- ルート移動 / 背骨IK / LookAt -->
+          <div class="ik-gizmo-mode">
+            <span class="section-label">ルート / 背骨 / 視線</span>
+            <label class="ik-toggle">
+              <input type="checkbox" checked={rootMove} on:change={toggleRootMove} />
+              ルート(腰)移動
+            </label>
+            <label class="ik-toggle">
+              <input type="checkbox" checked={spineIK} on:change={toggleSpineIK} />
+              背骨IK(頭を引く)
+            </label>
+            <label class="ik-toggle">
+              <input type="checkbox" checked={lookAt} on:change={toggleLookAt} />
+              LookAt(顔/視線)
+            </label>
+          </div>
+
+          <!-- 手グラブ（指の開閉） -->
+          <div class="ik-gizmo-mode">
+            <span class="section-label">手グラブ（0=開 1=握）</span>
+            <div class="grab-row">
+              <span>左</span>
+              <input type="range" min="0" max="1" step="0.05" value={leftGrab} on:input={(e) => onGrab('left', e)} />
+            </div>
+            <div class="grab-row">
+              <span>右</span>
+              <input type="range" min="0" max="1" step="0.05" value={rightGrab} on:input={(e) => onGrab('right', e)} />
+            </div>
+          </div>
         </div>
 
         <!-- フェイシャル -->
@@ -392,6 +454,16 @@
     display: block;
     margin-bottom: 4px;
   }
+  .grab-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #bbb;
+    margin-bottom: 3px;
+  }
+  .grab-row span { width: 16px; }
+  .grab-row input[type="range"] { flex: 1; accent-color: #4af; }
   .mode-btns {
     display: flex;
     gap: 4px;

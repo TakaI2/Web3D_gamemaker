@@ -53,6 +53,8 @@ export default defineConfig({
           const file = path.join(pub, 'vrma', path.basename(name));
           if (!fs.existsSync(file)) return next();
           res.setHeader('Content-Type', 'model/gltf-binary');
+          // 開発中はキャッシュさせない（VRMA を編集・差し替えたら即反映されるように）
+          res.setHeader('Cache-Control', 'no-store, max-age=0');
           fs.createReadStream(file).pipe(res);
         });
 

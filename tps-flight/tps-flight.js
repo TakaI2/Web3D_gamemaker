@@ -67,6 +67,10 @@ const SHOT_SPEED       = 34;
 const MAX_OBJ_SPEED    = 40;
 const HOLD_TURN        = 18;     // グラブ中に体(=掴んだ物)をマウス方向へ向ける速さ（振り回し）
 const THROW_BOOST      = 1.6;    // 離したときの投擲ブースト（振り回した速度に乗算）
+const MAX_CHARGE_TIME  = 1.5;    // ラージショット最大チャージ秒
+const LARGE_MIN_LEVEL  = 0.25;   // 最小チャージ量（軽く押しただけでも出る）
+const TAP_THRESHOLD    = 0.18;   // これ未満で離したら通常ショット（cas1_L1）。超えたらチャージ→ラージ。
+const AFK_DELAY        = 3;       // 無操作がこの秒数続いたら放置モーション（drain0→drain1ループ）
 
 // ── 物理ステップ ───────────────────────────────────────────────
 const STEP_HZ = 120, MAX_STEPS_FRAME = 5;
@@ -93,6 +97,11 @@ const player = {
   yaw: Math.PI,            // 体の向き（faceDir = (sin,0,cos)）
   fwdY: 0,                 // カメラ前方ベクトルのY成分（降下判定用。下向き=負）
   oneShot: null,           // { name, until } 一発再生（grab/shot）
+  charging: false,         // RMB長押しでラージショットをチャージ中
+  chargeT: 0,              // チャージ経過秒
+  wrapping: false,         // 左クリック長押し中（掴む対象なし）。wrap を再生→最後で保持
+  afk: null,               // 放置モーション状態（null / 'drain0' / 'drain1'）
+  idleT: 0,                // 無操作の経過秒
   ready: false,
 };
 const DESCEND_SIN = 0.3;   // 前進方向がこれ以上下を向いていたら「降下」とみなす（約17°）
@@ -305,7 +314,8 @@ function stepProjectiles(dt) {
         const rr = p.radius + obj.radius;
         if (p.pos.distanceToSquared(obj.pos) <= rr * rr) {
           _hitDir.copy(obj.pos).sub(p.pos); if (_hitDir.lengthSq() < 1e-8) _hitDir.copy(p.vel); _hitDir.normalize();
-          obj.vel.addScaledVector(_hitDir, 18); clampSpeed(obj.vel); dead = true; break;
+          obj.vel.addScaledVector(_hitDir, p.power ?? 18); clampSpeed(obj.vel);
+          if (!p.big) { dead = true; break; }   // ラージショットは貫通（複数を吹き飛ばす）
         }
       }
     }
@@ -315,8 +325,9 @@ function stepProjectiles(dt) {
       const rr = p.radius + NPC_RADIUS;
       if (p.pos.distanceToSquared(_npcC) <= rr * rr) {
         _hitDir.copy(p.vel).normalize();
-        if (npc.ragdoll.active) applyRagdollImpulse(npc.ragdoll, _hitDir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'hips');
-        else hitNpc(npc, _hitDir);
+        const imp = RAGDOLL_IMPULSE * (p.big ? 2.2 : 1);
+        if (npc.ragdoll.active) applyRagdollImpulse(npc.ragdoll, _hitDir.clone().multiplyScalar(imp), 'hips');
+        else hitNpc(npc, _hitDir, imp);
         dead = true;
       }
     }
@@ -349,8 +360,13 @@ const STATE_DEFS = {
   right:    { tl: 'Joy_reborn_Fly_R',      loop: true  },
   grabMove: { tl: 'Joy_reborn_Fly_f2',     loop: true  },
   grab:     { tl: 'Joy_reborn_capcher1',   loop: false },
+  wrap:     { tl: 'Joy_reborn_wrap',       loop: false },   // 左クリックで掴む対象が無いとき。最後で停止保持
   shot:     { tl: 'Joy_reborn_cas1_L1',    loop: false },
   throw:    { tl: 'Joy_reborn_throw',      loop: false },
+  largeLoad: { tl: 'Joy_reborn_large_shot_load', loop: true  },   // RMB長押し＝チャージ
+  large:     { tl: 'Joy_reborn_large_shot',      loop: false },   // RMB解放＝ラージショット
+  drain0:    { tl: 'Joy_reborn_drain_0',         loop: false },   // 放置3秒で一度だけ再生
+  drain1:    { tl: 'Joy_reborn_drain_1',         loop: true  },   // その後ループ（入力まで）
 };
 
 function dataURIToBlob(uri) {
@@ -411,7 +427,13 @@ async function loadPlayer() {
       const action = player.mixer.clipAction(clip);
       action.setLoop(def.loop ? THREE.LoopRepeat : THREE.LoopOnce, def.loop ? Infinity : 1);
       action.clampWhenFinished = !def.loop;
-      player.states[name] = { action, timeline: tl, fps: tl.fps || 30, dur: clip.duration, loop: def.loop };
+      // トリム（再生区間）。timeline の trimIn/trimOut を反映。未設定なら全体。
+      const fps = tl.fps || 30;
+      const total = Math.max(1, Math.round(clip.duration * fps));
+      const tin  = Number.isFinite(tl.trimIn)  ? Math.max(0, Math.min(tl.trimIn, total - 1)) : 0;
+      const tout = Number.isFinite(tl.trimOut) ? Math.max(tin + 1, Math.min(tl.trimOut, total)) : total;
+      const speed = (Number.isFinite(tl.speed) && tl.speed > 0) ? tl.speed : 1;   // 再生速度（cloth-preview で保存）
+      player.states[name] = { action, timeline: tl, fps, dur: clip.duration, loop: def.loop, trimIn: tin, trimOut: tout, total, speed };
     } catch (e) { console.warn('状態ロード失敗:', name, e); }
   }
 
@@ -430,9 +452,10 @@ function setState(name) {
   const prev = player.current ? player.states[player.current].action : null;
   const next = player.states[name];
   next.action.reset();
-  next.action.setEffectiveTimeScale(1);
+  next.action.setEffectiveTimeScale(next.speed || 1);   // 再生速度（timeline.json の speed）
   next.action.setEffectiveWeight(1);
   next.action.enabled = true;
+  if (next.trimIn > 0) next.action.time = next.trimIn / next.fps;   // トリム開始から再生
   next.action.play();
   if (prev && prev !== next.action) prev.crossFadeTo(next.action, FADE, false);
   player.current = name;
@@ -444,6 +467,8 @@ function desiredState() {
   if (player.oneShot) return player.oneShot.name;
   const moving = keysDown['KeyW'] || keysDown['ArrowUp'] || keysDown['KeyS'] || keysDown['ArrowDown']
               || keysDown['KeyA'] || keysDown['ArrowLeft'] || keysDown['KeyD'] || keysDown['ArrowRight'];
+  if (player.wrapping && !moving && player.states.wrap) return 'wrap';   // 左クリック保持中＆非移動時のみ（移動中は移動モーション）
+  if (player.charging && player.chargeT >= TAP_THRESHOLD) return 'largeLoad';   // 閾値超過の長押しだけ溜めモーション
   if (isHolding()) return moving ? 'grabMove' : 'idle';
   const fwd = keysDown['KeyW'] || keysDown['ArrowUp'];
   if (fwd && player.fwdY < -DESCEND_SIN)          return 'frontDown';   // 前進＋降下
@@ -451,28 +476,75 @@ function desiredState() {
   if (keysDown['KeyS'] || keysDown['ArrowDown'])  return 'back';
   if (keysDown['KeyA'] || keysDown['ArrowLeft'])  return 'left';
   if (keysDown['KeyD'] || keysDown['ArrowRight']) return 'right';
+  if (player.afk === 'drain0' && player.states.drain0) return 'drain0';   // 放置3秒→一度だけ
+  if (player.afk === 'drain1' && player.states.drain1) return 'drain1';   // 続けてループ
   return 'idle';
 }
 
 function triggerOneShot(name) {
   const st = player.states[name];
   if (!st) return;
-  player.oneShot = { name, until: (st.dur || 1) };
+  // 一発再生の継続時間 = トリム区間長(秒) ÷ 速度（速いほど短く終わる）
+  const playDur = (st.trimOut - st.trimIn) / st.fps;
+  player.oneShot = { name, until: Math.max(0.05, playDur / (st.speed || 1)) };
   st.action.reset();
+  if (st.trimIn > 0) st.action.time = st.trimIn / st.fps;   // 同状態再トリガ時もトリム開始から
+  st.action.setEffectiveTimeScale(st.speed || 1);
   setState(name);
+}
+
+// 操作があったら放置タイマー/モーションを解除（カーソル移動・キー・クリック）
+function resetIdle() {
+  player.idleT = 0;
+  player.afk = null;
+}
+
+// 放置(AFK)検出：無操作が AFK_DELAY 秒続いたら drain0 を一度→drain1 ループ。
+function updateAfk(dt) {
+  const moving = keysDown['KeyW'] || keysDown['ArrowUp'] || keysDown['KeyS'] || keysDown['ArrowDown']
+              || keysDown['KeyA'] || keysDown['ArrowLeft'] || keysDown['KeyD'] || keysDown['ArrowRight'];
+  if (!isLocked || moving || player.oneShot || player.charging || player.wrapping || isHolding()) { resetIdle(); return; }
+  player.idleT += dt;
+  if (!player.afk && player.idleT >= AFK_DELAY && player.states.drain0) player.afk = 'drain0';
+  // drain0 を最後まで再生し終えたら drain1 ループへ
+  if (player.afk === 'drain0' && player.current === 'drain0') {
+    const st = player.states.drain0;
+    if (st && st.action.time >= st.dur - 1e-3) player.afk = 'drain1';
+  }
+}
+
+// 現在状態の再生時刻をトリム区間に収める。未トリム状態は何もしない。
+// ループ=区間内で折返し / 単発=末尾(trimOut)で保持。フルクリップのまま時刻だけ制御するので
+// cloth に渡すフレーム番号は元の timeline と一致し、grip 範囲/gripPos と整合する。
+function applyTrim() {
+  const st = player.states[player.current];
+  if (!st || (st.trimIn <= 0 && st.trimOut >= st.total)) return;
+  const inT = st.trimIn / st.fps, outT = st.trimOut / st.fps;
+  const a = st.action;
+  let changed = false;
+  if (a.time >= outT) {
+    if (st.loop) { const span = Math.max(1e-3, outT - inT); a.time = inT + ((a.time - inT) % span); }
+    else a.time = outT;   // 単発は末尾で保持
+    changed = true;
+  } else if (a.time < inT - 1e-4) { a.time = inT; changed = true; }
+  if (changed) player.mixer.update(0);   // クランプ後の時刻で再サンプル
 }
 
 function updatePlayerAnim(dt) {
   if (!player.ready) return;
+  updateAfk(dt);
   // 一発再生の終了判定
   if (player.oneShot) {
     player.oneShot.until -= dt;
     if (player.oneShot.until <= 0) player.oneShot = null;
   }
+  // チャージ蓄積（上限まで）
+  if (player.charging) player.chargeT = Math.min(MAX_CHARGE_TIME, player.chargeT + dt);
   setState(desiredState());
   player.mixer.update(dt);
+  applyTrim();   // トリム区間 [trimIn,trimOut] に再生時刻をクランプ（ループ=折返し / 単発=末尾保持）
   player.vrm.update(dt);
-  // マント：現在状態の timeline フレームで grip を更新
+  // マント：現在状態の timeline フレームで grip を更新（フレームは元のtimeline番号＝gripと整合）
   if (player.cloth) {
     const st = player.states[player.current];
     let frame = 0;
@@ -593,10 +665,10 @@ function releaseNpc(m) {
   m.recoverTimer = NPC_RECOVER_DELAY + LOOK_DURATION;
   updateCrosshair();
 }
-function hitNpc(m, dir) {
+function hitNpc(m, dir, impulse = RAGDOLL_IMPULSE) {
   if (m.ragdoll.active) return;
   setRagdollActive(m.ragdoll, true);
-  applyRagdollImpulse(m.ragdoll, dir.clone().multiplyScalar(RAGDOLL_IMPULSE), 'chest');
+  applyRagdollImpulse(m.ragdoll, dir.clone().multiplyScalar(impulse), 'chest');
   m.recoverTimer = NPC_RECOVER_DELAY + LOOK_DURATION;
 }
 function onNpcRecovered(m) {
@@ -795,7 +867,7 @@ function isHolding() { return !!grabbed || !!grabbedNpc(); }
 function updateCrosshair() { const el = document.getElementById('crosshair'); if (el) el.classList.toggle('grabbing', isHolding()); }
 
 function tryGrab() {
-  if (grabbed || grabbedNpc()) return;
+  if (grabbed || grabbedNpc()) return true;
   raycaster.setFromCamera(screenCenter, camera);
   raycaster.far = GRAB_RANGE;
   const hits = raycaster.intersectObjects(objects.map(o => o.mesh), true);
@@ -814,7 +886,12 @@ function tryGrab() {
   else if (kind === 'body')  grabNpcBody(npc, grabBone);
   else if (kind === 'obj' && obj) { obj.grabbed = true; grabbed = obj; updateCrosshair(); }
   if (kind) triggerOneShot('grab');
+  return !!kind;
 }
+
+// 左クリックで掴む対象が無いとき：wrap を再生（最後で停止保持）。LMB解放で解除。
+function startWrap() { if (player.states.wrap) player.wrapping = true; }
+function endWrap()   { player.wrapping = false; }
 function release() {
   const m = grabbedNpc();
   if (m) { releaseNpc(m); triggerOneShot('throw'); return; }   // NPC も振り回して放り投げ
@@ -826,21 +903,47 @@ function release() {
   grabbed = null; updateCrosshair();
   triggerOneShot('throw');
 }
-function shoot() {
+// 右クリック押下＝チャージ開始（溜めモーションは閾値超過後に desiredState が出す）
+function startCharge() {
+  if (player.charging) return;
+  player.charging = true;
+  player.chargeT = 0;
+}
+
+// 通常ショット（短タップ）：従来どおり cas1_L1 ＋ 小弾／抱えた物を前方へ射出。
+function normalShot() {
   camForwardRight();
   if (grabbed) {
-    // 抱えた物をカメラ前方へ射出
     grabbed.grabbed = false;
     grabbed.vel.copy(_fwd).multiplyScalar(SHOT_SPEED);
     grabbed = null; updateCrosshair();
   } else {
-    // 何も持っていなければ小弾を発射
     const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.18, 2), new THREE.MeshStandardMaterial({ color: 0xffe070, roughness: 0.3, metalness: 0.3, emissive: 0x554400 }));
     const pos = frontAnchor.clone();
     mesh.position.copy(pos); scene.add(mesh);
-    projectiles.push({ mesh, radius: 0.18, pos, vel: _fwd.clone().multiplyScalar(SHOT_SPEED), ttl: 3.0 });
+    projectiles.push({ mesh, radius: 0.18, pos, vel: _fwd.clone().multiplyScalar(SHOT_SPEED), ttl: 3.0, power: 18 });
   }
   triggerOneShot('shot');
+}
+
+// 右クリック解放：短タップ=通常ショット / 長押し=ラージショット（チャージ量で大きさ・速度・威力増）
+function fireLargeShot() {
+  if (!player.charging) return;
+  player.charging = false;
+  if (player.chargeT < TAP_THRESHOLD) { normalShot(); return; }
+  const level = Math.max(LARGE_MIN_LEVEL, Math.min(1, player.chargeT / MAX_CHARGE_TIME));
+  camForwardRight();
+  const radius = 0.3 + level * 0.6;            // 0.3〜0.9
+  const speed  = SHOT_SPEED * (0.9 + level * 0.7);
+  const power  = 18 + level * 50;              // 命中時の押し出し
+  const mesh = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(radius, 2),
+    new THREE.MeshStandardMaterial({ color: 0xff8844, roughness: 0.25, metalness: 0.3, emissive: 0x662200, emissiveIntensity: 1.5 }),
+  );
+  const pos = frontAnchor.clone();
+  mesh.position.copy(pos); scene.add(mesh);
+  projectiles.push({ mesh, radius, pos, vel: _fwd.clone().multiplyScalar(speed), ttl: 3.5, power, big: true });
+  triggerOneShot('large');
 }
 
 // ============================================================
@@ -857,11 +960,12 @@ function setupControls() {
     if (overlay) overlay.style.display = isLocked ? 'none' : 'flex';
     const ui = document.getElementById('ui');
     if (ui) ui.style.display = isLocked ? 'none' : 'flex';
-    if (!isLocked) release();
+    if (!isLocked) { release(); player.charging = false; player.wrapping = false; }   // ロック解除でチャージ/wrapも中断
   });
 
   document.addEventListener('mousemove', (e) => {
     if (!isLocked) return;
+    // カメラ回転(マウス移動)では放置モーションを解除しない（キー入力・クリックのみで解除）
     const s = MOUSE_SENS_BASE * cam.sens;
     camYaw   -= e.movementX * s;
     camPitch -= e.movementY * s;
@@ -870,12 +974,16 @@ function setupControls() {
 
   canvas.addEventListener('mousedown', (e) => {
     if (!isLocked) return;
-    if (e.button === 0) tryGrab();
-    else if (e.button === 2) shoot();
+    resetIdle();
+    if (e.button === 0) { if (!tryGrab()) startWrap(); }   // 掴む対象なし→wrap
+    else if (e.button === 2) startCharge();   // 右クリック長押し＝チャージ
   });
-  window.addEventListener('mouseup', (e) => { if (e.button === 0) release(); });
+  window.addEventListener('mouseup', (e) => {
+    if (e.button === 0) { release(); endWrap(); }
+    else if (e.button === 2) fireLargeShot();  // 右クリック解放＝ラージショット
+  });
 
-  document.addEventListener('keydown', (e) => { keysDown[e.code] = true; });
+  document.addEventListener('keydown', (e) => { keysDown[e.code] = true; if (isLocked) resetIdle(); });
   document.addEventListener('keyup',   (e) => { keysDown[e.code] = false; });
   document.getElementById('ui')?.addEventListener('mousedown', () => { if (isLocked) document.exitPointerLock(); });
 }

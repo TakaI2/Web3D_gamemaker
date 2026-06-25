@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import type { Quaternion } from 'three';
+  import type { Quaternion, Vector3 } from 'three';
   import { animEditorStore } from '../stores/animEditorStore';
 
   const ROW_HEIGHT = 24;
@@ -9,7 +9,6 @@
   const MAX_PPF = 60;
 
   let pixelPerFrame = 8;
-  let scrollY = 0;
   let svgEl: SVGSVGElement;
   let containerEl: HTMLDivElement;
 
@@ -35,26 +34,32 @@
   $: exprRows = [...state.blendShapeKeyframes.keys()];
   $: allRows = [...boneRows, ...exprRows];
 
+  // 行数 +1（最下段の「ルート位置」行）
+  $: hipsRowIndex = boneRows.length + exprRows.length;
+  $: hipsY = 24 + hipsRowIndex * ROW_HEIGHT;
+
   // SVG サイズ
   $: timelineWidth = Math.max(400, totalFrames * pixelPerFrame + HEADER_WIDTH + 20);
-  $: timelineHeight = Math.max(120, allRows.length * ROW_HEIGHT + 30);
+  $: timelineHeight = Math.max(120, (allRows.length + 1) * ROW_HEIGHT + 30);
 
   // プレイヘッド X 座標
   $: playheadX = HEADER_WIDTH + state.currentFrame * pixelPerFrame;
 
-  // 選択キーフレーム（複数選択）。id = "b|track|frame"（bone）/ "e|track|frame"（expr）
+  // 選択キーフレーム（複数選択）。id = "<kind>|<track>|<frame>"。kind: 'b'=ボーン / 'e'=表情 / 'h'=ルート位置
+  type KeyKind = 'b' | 'e' | 'h';
   let selectedKeys = new Set<string>();
-  const keyId = (track: string, frame: number, isBone: boolean) => `${isBone ? 'b' : 'e'}|${track}|${frame}`;
-  function parseKeyId(id: string): { track: string; frame: number; isBone: boolean } {
-    const isBone = id[0] === 'b';
+  const keyId = (track: string, frame: number, kind: KeyKind) => `${kind}|${track}|${frame}`;
+  function parseKeyId(id: string): { track: string; frame: number; kind: KeyKind } {
+    const kind = id[0] as KeyKind;
     const rest = id.slice(id.indexOf('|') + 1);
     const lastSep = rest.lastIndexOf('|');
-    return { track: rest.slice(0, lastSep), frame: Number(rest.slice(lastSep + 1)), isBone };
+    return { track: rest.slice(0, lastSep), frame: Number(rest.slice(lastSep + 1)), kind };
   }
   function deleteKeyId(id: string): void {
-    const { track, frame, isBone } = parseKeyId(id);
-    if (isBone) animEditorStore.removeBoneKeyframe(track, frame);
-    else animEditorStore.removeBlendShapeKeyframe(track, frame);
+    const { track, frame, kind } = parseKeyId(id);
+    if (kind === 'b') animEditorStore.removeBoneKeyframe(track, frame);
+    else if (kind === 'e') animEditorStore.removeBlendShapeKeyframe(track, frame);
+    else animEditorStore.removeHipsPositionKeyframe(frame);
   }
 
   function frameToX(frame: number): number {
@@ -122,27 +127,31 @@
     const minX = Math.min(marquee.x0, marquee.x1), maxX = Math.max(marquee.x0, marquee.x1);
     const minY = Math.min(marquee.y0, marquee.y1), maxY = Math.max(marquee.y0, marquee.y1);
     const next = new Set<string>();
-    const collect = (track: string, frames: Iterable<number>, rowIndex: number, isBone: boolean) => {
+    const collect = (track: string, frames: Iterable<number>, rowIndex: number, kind: KeyKind) => {
       const ky = rowY(rowIndex) + ROW_HEIGHT / 2;
       if (ky < minY || ky > maxY) return;
       for (const f of frames) {
         const kx = frameToX(f);
-        if (kx >= minX && kx <= maxX) next.add(keyId(track, f, isBone));
+        if (kx >= minX && kx <= maxX) next.add(keyId(track, f, kind));
       }
     };
-    boneRows.forEach((b, i) => collect(b, state.boneKeyframes.get(b)?.keys() ?? [], i, true));
-    exprRows.forEach((ex, i) => collect(ex, state.blendShapeKeyframes.get(ex)?.keys() ?? [], boneRows.length + i, false));
+    boneRows.forEach((b, i) => collect(b, state.boneKeyframes.get(b)?.keys() ?? [], i, 'b'));
+    exprRows.forEach((ex, i) => collect(ex, state.blendShapeKeyframes.get(ex)?.keys() ?? [], boneRows.length + i, 'e'));
+    collect('', state.hipsPositionKeyframes.keys(), boneRows.length + exprRows.length, 'h');
     selectedKeys = next;
   }
 
-  // ホイール: 通常=カーソル下のフレームを中心に拡大縮小 / Shift=行の縦スクロール
-  // （cloth-preview と同じ操作感。Ctrl は不要）
+  // ホイール:
+  //  ・上部タイムスケール（ルーラー帯, y<24）上 / Ctrl(⌘) = カーソル中心ズーム
+  //  ・Shift = 横スクロール
+  //  ・それ以外 = 行の縦スクロール（キーが増えても見られる）
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
-    if (e.shiftKey) {
-      containerEl.scrollTop += e.deltaY;
-      return;
-    }
+    const svgY = e.clientY - svgEl.getBoundingClientRect().top;   // SVG ローカル y（スクロール込み）
+    const overRuler = svgY < 24;
+    if (e.shiftKey && !overRuler) { containerEl.scrollLeft += e.deltaY; return; }   // 横スクロール
+    if (!overRuler && !e.ctrlKey && !e.metaKey) { containerEl.scrollTop += e.deltaY; return; }   // 縦スクロール（既定）
+    // ズーム（カーソル下のフレームを中心に）
     const rect = containerEl.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const frameAtCursor = Math.max(0, (containerEl.scrollLeft + mouseX - HEADER_WIDTH) / pixelPerFrame);
@@ -150,7 +159,6 @@
     const newPpf = Math.max(MIN_PPF, Math.min(MAX_PPF, pixelPerFrame * factor));
     if (newPpf === pixelPerFrame) return;
     pixelPerFrame = newPpf;
-    // 幅が変わってから、カーソル下のフレームが同じ画面位置に来るようスクロール補正
     tick().then(() => {
       containerEl.scrollLeft = Math.max(0, frameAtCursor * newPpf - (mouseX - HEADER_WIDTH));
     });
@@ -187,10 +195,10 @@
   }
 
   // キーフレーム mousedown：単体選択（Shift/Ctrl で追加トグル）。マーキー/シークは抑制。
-  function onKeyMouseDown(e: MouseEvent, track: string, frame: number, isBone: boolean): void {
+  function onKeyMouseDown(e: MouseEvent, track: string, frame: number, kind: KeyKind): void {
     e.stopPropagation();
     if (e.button !== 0) return;
-    const id = keyId(track, frame, isBone);
+    const id = keyId(track, frame, kind);
     if (e.shiftKey || e.ctrlKey || e.metaKey) {
       const next = new Set(selectedKeys);
       if (next.has(id)) next.delete(id); else next.add(id);
@@ -201,14 +209,13 @@
   }
 
   // キーフレーム右クリック：その1個を削除
-  function onKeyContext(track: string, frame: number, isBone: boolean): void {
-    if (isBone) animEditorStore.removeBoneKeyframe(track, frame);
-    else animEditorStore.removeBlendShapeKeyframe(track, frame);
-    const next = new Set(selectedKeys); next.delete(keyId(track, frame, isBone)); selectedKeys = next;
+  function onKeyContext(track: string, frame: number, kind: KeyKind): void {
+    deleteKeyId(keyId(track, frame, kind));
+    const next = new Set(selectedKeys); next.delete(keyId(track, frame, kind)); selectedKeys = next;
   }
 
   // キーのコピー＆ペースト。最小フレームを基準に相対オフセットを保持し、現在フレームへ貼り付ける。
-  type ClipItem = { track: string; isBone: boolean; offset: number; quat?: Quaternion; value?: number };
+  type ClipItem = { track: string; kind: KeyKind; offset: number; quat?: Quaternion; value?: number; pos?: Vector3 };
   let clipboard: ClipItem[] = [];
 
   function copySelected(): void {
@@ -217,13 +224,17 @@
     for (const id of selectedKeys) { const { frame } = parseKeyId(id); if (frame < anchor) anchor = frame; }
     const items: ClipItem[] = [];
     for (const id of selectedKeys) {
-      const { track, frame, isBone } = parseKeyId(id);
-      if (isBone) {
+      const { track, frame, kind } = parseKeyId(id);
+      const offset = frame - anchor;
+      if (kind === 'b') {
         const q = state.boneKeyframes.get(track)?.get(frame);
-        if (q) items.push({ track, isBone: true, offset: frame - anchor, quat: q.clone() });
-      } else {
+        if (q) items.push({ track, kind, offset, quat: q.clone() });
+      } else if (kind === 'e') {
         const v = state.blendShapeKeyframes.get(track)?.get(frame);
-        if (v != null) items.push({ track, isBone: false, offset: frame - anchor, value: v });
+        if (v != null) items.push({ track, kind, offset, value: v });
+      } else {
+        const p = state.hipsPositionKeyframes.get(frame);
+        if (p) items.push({ track, kind, offset, pos: p.clone() });
       }
     }
     clipboard = items;
@@ -235,12 +246,15 @@
     const next = new Set<string>();
     for (const it of clipboard) {
       const f = Math.max(0, Math.min(totalFrames, base + it.offset));
-      if (it.isBone && it.quat) {
+      if (it.kind === 'b' && it.quat) {
         animEditorStore.setBoneKeyframe(it.track, f, it.quat.clone());
-        next.add(keyId(it.track, f, true));
-      } else if (!it.isBone && it.value != null) {
+        next.add(keyId(it.track, f, 'b'));
+      } else if (it.kind === 'e' && it.value != null) {
         animEditorStore.setBlendShapeKeyframe(it.track, f, it.value);
-        next.add(keyId(it.track, f, false));
+        next.add(keyId(it.track, f, 'e'));
+      } else if (it.kind === 'h' && it.pos) {
+        animEditorStore.setHipsPositionKeyframe(f, it.pos.clone());
+        next.add(keyId('', f, 'h'));
       }
     }
     selectedKeys = next;   // 貼り付けたキーを選択状態に
@@ -299,7 +313,7 @@
       {#each [...(state.boneKeyframes.get(boneName)?.keys() ?? [])] as frame}
         {@const kx = frameToX(frame)}
         {@const ky = y + ROW_HEIGHT / 2}
-        {@const sel = selectedKeys.has(keyId(boneName, frame, true))}
+        {@const sel = selectedKeys.has(keyId(boneName, frame, 'b'))}
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <polygon
           points="{kx},{ky - 6} {kx + 5},{ky} {kx},{ky + 6} {kx - 5},{ky}"
@@ -307,8 +321,8 @@
           stroke={sel ? '#fff' : 'none'}
           stroke-width="1"
           style="cursor:pointer"
-          on:mousedown={(e) => onKeyMouseDown(e, boneName, frame, true)}
-          on:contextmenu|preventDefault|stopPropagation={() => onKeyContext(boneName, frame, true)}
+          on:mousedown={(e) => onKeyMouseDown(e, boneName, frame, 'b')}
+          on:contextmenu|preventDefault|stopPropagation={() => onKeyContext(boneName, frame, 'b')}
         />
       {/each}
     {/each}
@@ -322,7 +336,7 @@
       {#each [...(state.blendShapeKeyframes.get(exprName)?.keys() ?? [])] as frame}
         {@const kx = frameToX(frame)}
         {@const ky = y + ROW_HEIGHT / 2}
-        {@const sel = selectedKeys.has(keyId(exprName, frame, false))}
+        {@const sel = selectedKeys.has(keyId(exprName, frame, 'e'))}
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <polygon
           points="{kx},{ky - 6} {kx + 5},{ky} {kx},{ky + 6} {kx - 5},{ky}"
@@ -330,10 +344,29 @@
           stroke={sel ? '#fff' : 'none'}
           stroke-width="1"
           style="cursor:pointer"
-          on:mousedown={(e) => onKeyMouseDown(e, exprName, frame, false)}
-          on:contextmenu|preventDefault|stopPropagation={() => onKeyContext(exprName, frame, false)}
+          on:mousedown={(e) => onKeyMouseDown(e, exprName, frame, 'e')}
+          on:contextmenu|preventDefault|stopPropagation={() => onKeyContext(exprName, frame, 'e')}
         />
       {/each}
+    {/each}
+
+    <!-- ルート位置（腰移動）行 -->
+    <rect x={0} y={hipsY} width={timelineWidth} height={ROW_HEIGHT} fill={hipsRowIndex % 2 === 0 ? '#1e2a1e' : '#22301f'} />
+    <text x={4} y={hipsY + 15} fill="#8d8" font-size="11">⌖ ルート位置</text>
+    {#each [...state.hipsPositionKeyframes.keys()] as frame}
+      {@const kx = frameToX(frame)}
+      {@const ky = hipsY + ROW_HEIGHT / 2}
+      {@const sel = selectedKeys.has(keyId('', frame, 'h'))}
+      <!-- svelte-ignore a11y-click-events-have-key-events -->
+      <polygon
+        points="{kx},{ky - 6} {kx + 5},{ky} {kx},{ky + 6} {kx - 5},{ky}"
+        fill={sel ? '#ffaa00' : '#6c6'}
+        stroke={sel ? '#fff' : 'none'}
+        stroke-width="1"
+        style="cursor:pointer"
+        on:mousedown={(e) => onKeyMouseDown(e, '', frame, 'h')}
+        on:contextmenu|preventDefault|stopPropagation={() => onKeyContext('', frame, 'h')}
+      />
     {/each}
 
     <!-- マーキー（ボックス選択）矩形 -->
