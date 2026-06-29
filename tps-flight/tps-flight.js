@@ -14,7 +14,7 @@ import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?d
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
   from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
-import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse } from '../lib/vrm-ragdoll.js';
+import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 
 // ── アリーナ ───────────────────────────────────────────────────
 const ROOM = { x: 30, y: 30, z: 30 };
@@ -106,8 +106,18 @@ const player = {
 };
 const DESCEND_SIN = 0.3;   // 前進方向がこれ以上下を向いていたら「降下」とみなす（約17°）
 
-// NPC（1体・idle浮遊。プレイヤーと別キャラ）
-let npc = null;
+// NPC リスト：サイキッカー(kind:'psychic'・浮遊) ＋ 一般人モブ(kind:'mob'・地上で逃げまどう)
+const npcs = [];
+
+// ── 一般人モブ（地上で逃げまどう）──
+const MOB_CHAR       = 'ken.npc.json';
+const MOB_WALK_VRMA  = 'Catwalk_Walk_Forward.vrma';   // 地上ロコモーション（ルートモーションは除去して足踏み）
+const MOB_WALK_SPEED = 1.6;     // うろつき速度(m/s)
+const MOB_RUN_SPEED  = 4.4;     // 逃走速度(m/s)
+const MOB_FLEE_RADIUS = 7.5;    // プレイヤーがこの距離内なら逃げる
+const MOB_STEER_TAU  = 0.45;    // 速度の追従時定数
+const DEFAULT_MOB_COUNT = 4;
+const mobAssets = { ready: false, bundle: null, vrmBlobUrl: null, walkAnim: null, faceOff: 0 };
 
 // カメラ状態（球面 + スプリング現在値）
 let camYaw = Math.PI, camPitch = 0.15;
@@ -319,16 +329,19 @@ function stepProjectiles(dt) {
         }
       }
     }
-    // NPC 命中：未発動ならラグドール発動、発動中なら追加の撃力（掴み中は自弾で当てない）
-    if (!dead && npc && !npc.grabbed && !npc.clothGrabbed) {
-      npcCenter(npc, _npcC);
-      const rr = p.radius + NPC_RADIUS;
-      if (p.pos.distanceToSquared(_npcC) <= rr * rr) {
+    // NPC 命中：未発動ならラグドール発動、発動中なら追加の撃力（掴み中は自弾で当てない）。
+    // 通常弾は最初の1体で消滅、ラージショットは貫通して複数を巻き込む。
+    if (!dead) {
+      for (const m of npcs) {
+        if (m.grabbed || m.clothGrabbed) continue;
+        npcCenter(m, _npcC);
+        const rr = p.radius + NPC_RADIUS;
+        if (p.pos.distanceToSquared(_npcC) > rr * rr) continue;
         _hitDir.copy(p.vel).normalize();
         const imp = RAGDOLL_IMPULSE * (p.big ? 2.2 : 1);
-        if (npc.ragdoll.active) applyRagdollImpulse(npc.ragdoll, _hitDir.clone().multiplyScalar(imp), 'hips');
-        else hitNpc(npc, _hitDir, imp);
-        dead = true;
+        if (m.ragdoll.active) applyRagdollImpulse(m.ragdoll, _hitDir.clone().multiplyScalar(imp), 'hips');
+        else hitNpc(m, _hitDir, imp);
+        if (!p.big) { dead = true; break; }
       }
     }
     if (dead) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); projectiles.splice(i, 1); }
@@ -593,18 +606,96 @@ async function loadNpc() {
   let cloth = null;
   if (bundle.cloth) { try { cloth = createVRMCloth({ renderer, scene, vrm, cloth: bundle.cloth, basePos: pos, floorY: 0, timeline: bundle.timeline }); } catch (e) { console.warn('NPC マント失敗:', e); } }
 
-  npc = {
-    vrm, ragdoll, mixer, action, cloth, pos,
+  npcs.push({
+    vrm, ragdoll, mixer, action, cloth, pos, kind: 'psychic',
     faceOff: NPC_FACE_OFFSET[NPC_CHAR] ?? 0,
     tlFps: bundle.timeline?.fps ?? 30,
     vel: randomDir().multiplyScalar(randRange(2, 4)),
     grabbed: false, clothGrabbed: false, grabBone: 'chest', recoverTimer: 0,
     idleMode: 'drift', idleTimer: randRange(3, 6), bobPhase: Math.random() * 10, dashTarget: new THREE.Vector3(),
     headLookW: 0,
-  };
+  });
 }
 
-function grabbedNpc() { return (npc && (npc.grabbed || npc.clothGrabbed)) ? npc : null; }
+// ── 一般人モブ：素材を一度だけ用意（VRM blob ＋ 歩行VRMA）──
+async function prepareMobAssets() {
+  try {
+    const bundle = await (await fetch('../npc/' + MOB_CHAR)).json();
+    if (!bundle?.vrm) return false;
+    mobAssets.bundle    = bundle;
+    mobAssets.vrmBlobUrl = URL.createObjectURL(dataURIToBlob(bundle.vrm));
+    mobAssets.faceOff   = NPC_FACE_OFFSET[MOB_CHAR] ?? 0;
+    try {
+      const vres = await fetch('../vrma/' + encodeURIComponent(MOB_WALK_VRMA));
+      if (vres.ok) {
+        const al = new GLTFLoader(); al.register(p => new VRMAnimationLoaderPlugin(p));
+        const ag = await al.loadAsync(URL.createObjectURL(await vres.blob()));
+        mobAssets.walkAnim = ag.userData.vrmAnimations?.[0] ?? null;
+      }
+    } catch (e) { console.warn('モブ歩行VRMA失敗:', e); }
+    mobAssets.ready = true;
+    return true;
+  } catch (e) { console.warn('モブ素材準備失敗:', e); return false; }
+}
+
+async function spawnMob() {
+  if (!mobAssets.ready) return false;
+  const loader = new GLTFLoader();
+  loader.register(p => new VRMLoaderPlugin(p, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }) }));
+  const gltf = await loader.loadAsync(mobAssets.vrmBlobUrl);
+  const vrm = gltf.userData.vrm;
+  const pos = new THREE.Vector3(randRange(-ROOM.x/2 + 2, ROOM.x/2 - 2), 0, randRange(-ROOM.z/2 + 2, ROOM.z/2 - 2));
+  vrm.scene.position.copy(pos);
+  scene.add(vrm.scene); vrm.scene.updateMatrixWorld(true);
+  let mixer = null, action = null;
+  if (mobAssets.walkAnim) {
+    const clip = createVRMAnimationClip(mobAssets.walkAnim, vrm);
+    stripRootMotion(clip);
+    mixer = new THREE.AnimationMixer(vrm.scene);
+    action = mixer.clipAction(clip);
+    action.setLoop(THREE.LoopRepeat, Infinity).play();
+    action.time = Math.random() * (clip.duration || 1);
+  }
+  const ragdoll = createRagdoll(vrm, { gravity: -12, boundsMargin: 0.4 });
+  npcs.push({
+    vrm, ragdoll, mixer, action, cloth: null, pos, kind: 'mob',
+    faceOff: mobAssets.faceOff, tlFps: 30,
+    vel: new THREE.Vector3(), grabbed: false, clothGrabbed: false, grabBone: 'chest', recoverTimer: 0,
+    headLookW: 0, scared: false, wanderTimer: 0, wanderDirX: 0, wanderDirZ: 0,
+  });
+  return true;
+}
+
+function mobCount() { let n = 0; for (const m of npcs) if (m.kind === 'mob') n++; return n; }
+
+function removeMob() {
+  for (let i = npcs.length - 1; i >= 0; i--) {
+    const m = npcs[i];
+    if (m.kind !== 'mob' || m.grabbed || m.clothGrabbed) continue;   // 掴まれている個体は残す
+    scene.remove(m.vrm.scene);
+    try { disposeRagdoll(m.ragdoll); } catch { /* helper無しなら無視 */ }
+    m.vrm.scene.traverse(o => { if (o.isMesh) { o.geometry?.dispose(); const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const mm of ms) mm?.dispose(); } });
+    npcs.splice(i, 1);
+    return true;
+  }
+  return false;
+}
+
+// スライダーで台数を増減（最新値へ1体ずつ収束）。VRM読込が重いので逐次処理。
+let mobDesired = 0, mobReconciling = false;
+async function reconcileMobs() {
+  if (mobReconciling) return;
+  mobReconciling = true;
+  try {
+    while (mobCount() !== mobDesired) {
+      if (mobCount() < mobDesired) { if (!await spawnMob()) break; }
+      else { if (!removeMob()) break; }
+    }
+  } finally { mobReconciling = false; }
+}
+function setMobCount(n) { mobDesired = Math.max(0, n | 0); reconcileMobs(); }
+
+function grabbedNpc() { for (const m of npcs) if (m.grabbed || m.clothGrabbed) return m; return null; }
 
 function npcCenter(m, out) {
   const rd = m.ragdoll;
@@ -672,8 +763,57 @@ function hitNpc(m, dir, impulse = RAGDOLL_IMPULSE) {
   m.recoverTimer = NPC_RECOVER_DELAY + LOOK_DURATION;
 }
 function onNpcRecovered(m) {
+  if (m.kind === 'mob') {
+    // 倒れた地点（ラグドール hips の床位置）から立ち上がって再びうろつく
+    const rd = m.ragdoll;
+    if (rd.idxOf.hips != null) { const hp = rd.particles[rd.idxOf.hips].pos; m.pos.set(hp.x, 0, hp.z); }
+    m.pos.x = Math.min(ROOM.x/2 - NPC_RADIUS, Math.max(-ROOM.x/2 + NPC_RADIUS, m.pos.x));
+    m.pos.z = Math.min(ROOM.z/2 - NPC_RADIUS, Math.max(-ROOM.z/2 + NPC_RADIUS, m.pos.z));
+    m.vel.set(0, 0, 0); m.wanderTimer = 0; m.scared = false;
+    return;
+  }
   m.vel.copy(randomDir()).multiplyScalar(randRange(2, 4));
   m.idleMode = 'drift'; m.idleTimer = randRange(3, 6);
+}
+
+// 一般人モブの地上挙動：プレイヤーが近いと反対方向へ逃走、遠いとランダムにうろつく。
+function updateMobGround(m, dt) {
+  _force.copy(player.pos).sub(m.pos); _force.y = 0;
+  const dist = _force.length();
+  let dx, dz, speed;
+  if (dist < MOB_FLEE_RADIUS) {
+    m.scared = true;
+    const inv = dist > 1e-3 ? 1 / dist : 0;
+    dx = -_force.x * inv; dz = -_force.z * inv;   // プレイヤーと反対方向
+    speed = MOB_RUN_SPEED;
+  } else {
+    m.scared = false;
+    m.wanderTimer -= dt;
+    if (m.wanderTimer <= 0 || (m.wanderDirX === 0 && m.wanderDirZ === 0)) {
+      const a = Math.random() * Math.PI * 2;
+      m.wanderDirX = Math.cos(a); m.wanderDirZ = Math.sin(a);
+      m.wanderTimer = randRange(1.5, 4);
+    }
+    dx = m.wanderDirX; dz = m.wanderDirZ;
+    speed = MOB_WALK_SPEED;
+  }
+  // 壁回避：枠に近いと中央へ寄せる
+  const mg = 2.5;
+  if (m.pos.x < -ROOM.x/2 + mg) dx += 1; else if (m.pos.x > ROOM.x/2 - mg) dx -= 1;
+  if (m.pos.z < -ROOM.z/2 + mg) dz += 1; else if (m.pos.z > ROOM.z/2 - mg) dz -= 1;
+  const dl = Math.hypot(dx, dz) || 1;
+  const tvx = dx / dl * speed, tvz = dz / dl * speed;
+  const k = 1 - Math.exp(-dt / MOB_STEER_TAU);
+  m.vel.x += (tvx - m.vel.x) * k; m.vel.z += (tvz - m.vel.z) * k; m.vel.y = 0;
+  m.pos.addScaledVector(m.vel, dt); m.pos.y = 0;
+  m.pos.x = Math.min(ROOM.x/2 - NPC_RADIUS, Math.max(-ROOM.x/2 + NPC_RADIUS, m.pos.x));
+  m.pos.z = Math.min(ROOM.z/2 - NPC_RADIUS, Math.max(-ROOM.z/2 + NPC_RADIUS, m.pos.z));
+  m.vrm.scene.position.copy(m.pos);
+  faceNpcMove(m, dt);
+  if (m.action) {
+    const sp = Math.hypot(m.vel.x, m.vel.z);
+    m.action.timeScale = Math.max(0.4, Math.min(2.2, sp / MOB_WALK_SPEED));   // 速いほど足を速く
+  }
 }
 
 // 頭をプレイヤーへ向ける（weight 0-1）。mixer/ラグドール後・vrm.update 前に呼ぶ。
@@ -735,9 +875,12 @@ function faceNpcMove(m, dt) {
   m.vrm.scene.rotation.y += diff * (1 - Math.exp(-dt / 0.4));
 }
 
-function updateNpc(dt) {
-  if (!npc) return;
-  const m = npc, rd = m.ragdoll;
+function updateNpcs(dt) {
+  for (const m of npcs) updateOneNpc(m, dt);
+}
+
+function updateOneNpc(m, dt) {
+  const rd = m.ragdoll;
   const held = m.grabbed || m.clothGrabbed;
 
   if (rd.active) {
@@ -752,17 +895,21 @@ function updateNpc(dt) {
     if (!rd.recovering) onNpcRecovered(m);
   } else {
     if (m.mixer) m.mixer.update(dt);
-    updateNpcIdle(m, dt);
-    m.pos.addScaledVector(m.vel, dt);
-    bounceAxis(m, 'x', -ROOM.x/2 + NPC_RADIUS, ROOM.x/2 - NPC_RADIUS);
-    bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
-    bounceAxis(m, 'z', -ROOM.z/2 + NPC_RADIUS, ROOM.z/2 - NPC_RADIUS);
-    m.vrm.scene.position.copy(m.pos);
-    faceNpcMove(m, dt);
+    if (m.kind === 'mob') {
+      updateMobGround(m, dt);
+    } else {
+      updateNpcIdle(m, dt);
+      m.pos.addScaledVector(m.vel, dt);
+      bounceAxis(m, 'x', -ROOM.x/2 + NPC_RADIUS, ROOM.x/2 - NPC_RADIUS);
+      bounceAxis(m, 'y', 0.2, ROOM.y - 1.8);
+      bounceAxis(m, 'z', -ROOM.z/2 + NPC_RADIUS, ROOM.z/2 - NPC_RADIUS);
+      m.vrm.scene.position.copy(m.pos);
+      faceNpcMove(m, dt);
+    }
   }
 
-  // 頭をプレイヤーへゆるく（飛行中のみ）
-  const targetHeadW = (held || rd.active) ? 0 : 0.55;
+  // 頭をプレイヤーへゆるく（サイキッカーの飛行中のみ。モブは逃走中で前向きのため無し）
+  const targetHeadW = (m.kind === 'mob' || held || rd.active) ? 0 : 0.55;
   m.headLookW += (targetHeadW - m.headLookW) * (1 - Math.exp(-dt / HEAD_LOOK_TAU));
   if (m.headLookW > 0.01) applyNpcHeadLook(m, m.headLookW);
 
@@ -772,7 +919,7 @@ function updateNpc(dt) {
     let frame = null;
     if (m.action && !rd.active) frame = Math.floor(m.action.time * m.tlFps);
     m.cloth.update(dt, frame);
-    m.cloth.refresh();   // マント掴み用に CPU 位置を読み戻し（単体なので毎フレーム）
+    m.cloth.refresh();   // マント掴み用に CPU 位置を読み戻し
   }
 }
 
@@ -874,16 +1021,16 @@ function tryGrab() {
   const obj = hits.length ? resolveObj(hits[0].object) : null;
   let kind = obj ? 'obj' : null;
   let dist = obj ? hits[0].distance : Infinity;
-  let clothIdx = -1, grabBone = null;
-  // NPC の本体（関節）/マントも判定し、最も手前を採用
-  if (npc) {
-    const jb = nearestNpcJoint(npc);
-    if (jb && jb.along < dist) { kind = 'body'; dist = jb.along; grabBone = jb.bone; }
-    const cl = nearestNpcCloth(npc);
-    if (cl && cl.along < dist) { kind = 'cloth'; dist = cl.along; clothIdx = cl.index; }
+  let clothIdx = -1, grabBone = null, targetNpc = null;
+  // 全 NPC の本体（関節）/マントを判定し、最も手前を採用
+  for (const m of npcs) {
+    const jb = nearestNpcJoint(m);
+    if (jb && jb.along < dist) { kind = 'body'; dist = jb.along; grabBone = jb.bone; targetNpc = m; }
+    const cl = nearestNpcCloth(m);
+    if (cl && cl.along < dist) { kind = 'cloth'; dist = cl.along; clothIdx = cl.index; targetNpc = m; }
   }
-  if (kind === 'cloth')      grabNpcCloth(npc, clothIdx);
-  else if (kind === 'body')  grabNpcBody(npc, grabBone);
+  if (kind === 'cloth')      grabNpcCloth(targetNpc, clothIdx);
+  else if (kind === 'body')  grabNpcBody(targetNpc, grabBone);
   else if (kind === 'obj' && obj) { obj.grabbed = true; grabbed = obj; updateCrosshair(); }
   if (kind) triggerOneShot('grab');
   return !!kind;
@@ -1015,6 +1162,7 @@ function setupUI() {
   bind('cam-sens',   v => v.toFixed(1), v => { cam.sens = v; saveCamPrefs(); });
   bind('fly-speed',  v => v.toFixed(0), v => { flight.maxSpeed = v; flight.accel = v * 3.5; });   // スライダー値＝最大m/s（永続化しない＝既定はNPC同等）
   bind('obj-count',  v => v.toFixed(0), v => { setObjectCount(v | 0); });
+  bind('mob-count',  v => v.toFixed(0), v => { setMobCount(v | 0); });   // 一般人モブの台数
 
   // localStorage 値をスライダーへ反映
   const set = (id, v) => { const sl = document.getElementById(id); if (sl) { sl.value = v; sl.dispatchEvent(new Event('input')); } };
@@ -1056,7 +1204,7 @@ function render() {
 
   if (isLocked) updateFlight(dt);
   updatePlayerAnim(dt);
-  updateNpc(dt);
+  updateNpcs(dt);
   updateCamera(dt);
 
   const tps = 1 / STEP_HZ; let steps = 0; timeSinceLastStep += dt;
@@ -1120,8 +1268,10 @@ async function init() {
   try { await loadPlayer(); }
   catch (e) { console.error('プレイヤー読み込み失敗:', e); }
 
-  // NPC（1体）
+  // NPC（サイキッカー1体）
   loadNpc().catch(e => console.warn('NPC 読み込み失敗:', e));
+  // 一般人モブ（地上で逃げまどう）。素材を用意してから既定数スポーン。
+  prepareMobAssets().then(ok => { if (ok) setMobCount(DEFAULT_MOB_COUNT); }).catch(e => console.warn('モブ準備失敗:', e));
 
   setupUI();
   setupControls();

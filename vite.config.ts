@@ -67,7 +67,7 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
@@ -81,6 +81,16 @@ export default defineConfig({
               res.statusCode = 500; res.end(String(e));
             }
           });
+        });
+
+        // FX プリセット一覧（fx-builder が保存した *.fx.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/fx/manifest.json')) return next();
+          const dir = path.join(pub, 'fx');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.fx.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
         });
 
         // NPC バンドル一覧（base に依らずパス末尾で判定）

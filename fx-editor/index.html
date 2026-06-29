@@ -138,6 +138,8 @@
 
 <!-- ── Toolbar ── -->
 <div id="toolbar">
+  <a href="../hub/" style="padding:4px 9px;background:#2a2a44;color:#cdd;border:1px solid #3a3a60;border-radius:4px;text-decoration:none;font-size:12px;white-space:nowrap;">← hub</a>
+  <div class="sep"></div>
   <select id="npc-select" title="public/npc から選択" style="background:#1f3050;color:#bdf;border:1px solid #3a5a8a;border-radius:4px;padding:3px 6px;font-size:12px;max-width:170px;">
     <option value="">-- NPC選択 (npc) --</option>
   </select>
@@ -219,6 +221,26 @@
       </div>
     </div>
 
+    <!-- Bloom (post) -->
+    <div class="sec">
+      <h3>ブルーム（発光）</h3>
+      <div class="row">
+        <label>Strength</label>
+        <input type="range" id="bloom-strength" min="0" max="5" step="0.05" value="1">
+        <span class="val" id="bloom-strength-val">1.00</span>
+      </div>
+      <div class="row">
+        <label>Radius</label>
+        <input type="range" id="bloom-radius" min="0" max="1" step="0.01" value="0.1">
+        <span class="val" id="bloom-radius-val">0.10</span>
+      </div>
+      <div class="row">
+        <label>Threshold</label>
+        <input type="range" id="bloom-threshold" min="0" max="2" step="0.01" value="1">
+        <span class="val" id="bloom-threshold-val">1.00</span>
+      </div>
+    </div>
+
     <!-- Add effect -->
     <div class="sec">
       <h3>エフェクト追加</h3>
@@ -229,6 +251,7 @@
           <option value="smoke">💨 smoke（煙）</option>
           <option value="spark">✨ spark（火花）</option>
           <option value="frost">❄ frost（冷気）</option>
+          <option value="tornado">🌪 tornado（竜巻）</option>
         </select>
       </div>
       <div class="row">
@@ -271,6 +294,7 @@
           <select id="sel-preset" style="flex:1">
             <option value="fire">fire</option><option value="smoke">smoke</option>
             <option value="spark">spark</option><option value="frost">frost</option>
+            <option value="tornado">tornado</option>
           </select>
         </div>
         <div class="row">
@@ -299,6 +323,10 @@
           <label>粒数</label>
           <input type="number" id="sel-count" min="1" step="1" value="24">
           <span style="color:#667;font-size:10px;">単発時の発生数</span>
+        </div>
+        <div style="border-top:1px solid #24264a;margin-top:6px;padding-top:6px;">
+          <div style="font-size:10px;color:#667;margin-bottom:4px;">パラメータ（プリセット別・timelineに保存）</div>
+          <div id="sel-params"></div>
         </div>
         <div class="row" style="margin-top:6px;">
           <button id="btn-del-fx" style="background:#3a1f28;border-color:#5a3040;color:#fbb;">このエフェクトを削除</button>

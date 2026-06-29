@@ -11,7 +11,8 @@
 // 発生種類:       'burst'（指定1フレームで単発）/ 'range'（開始〜終了フレームで持続発生）
 
 import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
-import { positionWorld, mix, color } from 'https://esm.sh/three@0.184.0/tsl';
+import { positionWorld, mix, color, pass } from 'https://esm.sh/three@0.184.0/tsl';
+import { bloom } from 'https://esm.sh/three@0.184.0/examples/jsm/tsl/display/BloomNode.js';
 import { OrbitControls }    from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader }       from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
@@ -20,6 +21,8 @@ import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?d
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
   from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
+import { createTornado } from '../lib/fx-tornado.js';
+import { createMeshFx } from '../lib/fx-mesh.js';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
 
 // ── シーングローバル ─────────────────────────────────────────────
@@ -49,7 +52,54 @@ let otherTracks = [];   // 読み込んだ effect 以外のトラック（grip/b
 const effects = [];
 let selectedEffectId = null;
 let nextEffectId = 1;
-const PRESET_COLORS = { fire: '#ff8844', smoke: '#9aa0b0', spark: '#ffd060', frost: '#66ccff' };
+const PRESET_COLORS = { fire: '#ff8844', smoke: '#9aa0b0', spark: '#ffd060', frost: '#66ccff', tornado: '#ff8b4d' };
+
+// プリセット別の調整パラメータ定義（エディタが汎用的にUIを生成。default は適用前の初期値）
+function particleParamDefs(preset) {
+  const p = FX_PRESETS[preset];
+  return [
+    { key: 'colorStart', label: '開始色', type: 'color', default: p.color.start },
+    { key: 'colorEnd',   label: '終了色', type: 'color', default: p.color.end },
+    { key: 'spawnRate',  label: '発生/秒', type: 'range', min: 0, max: 200, step: 1, default: p.spawnRate },
+    { key: 'sizeStart',  label: '開始サイズ', type: 'range', min: 0.02, max: 1.5, step: 0.01, default: p.size.start },
+    { key: 'sizeEnd',    label: '終了サイズ', type: 'range', min: 0.02, max: 1.5, step: 0.01, default: p.size.end },
+  ];
+}
+const FX_PARAM_DEFS = {
+  tornado: [
+    { key: 'color',            label: '色',      type: 'color', default: '#ff8b4d' },
+    { key: 'timeScale',        label: '回転速度', type: 'range', min: -1, max: 1, step: 0.01, default: 0.2 },
+    { key: 'parabolStrength',  label: '広がり',   type: 'range', min: 0, max: 2, step: 0.01, default: 1 },
+    { key: 'parabolOffset',    label: '中心高',   type: 'range', min: 0, max: 1, step: 0.01, default: 0.3 },
+    { key: 'parabolAmplitude', label: '太さ',     type: 'range', min: 0, max: 2, step: 0.01, default: 0.2 },
+    { key: 'scale',            label: 'サイズ',   type: 'range', min: 0.2, max: 6, step: 0.1, default: 1.5 },
+  ],
+  fire:  particleParamDefs('fire'),
+  smoke: particleParamDefs('smoke'),
+  spark: particleParamDefs('spark'),
+  frost: particleParamDefs('frost'),
+};
+function defaultParams(preset) {
+  const out = {};
+  for (const d of (FX_PARAM_DEFS[preset] || [])) out[d.key] = d.default;
+  return out;
+}
+// 粒子プリセットの config にパラメータを反映
+function applyParticleParams(cfg, params) {
+  if (params.colorStart != null) cfg.color.start = params.colorStart;
+  if (params.colorEnd   != null) cfg.color.end   = params.colorEnd;
+  if (params.spawnRate  != null) cfg.spawnRate   = params.spawnRate;
+  if (params.sizeStart  != null) cfg.size.start  = params.sizeStart;
+  if (params.sizeEnd    != null) cfg.size.end    = params.sizeEnd;
+}
+
+// ── Bloom（ポストプロセス。シーン全体・emissive が強く発光）──
+let post = null, bloomPass = null;
+const bloomParams = { strength: 1.0, radius: 0.1, threshold: 1.0 };
+
+// ── カスタムプリセット（fx-builder が作った *.fx.json）。'custom:<name>' で参照 ──
+const customSpecs = new Map();
+function isPersistentPreset(preset) { return preset === 'tornado' || preset.startsWith('custom:'); }
 const ANCHOR_BONES = [
   'hips', 'spine', 'chest', 'upperChest', 'neck', 'head',
   'leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand',
@@ -282,20 +332,51 @@ function updatePlayButtons() {
 // ============================================================
 // エフェクト
 // ============================================================
-function makeFx(preset) {
-  const cfg = cloneFxConfig(FX_PRESETS[preset] || FX_PRESETS.fire);
-  const fx = createFxSystem(cfg);
+function makeFx(preset, params) {
+  // tornado=TSL VFX / custom:*=fx-builder のメッシュVFX / それ以外=スプライト粒子。
+  let fx;
+  if (preset === 'tornado') {
+    fx = createTornado({
+      color: params.color, timeScale: params.timeScale,
+      parabolStrength: params.parabolStrength, parabolOffset: params.parabolOffset,
+      parabolAmplitude: params.parabolAmplitude, scale: params.scale,
+    });
+  } else if (preset.startsWith('custom:')) {
+    const spec = customSpecs.get(preset);
+    fx = spec ? createMeshFx(spec) : createFxSystem(cloneFxConfig(FX_PRESETS.fire));
+  } else {
+    const cfg = cloneFxConfig(FX_PRESETS[preset] || FX_PRESETS.fire);
+    applyParticleParams(cfg, params);
+    fx = createFxSystem(cfg);
+  }
   fx.setEmitting(false);
   scene.add(fx.object3D);
   return fx;
 }
 
+// パラメータをライブ反映（tornado=uniform直接 / 粒子=config再設定）
+function applyEffectParam(ef, key, value) {
+  ef.params[key] = value;
+  if (ef.preset === 'tornado') {
+    ef.fx.setParam(key, value);
+  } else {
+    const cfg = cloneFxConfig(FX_PRESETS[ef.preset] || FX_PRESETS.fire);
+    applyParticleParams(cfg, ef.params);
+    ef.fx.setConfig(cfg);
+  }
+}
+
 function createEffect(opts) {
   const preset = opts.preset || 'fire';
+  // tornado/custom は持続VFXなので range（期間）固定。単発指定でも range に寄せる。
+  const mode = isPersistentPreset(preset) ? 'range' : (opts.mode || 'burst');
+  // 調整パラメータ：プリセット既定 ＋ 保存値で上書き
+  const params = defaultParams(preset);
+  if (opts.params) for (const k in opts.params) if (k in params) params[k] = opts.params[k];
   const ef = {
     id: opts.id ?? nextEffectId,
     preset,
-    mode: opts.mode || 'burst',
+    mode,
     frame: opts.frame ?? timeline.currentFrame,
     start: opts.start ?? timeline.currentFrame,
     end: opts.end ?? Math.min(timeline.durationFrames, timeline.currentFrame + 15),
@@ -304,7 +385,8 @@ function createEffect(opts) {
     pos: opts.pos ? opts.pos.slice() : defaultSpawnPos(opts.anchor || 'world'),
     rot: opts.rot ? opts.rot.slice() : [0, 0, 0],
     count: opts.count ?? 24,
-    fx: makeFx(preset),
+    params,
+    fx: makeFx(preset, params),
   };
   ef.object3D = ef.fx.object3D;
   if (ef.id >= nextEffectId) nextEffectId = ef.id + 1;
@@ -358,6 +440,7 @@ function selectEffect(id) {
   gizmo.attach(handle);
   gizmo.setMode(gizmoMode);
   syncSelEditor();
+  rebuildParamUI(ef);
   rebuildFxList();
 }
 
@@ -494,7 +577,42 @@ function setGizmoMode(mode) {
 function changePreset(ef, preset) {
   if (ef.preset === preset) return;
   scene.remove(ef.object3D); ef.fx.dispose();
-  ef.preset = preset; ef.fx = makeFx(preset); ef.object3D = ef.fx.object3D;
+  ef.preset = preset;
+  ef.params = defaultParams(preset);
+  ef.fx = makeFx(preset, ef.params);
+  ef.object3D = ef.fx.object3D;
+  if (isPersistentPreset(preset) && ef.mode !== 'range') {
+    ef.mode = 'range';
+    if (ef.end <= ef.start) ef.end = Math.min(timeline.durationFrames, ef.start + 15);
+  }
+  syncSelEditor();
+  rebuildParamUI(ef);
+}
+
+// 選択エフェクトの調整パラメータUI（プリセット別スライダー/カラー）を生成
+function rebuildParamUI(ef) {
+  const host = document.getElementById('sel-params');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const d of (FX_PARAM_DEFS[ef.preset] || [])) {
+    const row = document.createElement('div'); row.className = 'row';
+    const lab = document.createElement('label'); lab.textContent = d.label; row.appendChild(lab);
+    if (d.type === 'color') {
+      const inp = document.createElement('input');
+      inp.type = 'color'; inp.value = ef.params[d.key];
+      inp.style.cssText = 'width:40px;height:22px;padding:0;border:1px solid #3a3a60;background:#16162c;cursor:pointer;';
+      inp.addEventListener('input', () => applyEffectParam(ef, d.key, inp.value));
+      row.appendChild(inp);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = 'range'; inp.min = d.min; inp.max = d.max; inp.step = d.step; inp.value = ef.params[d.key];
+      inp.style.flex = '1';
+      const val = document.createElement('span'); val.className = 'val'; val.textContent = Number(ef.params[d.key]).toFixed(2);
+      inp.addEventListener('input', () => { const v = parseFloat(inp.value); val.textContent = v.toFixed(2); applyEffectParam(ef, d.key, v); });
+      row.appendChild(inp); row.appendChild(val);
+    }
+    host.appendChild(row);
+  }
 }
 
 // ============================================================
@@ -724,7 +842,7 @@ function resizeTimeline() {
 function exportTimeline() {
   const tracks = otherTracks.map(t => ({ ...t }));   // effect 以外のトラックを温存
   for (const ef of effects) {
-    const t = { kind: 'effect', id: ef.id, preset: ef.preset, mode: ef.mode, anchor: ef.anchor, pos: ef.pos.slice(), rot: ef.rot.slice(), count: ef.count };
+    const t = { kind: 'effect', id: ef.id, preset: ef.preset, mode: ef.mode, anchor: ef.anchor, pos: ef.pos.slice(), rot: ef.rot.slice(), count: ef.count, params: { ...ef.params } };
     if (ef.anchor === 'bone') t.bone = ef.bone;
     if (ef.mode === 'range') { t.start = ef.start; t.end = ef.end; } else { t.frame = ef.frame; }
     tracks.push(t);
@@ -762,6 +880,7 @@ function importTimeline(json) {
         pos: Array.isArray(t.pos) ? t.pos : undefined,
         rot: Array.isArray(t.rot) ? t.rot : undefined,
         count: t.count,
+        params: (t.params && typeof t.params === 'object') ? t.params : undefined,
       });
     } else {
       otherTracks.push(t);   // grip/blendShape 等はそのまま温存
@@ -877,6 +996,14 @@ function setupUI() {
   const stiffSl = document.getElementById('cloth-stiffness'), stiffVal = document.getElementById('cloth-stiffness-val');
   stiffSl.addEventListener('input', () => { const v = parseFloat(stiffSl.value); stiffVal.textContent = v.toFixed(2); clothParams.stiffness = v; if (currentCloth) currentCloth.setStiffness(v); });
 
+  // Bloom スライダー（シーン全体）
+  const bStr = document.getElementById('bloom-strength'), bStrV = document.getElementById('bloom-strength-val');
+  if (bStr) bStr.addEventListener('input', () => { const v = parseFloat(bStr.value); if (bStrV) bStrV.textContent = v.toFixed(2); bloomParams.strength = v; if (bloomPass) bloomPass.strength.value = v; });
+  const bRad = document.getElementById('bloom-radius'), bRadV = document.getElementById('bloom-radius-val');
+  if (bRad) bRad.addEventListener('input', () => { const v = parseFloat(bRad.value); if (bRadV) bRadV.textContent = v.toFixed(2); bloomParams.radius = v; if (bloomPass) bloomPass.radius.value = v; });
+  const bThr = document.getElementById('bloom-threshold'), bThrV = document.getElementById('bloom-threshold-val');
+  if (bThr) bThr.addEventListener('input', () => { const v = parseFloat(bThr.value); if (bThrV) bThrV.textContent = v.toFixed(2); bloomParams.threshold = v; if (bloomPass) bloomPass.threshold.value = v; });
+
   // トリム
   document.getElementById('btn-trim-in').addEventListener('click', () => { timeline.trimIn = Math.min(timeline.currentFrame, timeline.trimOut - 1); updateTrimLabel(); renderTimeline(); });
   document.getElementById('btn-trim-out').addEventListener('click', () => { timeline.trimOut = Math.max(timeline.currentFrame, timeline.trimIn + 1); updateTrimLabel(); renderTimeline(); });
@@ -938,6 +1065,27 @@ function setupUI() {
   });
 }
 
+// fx-builder が保存した *.fx.json を読み込み、プリセット一覧に追加（'custom:<name>'）
+async function loadCustomPresets() {
+  let files = [];
+  try { files = await (await fetch('../fx/manifest.json')).json(); } catch { return; }
+  const addSel = document.getElementById('add-preset'), selSel = document.getElementById('sel-preset');
+  for (const f of files) {
+    if (!f.endsWith('.fx.json')) continue;
+    try {
+      const spec = await (await fetch('../fx/' + f)).json();
+      const name = f.replace(/\.fx\.json$/, '');
+      const key = 'custom:' + name;
+      customSpecs.set(key, spec);
+      PRESET_COLORS[key] = spec.layers?.[0]?.color || '#88ccff';
+      for (const sel of [addSel, selSel]) {
+        if (!sel) continue;
+        const o = document.createElement('option'); o.value = key; o.textContent = '📦 ' + name; sel.appendChild(o);
+      }
+    } catch (e) { console.warn('FXプリセット読込失敗:', f, e); }
+  }
+}
+
 // ============================================================
 // Render
 // ============================================================
@@ -983,7 +1131,7 @@ function render() {
   updateEffects(dt);
   syncSelectedHandle();
   controls.update();
-  renderer.render(scene, camera);
+  if (post) post.render(); else renderer.render(scene, camera);   // bloom ポストプロセス
 }
 
 // ============================================================
@@ -1046,11 +1194,21 @@ async function init() {
   gizmo.addEventListener('objectChange', onGizmoChange);
   scene.add(gizmo.getHelper ? gizmo.getHelper() : gizmo);
 
+  // Bloom ポストプロセス（emissive/明るい部分を発光）。失敗時は通常レンダにフォールバック。
+  try {
+    post = new THREE.PostProcessing(renderer);
+    const scenePass = pass(scene, camera);
+    const sceneColor = scenePass.getTextureNode();
+    bloomPass = bloom(sceneColor, bloomParams.strength, bloomParams.radius, bloomParams.threshold);
+    post.outputNode = sceneColor.add(bloomPass);
+  } catch (e) { console.warn('Bloom 初期化失敗（通常レンダに切替）:', e); post = null; bloomPass = null; }
+
   timer.connect(document);
 
   resizeTimeline();
   renderTimeline();
   setupUI();
+  loadCustomPresets();   // fx-builder の *.fx.json をプリセット一覧へ
   setupTimelineEvents(document.getElementById('timeline'));
   setupTimelineResize();
 

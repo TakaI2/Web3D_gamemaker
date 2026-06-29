@@ -1,0 +1,1 @@
+{"version":1,"id":"ken","boneMaxBend":{"leftUpperArm":180,"rightUpperArm":180,"leftLowerArm":5,"rightLowerArm":5,"spine":46,"chest":69,"upperChest":131},"params":{"gravity":-29,"stiffness":0.6,"iterations":9,"foldLimit":0.6,"drag":0.015,"limitDamp":0.5,"selfCollision":true,"bodyScale":0.95,"rigidBones":["leftShoulder","rightShoulder","leftUpperLeg","rightUpperLeg"]}}

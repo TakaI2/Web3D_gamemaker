@@ -195,6 +195,8 @@ function unloadVRM() {
   anchorEditMode = null;
   document.getElementById('anchor-section').style.display = 'none';
   document.getElementById('anchor-section-placeholder').style.display = '';
+  const npcExp = document.getElementById('npc-export-section');
+  if (npcExp) npcExp.style.display = 'none';
   const anchorBtn = document.getElementById('btn-anchor-mode');
   if (anchorBtn) { anchorBtn.classList.remove('active'); anchorBtn.textContent = 'アンカー編集 OFF'; }
 }
@@ -1565,6 +1567,7 @@ async function importNPCBundle(bundle) {
     currentVRMFile = vrmFile;
     updateMeshList();
     _populateAnchorBoneDropdown(currentVRM);
+    document.getElementById('npc-export-section').style.display = '';
 
     // 2) cloth（マント）復元：currentVRM があるので pin/grip/アンカー/コライダーまで復元される
     if (bundle.cloth) loadMantleJSON(bundle.cloth);
@@ -1598,7 +1601,7 @@ async function importNPCBundle(bundle) {
     // 4) timeline 保持（再書き出しで再添付）
     importedTimeline = bundle.timeline ?? null;
 
-    const parts = ['VRM', bundle.vrma ? 'VRMA' : null, 'Cloth', bundle.timeline ? 'Timeline' : null].filter(Boolean);
+    const parts = ['VRM', bundle.vrma ? 'VRMA' : null, bundle.cloth ? 'Cloth' : null, bundle.timeline ? 'Timeline' : null].filter(Boolean);
     showToast(`再インポート完了（${parts.join(' + ')}）`);
   } catch (err) {
     showToast(`再インポート失敗: ${err.message}`, 'error');
@@ -1610,7 +1613,7 @@ async function importNPCBundle(bundle) {
 // fps-cloth-vrm の「NPC一括読込」で読める形式（format: "fps-npc-bundle"）。
 async function exportNPCBundle() {
   if (!currentVRMFile) { showToast('先にVRMを読み込んでください', 'error'); return; }
-  if (!mantleData)     { showToast('マントが読み込まれていません', 'error'); return; }
+  // マントは任意（素体NPCも書き出せる）
 
   // 保存名を決定（読込元名があればそれを既定＝上書き、変えれば別名保存）。public/npc に保存。
   const def = loadedNpcName || currentVRMFile.name.replace(/\.vrm$/i, '');
@@ -1656,7 +1659,7 @@ async function exportNPCBundle() {
       name,
       vrm:  'data:application/octet-stream;base64,' + vrmB64,
       vrma: vrmaDataURI,
-      cloth: buildMantleExport(),
+      cloth: mantleData ? buildMantleExport() : null,   // マント無しの素体は null
       timeline,
     };
 
@@ -1668,7 +1671,7 @@ async function exportNPCBundle() {
     if (!j.ok) { showToast('保存失敗', 'error'); return; }
     loadedNpcName = base;   // 以後の既定名を更新
 
-    const parts = ['VRM', vrmaDataURI ? 'VRMA' : null, 'Cloth', timeline ? 'Timeline' : null].filter(Boolean);
+    const parts = ['VRM', vrmaDataURI ? 'VRMA' : null, mantleData ? 'Cloth' : null, timeline ? 'Timeline' : null].filter(Boolean);
     showToast(`保存: ${j.path}（${parts.join(' + ')}）`);
   } catch (err) {
     showToast(`バンドル書き出し失敗: ${err.message}`, 'error');
@@ -1881,6 +1884,7 @@ function setupUI() {
       currentVRMFile = file;
       updateMeshList();
       _populateAnchorBoneDropdown(currentVRM);
+      document.getElementById('npc-export-section').style.display = '';   // マント無しでも npc 書き出し可
       showToast(`VRM 読み込み完了 (${meshes.length} メッシュ)`);
     } catch (err) {
       showToast(`読み込み失敗: ${err.message}`, 'error');

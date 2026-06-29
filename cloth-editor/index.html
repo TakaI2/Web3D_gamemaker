@@ -336,6 +336,17 @@
       <input type="file" id="import-npc-file" accept=".json" style="display:none">
     </div>
 
+    <div class="p-section" id="npc-export-section" style="display:none;">
+      <div class="p-section-title">NPC 書き出し</div>
+      <button class="btn-sm" id="btn-export-npc" style="width:100%;background:rgba(80,120,200,0.25);border-color:rgba(110,170,255,0.5);color:#bdf;font-weight:bold;">
+        NPCバンドル書き出し (.npc.json)
+      </button>
+      <div style="font-size:10px;opacity:.6;margin-top:3px;">VRM＋選択中VRMA（＋マント/任意）を public/npc に保存。マント無しの素体もOK。</div>
+      <label style="font-size:10px;opacity:.7;display:block;margin-top:4px;">timeline.json を同梱（任意）:
+        <input type="file" id="bundle-tl-file" accept=".json" style="font-size:10px;width:100%;margin-top:2px;">
+      </label>
+    </div>
+
     <div class="p-section">
       <div class="p-section-title">VRMA アニメーション</div>
       <select id="vrma-select" style="width:100%;margin-bottom:5px;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:3px 5px;font-size:11px;">
@@ -414,17 +425,10 @@
     </div>
 
     <div class="p-section" id="mantle-export-section" style="display:none;">
-      <div class="p-section-title">エクスポート</div>
+      <div class="p-section-title">マント エクスポート</div>
       <button class="btn-sm" id="btn-export-grip" style="width:100%;background:rgba(80,160,80,0.2);border-color:rgba(100,200,100,0.4);color:#9eb;">
         グリップ付きで保存 (.json)
       </button>
-      <button class="btn-sm" id="btn-export-npc" style="width:100%;margin-top:6px;background:rgba(80,120,200,0.25);border-color:rgba(110,170,255,0.5);color:#bdf;font-weight:bold;">
-        NPCバンドル書き出し (.npc.json)
-      </button>
-      <div style="font-size:10px;opacity:.6;margin-top:3px;">VRM+選択中VRMA+このマントを1ファイルに</div>
-      <label style="font-size:10px;opacity:.7;display:block;margin-top:4px;">timeline.json を同梱（任意）:
-        <input type="file" id="bundle-tl-file" accept=".json" style="font-size:10px;width:100%;margin-top:2px;">
-      </label>
     </div>
 
     <div class="p-section" id="mantle-transform-section" style="display:none;">
