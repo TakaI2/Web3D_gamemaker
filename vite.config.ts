@@ -93,6 +93,17 @@ export default defineConfig({
           res.end(JSON.stringify(files));
         });
 
+        // スプライトシート画像一覧（public/ 直下の画像。FXビルダーのテクスチャ選択用）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/sheets/manifest.json')) return next();
+          const files = fs.existsSync(pub)
+            ? fs.readdirSync(pub).filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f))
+            : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
         // NPC バンドル一覧（base に依らずパス末尾で判定）
         server.middlewares.use((req, res, next) => {
           const url = (req.url || '').split('?')[0];

@@ -1,0 +1,46 @@
+{
+  "format": "fx-preset",
+  "version": 1,
+  "name": "new_effect",
+  "layers": [
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#ffffff",
+      "colorEnd": "#ffffff",
+      "spawnRate": 90,
+      "sizeStart": 0.03,
+      "sizeEnd": 0.88,
+      "texture": "../riquid.png",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "frames": {
+        "cols": 4,
+        "rows": 4,
+        "fps": 12
+      },
+      "spread": 17,
+      "shape": "point",
+      "dir": [
+        100,
+        0,
+        0
+      ],
+      "gravity": -1.4
+    }
+  ]
+}

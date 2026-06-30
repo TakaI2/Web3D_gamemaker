@@ -22,6 +22,15 @@ let fpsFrames = 0, fpsLast = performance.now();
 
 const PARTICLE_PRESETS = ['fire', 'smoke', 'spark', 'frost'];
 
+// public/ 直下のスプライトシート画像（manifest から取得）。{ value:'../name', label:'name' }
+let sheetTextures = [];
+async function loadSheetManifest() {
+  try {
+    const files = await (await fetch('../sheets/manifest.json')).json();
+    sheetTextures = (Array.isArray(files) ? files : []).map(f => ({ value: '../' + f, label: f }));
+  } catch { sheetTextures = []; }
+}
+
 function defaultMeshLayer() {
   return {
     type: 'mesh', geom: 'cylinder', size: 1, height: 1.5, color: '#ff8b4d', opacity: 1, emissive: 1.4,
@@ -228,11 +237,14 @@ function uiVec2(host, label, arr, step, on) { uiVecN(host, label, arr, 2, step, 
 function uiTexture(host, layer) {
   const r = uiRow('テクスチャ');
   const sel = document.createElement('select'); sel.style.flex = '1';
-  for (const t of BUILTIN_TEXTURES) { const o = document.createElement('option'); o.value = 'builtin:' + t.id; o.textContent = t.label; sel.appendChild(o); }
-  const up = document.createElement('option'); up.value = '__upload'; up.textContent = '画像を選ぶ…'; sel.appendChild(up);
-  if (layer.texture && !layer.texture.startsWith('builtin:')) {
-    const o = document.createElement('option'); o.value = layer.texture; o.textContent = '(アップロード画像)'; sel.appendChild(o); sel.value = layer.texture;
-  } else sel.value = layer.texture || 'builtin:soft';
+  const addOpt = (value, label) => { const o = document.createElement('option'); o.value = value; o.textContent = label; sel.appendChild(o); };
+  for (const t of BUILTIN_TEXTURES) addOpt('builtin:' + t.id, t.label);
+  for (const s of sheetTextures) addOpt(s.value, '🎞 ' + s.label);   // public/ のシート画像
+  addOpt('__upload', '画像を選ぶ…');
+  const known = [...BUILTIN_TEXTURES.map(t => 'builtin:' + t.id), ...sheetTextures.map(s => s.value)];
+  if (layer.texture && known.includes(layer.texture)) sel.value = layer.texture;
+  else if (layer.texture && !layer.texture.startsWith('builtin:')) { addOpt(layer.texture, '(アップロード画像)'); sel.value = layer.texture; }
+  else sel.value = layer.texture || 'builtin:soft';
   sel.addEventListener('change', () => {
     if (sel.value === '__upload') pickTexture(layer, sel);
     else { layer.texture = sel.value; markDirty(); }
@@ -343,7 +355,27 @@ function rebuildLayerEditor() {
     uiSlider(host, '発生/秒', l.spawnRate, 0, 200, 1, v => { l.spawnRate = v; markDirty(); });
     uiSlider(host, '開始サイズ', l.sizeStart, 0.02, 1.5, 0.01, v => { l.sizeStart = v; markDirty(); });
     uiSlider(host, '終了サイズ', l.sizeEnd, 0.02, 1.5, 0.01, v => { l.sizeEnd = v; markDirty(); });
+    const presetCfg = FX_PRESETS[l.preset] || FX_PRESETS.fire;
+    uiSlider(host, '重力(Y)', l.gravity != null ? l.gravity : presetCfg.acceleration[1], -20, 20, 0.1, v => { l.gravity = v; markDirty(); });
+    uiSlider(host, '抵抗', l.drag != null ? l.drag : presetCfg.drag, 0, 3, 0.05, v => { l.drag = v; markDirty(); });
+    uiSlider(host, 'ストレッチ', l.stretch != null ? l.stretch : 0, 0, 0.5, 0.01, v => { l.stretch = v; markDirty(); });
+    // 床コリジョン（地面で弾ける/消える）
+    uiSelect(host, '床衝突', [{ value: 'none', label: 'なし' }, { value: 'bounce', label: 'バウンド(はじける)' }, { value: 'kill', label: '消滅' }], l.floorMode || 'none', v => { l.floorMode = v; markDirty(); });
+    uiSlider(host, '地面Y(世界)', l.floorY != null ? l.floorY : 0, -5, 5, 0.05, v => { l.floorY = v; markDirty(); });
+    uiSlider(host, '反発', l.bounce != null ? l.bounce : 0.4, 0, 1, 0.05, v => { l.bounce = v; markDirty(); });
+    // エミッタ（発生位置の形状・方向・拡散・速度）
+    uiSelect(host, '発生形状', [{ value: 'point', label: '点' }, { value: 'disc', label: '円(平面)' }, { value: 'box', label: '箱' }], l.shape || presetCfg.emitter.shape, v => { l.shape = v; markDirty(); });
+    uiSlider(host, '半径(円)', l.radius != null ? l.radius : presetCfg.emitter.radius, 0, 2, 0.01, v => { l.radius = v; markDirty(); });
+    { const bsz = l.boxSize || presetCfg.emitter.size.slice(); uiVec(host, '箱サイズ', bsz, 0.05, () => { l.boxSize = bsz; markDirty(); }); }
+    { const sp = l.speed || presetCfg.velocity.speed.slice(); uiVec2(host, '速度 min/max', sp, 0.1, () => { l.speed = sp; markDirty(); }); }
+    { const dir = l.dir || presetCfg.emitter.rotation.slice(); uiVec(host, '発生方向(度)', dir, 5, () => { l.dir = dir; markDirty(); }); }
+    uiSlider(host, '拡散(度)', l.spread != null ? l.spread : presetCfg.velocity.spreadDeg, 0, 90, 1, v => { l.spread = v; markDirty(); });
+    // 回転（初期角度・回転速度 各 min/max）。※ストレッチ>0 のときは速度方向整列が優先
+    { const ss = l.spinStart || (presetCfg.spin ? presetCfg.spin.startDeg.slice() : [0, 0]); uiVec2(host, '初期角 min/max', ss, 5, () => { l.spinStart = ss; markDirty(); }); }
+    { const sv = l.spinSpeed || (presetCfg.spin ? presetCfg.spin.speedDeg.slice() : [0, 0]); uiVec2(host, '回転速度 min/max', sv, 5, () => { l.spinSpeed = sv; markDirty(); }); }
     uiTexture(host, l);
+    uiFrames(host, l);   // スプライトシート（タイル）アニメ
+    uiSelect(host, 'コマ再生', [{ value: 'overLife', label: '寿命で1巡' }, { value: 'loop', label: 'ループ' }, { value: 'once', label: '1回' }], (l.frames && l.frames.mode) || 'overLife', v => { if (!l.frames) l.frames = { cols: 1, rows: 1, fps: 12 }; l.frames.mode = v; markDirty(); });
     uiSelect(host, '合成', [{ value: 'additive', label: '加算' }, { value: 'normal', label: '通常' }], l.blending, v => { l.blending = v; markDirty(); });
   }
   // 共通：トランスフォーム
@@ -493,6 +525,7 @@ async function init() {
   } catch (e) { console.warn('Bloom 初期化失敗:', e); post = null; bloomPass = null; }
 
   timer.connect(document);
+  await loadSheetManifest();   // public/ のシート画像をテクスチャ選択へ
   setupUI();
   rebuildLayerList(); rebuildLayerEditor();
   rebuildFx();
