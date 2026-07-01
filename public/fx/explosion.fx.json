@@ -1,0 +1,82 @@
+{
+  "format": "fx-preset",
+  "version": 1,
+  "name": "explosion",
+  "layers": [
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#fff2b0",
+      "colorEnd": "#e23b13",
+      "spawnRate": 1,
+      "sizeStart": 0.08,
+      "sizeEnd": 1.31,
+      "texture": "../explosion2.png",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        2,
+        2,
+        2
+      ],
+      "frames": {
+        "cols": 4,
+        "rows": 4,
+        "fps": 20
+      },
+      "shape": "point",
+      "speed": [
+        0,
+        0
+      ],
+      "spinStart": [
+        0,
+        360
+      ],
+      "gravity": 0
+    },
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#fff2b0",
+      "colorEnd": "#e23b13",
+      "spawnRate": 1,
+      "sizeStart": 0.1,
+      "sizeEnd": 0.86,
+      "texture": "../smoke.png",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        2,
+        2,
+        2
+      ],
+      "frames": {
+        "cols": 4,
+        "rows": 4,
+        "fps": 12
+      },
+      "shape": "point",
+      "gravity": 0.7,
+      "drag": 1.5
+    }
+  ]
+}

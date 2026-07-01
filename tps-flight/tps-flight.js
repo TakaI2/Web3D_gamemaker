@@ -14,6 +14,9 @@ import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?d
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
   from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
+import { createMeshFx } from '../lib/fx-mesh.js';
+import { createTornado } from '../lib/fx-tornado.js';
+import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 
 // ── アリーナ ───────────────────────────────────────────────────
@@ -314,17 +317,57 @@ function stepObjects(dt) {
   }
 }
 
+// ── 爆発エフェクト（public/fx/explosion.fx.json）を着弾で一発再生。プールで使い回す。──
+const EXPLOSION_POOL = 12, EXPLOSION_LIFE = 1.2, EXPLOSION_BURST = 2;
+let explosionReady = false;
+const explosions = [];   // { fx, until }
+
+async function loadExplosion() {
+  let spec;
+  try { spec = await (await fetch('../fx/explosion.fx.json')).json(); } catch { return; }
+  if (!Array.isArray(spec.layers)) return;
+  // ゲーム用：連続発生を止めてバースト駆動、粒数を絞る（性能）
+  for (const l of spec.layers) { if (l.type === 'particle') { l.spawnRate = 0; if (l.maxParticles == null) l.maxParticles = 24; } }
+  for (let i = 0; i < EXPLOSION_POOL; i++) {
+    try { const fx = createMeshFx(spec); fx.setEmitting(false); scene.add(fx.object3D); explosions.push({ fx, until: 0 }); }
+    catch (e) { console.warn('爆発プール生成失敗', e); break; }
+  }
+  explosionReady = explosions.length > 0;
+}
+
+function spawnExplosion(pos) {
+  if (!explosionReady) return;
+  let slot = explosions.find(e => e.until <= 0);
+  if (!slot) { slot = explosions[0]; for (const e of explosions) if (e.until < slot.until) slot = e; }   // 空きが無ければ最古を再利用
+  slot.fx.object3D.position.copy(pos);
+  slot.fx.object3D.visible = true;
+  slot.fx.burst(EXPLOSION_BURST);
+  slot.until = EXPLOSION_LIFE;
+}
+
+function updateExplosions(dt) {
+  for (const e of explosions) {
+    if (e.until <= 0) continue;
+    e.fx.update(dt);
+    e.until -= dt;
+    if (e.until <= 0) e.fx.object3D.visible = false;
+  }
+}
+
 function stepProjectiles(dt) {
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
     p.pos.addScaledVector(p.vel, dt); p.ttl -= dt;
-    let dead = p.ttl <= 0 || Math.abs(p.pos.x) > ROOM.x / 2 || p.pos.y < 0 || p.pos.y > ROOM.y || Math.abs(p.pos.z) > ROOM.z / 2;
+    const outOfBounds = Math.abs(p.pos.x) > ROOM.x / 2 || p.pos.y < 0 || p.pos.y > ROOM.y || Math.abs(p.pos.z) > ROOM.z / 2;
+    let dead = p.ttl <= 0 || outOfBounds;
+    if (outOfBounds) spawnExplosion(p.pos);   // 地面・壁・天井に着弾 → 爆発
     if (!dead) {
       for (const obj of objects) {
         const rr = p.radius + obj.radius;
         if (p.pos.distanceToSquared(obj.pos) <= rr * rr) {
           _hitDir.copy(obj.pos).sub(p.pos); if (_hitDir.lengthSq() < 1e-8) _hitDir.copy(p.vel); _hitDir.normalize();
           obj.vel.addScaledVector(_hitDir, p.power ?? 18); clampSpeed(obj.vel);
+          spawnExplosion(p.pos);               // オブジェクト着弾 → 爆発
           if (!p.big) { dead = true; break; }   // ラージショットは貫通（複数を吹き飛ばす）
         }
       }
@@ -447,6 +490,7 @@ async function loadPlayer() {
       const tout = Number.isFinite(tl.trimOut) ? Math.max(tin + 1, Math.min(tl.trimOut, total)) : total;
       const speed = (Number.isFinite(tl.speed) && tl.speed > 0) ? tl.speed : 1;   // 再生速度（cloth-preview で保存）
       player.states[name] = { action, timeline: tl, fps, dur: clip.duration, loop: def.loop, trimIn: tin, trimOut: tout, total, speed };
+      await createStateEffects(player.states[name], tl);   // timeline の effect トラックを準備
     } catch (e) { console.warn('状態ロード失敗:', name, e); }
   }
 
@@ -462,8 +506,10 @@ async function loadPlayer() {
 
 function setState(name) {
   if (!player.states[name] || player.current === name) return;
+  if (player.current && player.states[player.current]) hideStateEffects(player.states[player.current]);
   const prev = player.current ? player.states[player.current].action : null;
   const next = player.states[name];
+  next.effLastFrame = -1;   // 効果の発火追跡をリセット（状態頭から）
   next.action.reset();
   next.action.setEffectiveTimeScale(next.speed || 1);   // 再生速度（timeline.json の speed）
   next.action.setEffectiveWeight(1);
@@ -543,6 +589,100 @@ function applyTrim() {
   if (changed) player.mixer.update(0);   // クランプ後の時刻で再サンプル
 }
 
+// ── timeline の effect トラック再生（FXエディタで配置した効果をアニメと同期して発生）──
+const D2R = THREE.MathUtils.degToRad;
+const _efPos = new THREE.Vector3(), _efQuat = new THREE.Quaternion(), _efTmpQ = new THREE.Quaternion();
+const _efOff = new THREE.Vector3(), _efE = new THREE.Euler(), _EF_UP = new THREE.Vector3(0, 1, 0);
+const _fxSpecCache = new Map();
+
+async function loadFxSpec(name) {
+  if (_fxSpecCache.has(name)) return _fxSpecCache.get(name);
+  let spec = null;
+  try { const j = await (await fetch('../fx/' + name + '.fx.json')).json(); if (Array.isArray(j.layers)) spec = j; } catch { /* 無し */ }
+  _fxSpecCache.set(name, spec);
+  return spec;
+}
+
+// effect トラックから fx インスタンスを生成（custom:*=メッシュVFX / tornado / 粒子）
+async function makeEffectFx(track) {
+  const preset = track.preset || 'fire';
+  if (preset.startsWith('custom:')) {
+    const spec = await loadFxSpec(preset.slice(7));
+    return spec ? createMeshFx(spec) : null;
+  }
+  if (preset === 'tornado') {
+    const p = track.params || {};
+    return createTornado({ color: p.color, timeScale: p.timeScale, parabolStrength: p.parabolStrength, parabolOffset: p.parabolOffset, parabolAmplitude: p.parabolAmplitude, scale: p.scale });
+  }
+  const cfg = cloneFxConfig(FX_PRESETS[preset] || FX_PRESETS.fire);
+  const pr = track.params || {};
+  if (pr.colorStart) cfg.color.start = pr.colorStart;
+  if (pr.colorEnd) cfg.color.end = pr.colorEnd;
+  if (pr.spawnRate != null) cfg.spawnRate = pr.spawnRate;
+  if (pr.sizeStart != null) cfg.size.start = pr.sizeStart;
+  if (pr.sizeEnd != null) cfg.size.end = pr.sizeEnd;
+  return createFxSystem(cfg);
+}
+
+// 状態の timeline から effect を生成してシーンに配置（非表示で待機）
+async function createStateEffects(st, tl) {
+  st.effects = [];
+  st.effLastFrame = -1;
+  for (const trk of (tl.tracks || [])) {
+    if (trk.kind !== 'effect') continue;
+    try {
+      const fx = await makeEffectFx(trk);
+      if (!fx) continue;
+      fx.setEmitting(false);
+      fx.object3D.visible = false;
+      scene.add(fx.object3D);
+      st.effects.push({ track: trk, fx });
+    } catch (e) { console.warn('効果生成失敗:', trk, e); }
+  }
+}
+
+// 発生位置：bone=プレイヤーのボーン追従 / world=キャラのルート相対（位置＋体の向き）
+function computeEffectTransform(trk, obj) {
+  const pos = trk.pos || [0, 0, 0], rot = trk.rot || [0, 0, 0];
+  _efE.set(D2R(rot[0]), D2R(rot[1]), D2R(rot[2]));
+  if (trk.anchor === 'bone' && player.vrm) {
+    const node = player.vrm.humanoid?.getNormalizedBoneNode(trk.bone);
+    if (node) {
+      node.updateWorldMatrix(true, false);
+      node.getWorldPosition(_efPos); node.getWorldQuaternion(_efQuat);
+      obj.quaternion.copy(_efQuat).multiply(_efTmpQ.setFromEuler(_efE));
+      obj.position.copy(_efOff.set(pos[0], pos[1], pos[2]).applyQuaternion(_efQuat)).add(_efPos);
+      return;
+    }
+  }
+  _efQuat.setFromAxisAngle(_EF_UP, player.yaw + FACE_OFFSET);
+  obj.quaternion.copy(_efQuat).multiply(_efTmpQ.setFromEuler(_efE));
+  obj.position.copy(_efOff.set(pos[0], pos[1], pos[2]).applyQuaternion(_efQuat)).add(player.pos);
+}
+
+function driveStateEffects(st, frame, dt) {
+  if (!st || !st.effects || !st.effects.length) return;
+  let prev = st.effLastFrame;
+  if (frame < prev) prev = frame - 1;   // ループ折返し時は取りこぼしを避けるだけ
+  for (const ef of st.effects) {
+    const trk = ef.track;
+    computeEffectTransform(trk, ef.fx.object3D);
+    if (trk.mode === 'range') {
+      ef.fx.setEmitting(frame >= (trk.start ?? 0) && frame <= (trk.end ?? 0));
+    } else if (trk.frame > prev && trk.frame <= frame) {
+      ef.fx.object3D.visible = true;
+      ef.fx.burst(trk.count || 10);   // 発射フレームを跨いだ瞬間に一発
+    }
+    ef.fx.update(dt);
+  }
+  st.effLastFrame = frame;
+}
+
+function hideStateEffects(st) {
+  if (!st || !st.effects) return;
+  for (const ef of st.effects) { ef.fx.setEmitting(false); ef.fx.object3D.visible = false; }
+}
+
 function updatePlayerAnim(dt) {
   if (!player.ready) return;
   updateAfk(dt);
@@ -557,13 +697,11 @@ function updatePlayerAnim(dt) {
   player.mixer.update(dt);
   applyTrim();   // トリム区間 [trimIn,trimOut] に再生時刻をクランプ（ループ=折返し / 単発=末尾保持）
   player.vrm.update(dt);
-  // マント：現在状態の timeline フレームで grip を更新（フレームは元のtimeline番号＝gripと整合）
-  if (player.cloth) {
-    const st = player.states[player.current];
-    let frame = 0;
-    if (st) frame = Math.floor(player.states[player.current].action.time * st.fps);
-    player.cloth.update(dt, frame);
-  }
+  // 現在状態の timeline フレーム（元番号）。マント grip と effect の同期に使う。
+  const cst = player.states[player.current];
+  const curFrame = cst ? Math.floor(cst.action.time * cst.fps) : 0;
+  if (player.cloth && cst) player.cloth.update(dt, curFrame);
+  if (cst) driveStateEffects(cst, curFrame, dt);   // FXエディタで配置した effect をアニメと同期して発生
 }
 
 // ── NPC（1体。swing-catch の挙動：浮遊移動＋掴める/撃てる＋ラグドール復帰）──
@@ -1205,6 +1343,7 @@ function render() {
   if (isLocked) updateFlight(dt);
   updatePlayerAnim(dt);
   updateNpcs(dt);
+  updateExplosions(dt);
   updateCamera(dt);
 
   const tps = 1 / STEP_HZ; let steps = 0; timeSinceLastStep += dt;
@@ -1272,6 +1411,8 @@ async function init() {
   loadNpc().catch(e => console.warn('NPC 読み込み失敗:', e));
   // 一般人モブ（地上で逃げまどう）。素材を用意してから既定数スポーン。
   prepareMobAssets().then(ok => { if (ok) setMobCount(DEFAULT_MOB_COUNT); }).catch(e => console.warn('モブ準備失敗:', e));
+  // 着弾爆発（explosion.fx.json）プール
+  loadExplosion().catch(e => console.warn('爆発読み込み失敗:', e));
 
   setupUI();
   setupControls();

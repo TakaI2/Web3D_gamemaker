@@ -17,6 +17,7 @@ const bloomParams = { strength: 1.2, radius: 0.2, threshold: 0.6 };
 
 let fx = null;
 let specDirty = false;
+let previewContinuous = true;   // 連続プレビュー。OFF＝単発（発射ボタンでバースト）
 let selectedLayer = 0;
 let fpsFrames = 0, fpsLast = performance.now();
 
@@ -184,7 +185,14 @@ function rebuildFx() {
   if (fx) { scene.remove(fx.object3D); fx.dispose(); }
   fx = createMeshFx(spec);
   scene.add(fx.object3D);
-  fx.setEmitting(true);
+  fx.setEmitting(previewContinuous);   // 連続プレビュー / 単発は発射ボタンで
+  if (!previewContinuous) fx.object3D.visible = true;   // 単発でも配置は見せる（発射待ち）
+}
+// 単発（バースト）を1回。発射系・爆発系の試し用。
+function testFire() {
+  if (!fx) return;
+  fx.object3D.visible = true;
+  fx.burst(10);
 }
 function markDirty() { specDirty = true; }
 
@@ -479,6 +487,12 @@ function setupUI() {
   document.getElementById('btn-up-layer').addEventListener('click', () => moveLayer(-1));
   document.getElementById('btn-down-layer').addEventListener('click', () => moveLayer(1));
   document.getElementById('btn-save').addEventListener('click', savePreset);
+  document.getElementById('btn-fire').addEventListener('click', testFire);
+  const cbCont = document.getElementById('cb-continuous');
+  if (cbCont) cbCont.addEventListener('change', () => {
+    previewContinuous = cbCont.checked;
+    if (fx) { fx.setEmitting(previewContinuous); if (!previewContinuous) fx.object3D.visible = true; }
+  });
   document.getElementById('btn-new').addEventListener('click', () => { spec = { format: 'fx-preset', version: 1, name: document.getElementById('preset-name').value || 'new_effect', layers: [defaultMeshLayer()] }; selectedLayer = 0; rebuildLayerList(); rebuildLayerEditor(); markDirty(); });
   const loadSel = document.getElementById('load-select');
   loadSel.addEventListener('change', () => { if (loadSel.value) loadPreset(loadSel.value); });

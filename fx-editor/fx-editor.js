@@ -129,6 +129,13 @@ const _sp = new THREE.Vector3(), _sq = new THREE.Quaternion(), _se = new THREE.E
 const _tq = new THREE.Quaternion();   // computeSpawnTransform 内部用（outQuat との別名衝突回避）
 const _bonePos = new THREE.Vector3(), _boneQuat = new THREE.Quaternion(), _boneInv = new THREE.Quaternion();
 const D2R = THREE.MathUtils.degToRad, R2D = THREE.MathUtils.radToDeg;
+const _fv = new THREE.Vector3(), _phDir = new THREE.Vector3();
+
+// ── 物理テスト（弾＝物理ボール。基準点から発射→壁/床でバウンド。着弾で効果・力をテスト）──
+const PROOM = { s: 12, h: 3.2 };   // buildRoom と一致（床y=0, 壁±6, 天井3.2）
+const physBalls = [];              // { mesh, pos, vel, radius }
+const phys = { count: 1, gravity: -4, restitution: 0.5, radius: 0.14, speed: 8, pitch: 0, yaw: 0 };
+const PHYS_SPAWN = new THREE.Vector3(0, 1.2, -4);   // 基準点（手前から前方+Zへ）
 
 // ============================================================
 // 部屋（地面＋壁）
@@ -385,6 +392,10 @@ function createEffect(opts) {
     pos: opts.pos ? opts.pos.slice() : defaultSpawnPos(opts.anchor || 'world'),
     rot: opts.rot ? opts.rot.slice() : [0, 0, 0],
     count: opts.count ?? 24,
+    onImpact: !!opts.onImpact,                 // 弾の着弾で発生
+    force: opts.force ?? 0,                     // 発生時に物理ボールへ加える力
+    forceRadius: opts.forceRadius ?? 2,
+    _impactCd: 0,
     params,
     fx: makeFx(preset, params),
   };
@@ -447,6 +458,11 @@ function selectEffect(id) {
 // 発生位置のワールド変換を算出（anchor に応じて）
 function computeSpawnTransform(ef, outPos, outQuat) {
   _se.set(D2R(ef.rot[0]), D2R(ef.rot[1]), D2R(ef.rot[2]));
+  if (ef.anchor === 'object' && physBalls.length) {
+    outPos.set(ef.pos[0], ef.pos[1], ef.pos[2]).add(physBalls[0].pos);   // 弾に追従（オフセット付き）
+    outQuat.setFromEuler(_se);
+    return;
+  }
   if (ef.anchor === 'bone' && currentVRM) {
     const node = currentVRM.humanoid?.getNormalizedBoneNode(ef.bone);
     if (node) {
@@ -505,6 +521,7 @@ function fireBurstsBetween(prev, cur) {
       computeSpawnTransform(ef, _sp, _sq);
       ef.object3D.position.copy(_sp); ef.object3D.quaternion.copy(_sq);
       ef.fx.burst(ef.count);
+      applyEffectForce(ef, _sp);   // 発生時に力
     }
   }
 }
@@ -512,11 +529,90 @@ function fireBurstsBetween(prev, cur) {
 function updateEffects(dt) {
   const f = timeline.currentFrame;
   for (const ef of effects) {
+    if (ef._impactCd > 0) ef._impactCd -= dt;
+    if (ef.onImpact) { ef.fx.update(dt); continue; }   // 着弾系は onPhysImpact 側で配置・発生
     computeSpawnTransform(ef, _sp, _sq);
     ef.object3D.position.copy(_sp);
     ef.object3D.quaternion.copy(_sq);
-    ef.fx.setEmitting(ef.mode === 'range' && f >= ef.start && f <= ef.end);
+    let emit = ef.mode === 'range' && f >= ef.start && f <= ef.end;
+    if (ef.anchor === 'object') emit = physBalls.length ? physBalls[0].vel.lengthSq() > 0.25 : false;   // 弾が動いている間トレイル
+    ef.fx.setEmitting(emit);
     ef.fx.update(dt);
+  }
+}
+
+// ============================================================
+// 物理テスト（弾・着弾・力）
+// ============================================================
+function clearPhysBalls() { for (const b of physBalls) scene.remove(b.mesh); physBalls.length = 0; }
+
+function setPhysBalls(n) {
+  clearPhysBalls();
+  const geom = new THREE.SphereGeometry(phys.radius, 16, 12);
+  for (let i = 0; i < n; i++) {
+    const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0xffcc44, emissive: 0x442200, roughness: 0.4, metalness: 0.2 }));
+    const a = n > 1 ? (i / n) * Math.PI * 2 : 0;
+    const pos = new THREE.Vector3(Math.cos(a) * (n > 1 ? 1.2 : 0), phys.radius, Math.sin(a) * (n > 1 ? 1.2 : 0)).add(n > 1 ? new THREE.Vector3(0, 0, 0) : PHYS_SPAWN.clone().setY(phys.radius));
+    mesh.position.copy(pos);
+    scene.add(mesh);
+    physBalls.push({ mesh, pos, vel: new THREE.Vector3(), radius: phys.radius });
+  }
+}
+
+// 基準点から前方(+Z を pitch/yaw で回した向き)へ発射
+function launchPhys() {
+  if (!physBalls.length) setPhysBalls(phys.count);
+  const cp = Math.cos(D2R(phys.pitch)), sp = Math.sin(D2R(phys.pitch)), cy = Math.cos(D2R(phys.yaw)), sy = Math.sin(D2R(phys.yaw));
+  _phDir.set(cp * sy, sp, cp * cy).normalize();
+  for (const b of physBalls) {
+    b.pos.copy(PHYS_SPAWN);
+    b.vel.copy(_phDir).multiplyScalar(phys.speed);
+    b.vel.x += (Math.random() - 0.5) * phys.speed * 0.08;
+    b.vel.y += (Math.random() - 0.5) * phys.speed * 0.04;
+    b.mesh.position.copy(b.pos);
+  }
+}
+
+function updatePhysics(dt) {
+  if (!physBalls.length) return;
+  const hs = PROOM.s / 2, ceil = PROOM.h, e = phys.restitution;
+  for (const b of physBalls) {
+    b.vel.y += phys.gravity * dt;
+    b.pos.addScaledVector(b.vel, dt);
+    const r = b.radius, pre = b.vel.length();
+    let hit = false;
+    if (b.pos.y < r)        { b.pos.y = r;        if (b.vel.y < 0) { b.vel.y = -b.vel.y * e; b.vel.x *= 0.8; b.vel.z *= 0.8; hit = true; } }
+    else if (b.pos.y > ceil - r) { b.pos.y = ceil - r; if (b.vel.y > 0) { b.vel.y = -b.vel.y * e; hit = true; } }
+    if (b.pos.x < -hs + r)  { b.pos.x = -hs + r;  if (b.vel.x < 0) { b.vel.x = -b.vel.x * e; hit = true; } }
+    else if (b.pos.x > hs - r) { b.pos.x = hs - r; if (b.vel.x > 0) { b.vel.x = -b.vel.x * e; hit = true; } }
+    if (b.pos.z < -hs + r)  { b.pos.z = -hs + r;  if (b.vel.z < 0) { b.vel.z = -b.vel.z * e; hit = true; } }
+    else if (b.pos.z > hs - r) { b.pos.z = hs - r; if (b.vel.z > 0) { b.vel.z = -b.vel.z * e; hit = true; } }
+    if (hit && pre > 1.5) onPhysImpact(b.pos);   // 静止ジッタでは発生させない（一定速度以上のみ）
+    b.mesh.position.copy(b.pos);
+  }
+}
+
+// 着弾：onImpact エフェクトを衝突点で1回発生＋力を適用
+function onPhysImpact(point) {
+  for (const ef of effects) {
+    if (!ef.onImpact || ef._impactCd > 0) continue;
+    ef.object3D.position.copy(point);
+    ef.object3D.quaternion.identity();
+    ef.object3D.visible = true;
+    ef.fx.burst(ef.count || 12);
+    applyEffectForce(ef, point);
+    ef._impactCd = 0.12;   // 連続着弾の多重発火を抑制
+  }
+}
+
+// エフェクト発生時、範囲内の物理ボールへ中心から外向きの力
+function applyEffectForce(ef, center) {
+  if (!ef.force || ef.force <= 0) return;
+  const R = ef.forceRadius || 2;
+  for (const b of physBalls) {
+    _fv.copy(b.pos).sub(center);
+    const d = _fv.length();
+    if (d < R && d > 1e-3) { _fv.multiplyScalar(1 / d); b.vel.addScaledVector(_fv, ef.force * (1 - d / R)); }
   }
 }
 
@@ -844,6 +940,8 @@ function exportTimeline() {
   for (const ef of effects) {
     const t = { kind: 'effect', id: ef.id, preset: ef.preset, mode: ef.mode, anchor: ef.anchor, pos: ef.pos.slice(), rot: ef.rot.slice(), count: ef.count, params: { ...ef.params } };
     if (ef.anchor === 'bone') t.bone = ef.bone;
+    if (ef.onImpact) t.onImpact = true;
+    if (ef.force) { t.force = ef.force; t.forceRadius = ef.forceRadius; }
     if (ef.mode === 'range') { t.start = ef.start; t.end = ef.end; } else { t.frame = ef.frame; }
     tracks.push(t);
   }
@@ -880,6 +978,7 @@ function importTimeline(json) {
         pos: Array.isArray(t.pos) ? t.pos : undefined,
         rot: Array.isArray(t.rot) ? t.rot : undefined,
         count: t.count,
+        onImpact: t.onImpact, force: t.force, forceRadius: t.forceRadius,
         params: (t.params && typeof t.params === 'object') ? t.params : undefined,
       });
     } else {
@@ -1128,6 +1227,7 @@ function render() {
   renderTimeline();
   if (currentVRM) currentVRM.update(dt);
   if (currentCloth) currentCloth.update(dt, timeline.currentFrame);   // VRM更新後：マントがボーン/グリップ追従＋シミュ
+  updatePhysics(dt);   // 物理弾（onImpact 効果より先に）
   updateEffects(dt);
   syncSelectedHandle();
   controls.update();

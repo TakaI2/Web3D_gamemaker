@@ -1,0 +1,128 @@
+{
+  "format": "fx-preset",
+  "version": 1,
+  "name": "esplosion",
+  "layers": [
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#fff2b0",
+      "colorEnd": "#e23b13",
+      "spawnRate": 1,
+      "sizeStart": 0.08,
+      "sizeEnd": 1.31,
+      "texture": "../explosion2.png",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        2,
+        2,
+        2
+      ],
+      "frames": {
+        "cols": 4,
+        "rows": 4,
+        "fps": 20
+      },
+      "shape": "point",
+      "speed": [
+        0,
+        0
+      ],
+      "spinStart": [
+        0,
+        360
+      ],
+      "gravity": 0
+    },
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#fff2b0",
+      "colorEnd": "#e23b13",
+      "spawnRate": 1,
+      "sizeStart": 0.1,
+      "sizeEnd": 0.86,
+      "texture": "../smoke.png",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        2,
+        2,
+        2
+      ],
+      "frames": {
+        "cols": 4,
+        "rows": 4,
+        "fps": 12
+      },
+      "shape": "point",
+      "gravity": 0.7,
+      "drag": 1.5
+    },
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#fff2b0",
+      "colorEnd": "#e23b13",
+      "spawnRate": 21,
+      "sizeStart": 0.14,
+      "sizeEnd": 0.03,
+      "texture": "builtin:soft",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "frames": {
+        "cols": 1,
+        "rows": 1,
+        "fps": 12
+      },
+      "gravity": -5.7,
+      "shape": "point",
+      "spread": 80,
+      "radius": 0.07,
+      "dir": [
+        0,
+        0,
+        0
+      ],
+      "speed": [
+        3,
+        5
+      ],
+      "floorMode": "bounce",
+      "bounce": 0.8
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "format": "fx-preset",
+  "version": 1,
+  "name": "spark_effect",
+  "layers": [
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#ffc2c2",
+      "colorEnd": "#e23b13",
+      "spawnRate": 11,
+      "sizeStart": 0.19,
+      "sizeEnd": 0.68,
+      "texture": "../electric.png",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        2,
+        2,
+        2
+      ],
+      "frames": {
+        "cols": 4,
+        "rows": 4,
+        "fps": 12,
+        "mode": "overLife"
+      },
+      "gravity": 0,
+      "speed": [
+        0,
+        0
+      ],
+      "shape": "point"
+    },
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#ffd6d6",
+      "colorEnd": "#6b70ff",
+      "spawnRate": 6,
+      "sizeStart": 0.4,
+      "sizeEnd": 0.13,
+      "texture": "builtin:spark",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.5,
+        1.5,
+        1.5
+      ],
+      "frames": {
+        "cols": 1,
+        "rows": 1,
+        "fps": 12
+      },
+      "shape": "point",
+      "speed": [
+        0,
+        0
+      ],
+      "gravity": 0.2
+    }
+  ]
+}
