@@ -241,6 +241,23 @@
       </div>
     </div>
 
+    <!-- Physics test (projectile) -->
+    <div class="sec">
+      <h3>物理テスト（弾）</h3>
+      <div style="font-size:10px;color:#667;margin-bottom:6px;">基準点(0,1.2,-4)から前方へ弾を発射。壁/床でバウンドし、「着弾で発生」エフェクトが着弾点で1回出ます。弾に追従（トレイル）エフェクトは弾の軌跡に残ります。</div>
+      <div class="row"><label>弾数</label><input type="range" id="phys-count" min="1" max="12" step="1" value="1"><span class="val" id="phys-count-val">1</span></div>
+      <div class="row"><label>速度</label><input type="range" id="phys-speed" min="1" max="20" step="0.5" value="8"><span class="val" id="phys-speed-val">8.0</span></div>
+      <div class="row"><label>重力</label><input type="range" id="phys-gravity" min="-20" max="0" step="0.5" value="-4"><span class="val" id="phys-gravity-val">-4.0</span></div>
+      <div class="row"><label>反発</label><input type="range" id="phys-restitution" min="0" max="0.95" step="0.05" value="0.5"><span class="val" id="phys-restitution-val">0.50</span></div>
+      <div class="row"><label>大きさ</label><input type="range" id="phys-radius" min="0.05" max="0.4" step="0.01" value="0.14"><span class="val" id="phys-radius-val">0.14</span></div>
+      <div class="row"><label>Pitch↕</label><input type="range" id="phys-pitch" min="-45" max="80" step="1" value="10"><span class="val" id="phys-pitch-val">10°</span></div>
+      <div class="row"><label>Yaw↔</label><input type="range" id="phys-yaw" min="-90" max="90" step="1" value="0"><span class="val" id="phys-yaw-val">0°</span></div>
+      <div class="row-wrap" style="margin-top:4px;">
+        <button id="btn-phys-fire" style="background:#2c4c7c;border-color:#4a6aa0;color:#dff;">▶ 発射</button>
+        <button id="btn-phys-reset">リセット</button>
+      </div>
+    </div>
+
     <!-- Add effect -->
     <div class="sec">
       <h3>エフェクト追加</h3>
@@ -252,6 +269,7 @@
           <option value="spark">✨ spark（火花）</option>
           <option value="frost">❄ frost（冷気）</option>
           <option value="tornado">🌪 tornado（竜巻）</option>
+          <option value="beam">⚡ beam（電撃ビーム：2点を結ぶ）</option>
         </select>
       </div>
       <div class="row">
@@ -266,6 +284,7 @@
         <select id="add-anchor" style="flex:1">
           <option value="world">ワールド固定</option>
           <option value="bone">ボーン追従</option>
+          <option value="object">弾に追従（トレイル）</option>
         </select>
       </div>
       <div class="row" id="bone-row">
@@ -294,7 +313,7 @@
           <select id="sel-preset" style="flex:1">
             <option value="fire">fire</option><option value="smoke">smoke</option>
             <option value="spark">spark</option><option value="frost">frost</option>
-            <option value="tornado">tornado</option>
+            <option value="tornado">tornado</option><option value="beam">⚡ beam</option>
           </select>
         </div>
         <div class="row">
@@ -302,11 +321,63 @@
           <select id="sel-anchor" style="flex:1">
             <option value="world">ワールド固定</option>
             <option value="bone">ボーン追従</option>
+            <option value="object">弾に追従（トレイル）</option>
           </select>
         </div>
         <div class="row" id="sel-bone-row">
           <label>ボーン</label>
           <select id="sel-bone" style="flex:1"></select>
+        </div>
+        <div id="sel-beam-box" style="display:none;border-top:1px solid #24264a;margin-top:6px;padding-top:6px;">
+          <div style="font-size:10px;color:#667;margin-bottom:4px;">電撃ビーム：基準(黄◆)→到達点(水色◆)を結ぶ。基準は上の「基準」設定に従う</div>
+          <div class="row">
+            <label>スタイル</label>
+            <select id="sel-beam-style" style="flex:1">
+              <option value="jagged">ギザギザ（手続き生成）</option>
+              <option value="sheet">シートそのまま（1枚を伸ばす）</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>到達点</label>
+            <select id="sel-beam-target" style="flex:1">
+              <option value="gizmo">手動ギズモ</option>
+              <option value="ball">弾に追従（物理テスト）</option>
+              <option value="bone">NPCボーン</option>
+            </select>
+          </div>
+          <div class="row" id="sel-beam-bone-row" style="display:none;">
+            <label>到達ボーン</label>
+            <select id="sel-beam-bone" style="flex:1"></select>
+          </div>
+          <div class="row">
+            <label>シート</label>
+            <select id="sel-beam-tex" style="flex:1"></select>
+          </div>
+          <div class="row">
+            <label>帯コマ</label>
+            <input type="number" id="sel-beam-cols" min="1" step="1" value="4" style="width:42px;">
+            <span style="color:#667;">×</span>
+            <input type="number" id="sel-beam-rows" min="1" step="1" value="4" style="width:42px;">
+            <span style="color:#667;font-size:10px;margin-left:4px;">fps</span>
+            <input type="number" id="sel-beam-fps" min="1" step="1" value="18" style="width:42px;">
+          </div>
+          <div class="row">
+            <label>円筒シート</label>
+            <select id="sel-tube-tex" style="flex:1"></select>
+          </div>
+          <div class="row">
+            <label>円筒コマ</label>
+            <input type="number" id="sel-tube-cols" min="1" step="1" value="1" style="width:42px;">
+            <span style="color:#667;">×</span>
+            <input type="number" id="sel-tube-rows" min="1" step="1" value="1" style="width:42px;">
+            <span style="color:#667;font-size:10px;margin-left:4px;">fps</span>
+            <input type="number" id="sel-tube-fps" min="1" step="1" value="12" style="width:42px;">
+          </div>
+          <div class="row">
+            <label>ギズモ編集</label>
+            <button id="btn-beam-from" class="toggle-on">基準◆</button>
+            <button id="btn-beam-to">到達点◆</button>
+          </div>
         </div>
         <div class="row" id="sel-frame-row">
           <label>フレーム</label>
@@ -323,6 +394,24 @@
           <label>粒数</label>
           <input type="number" id="sel-count" min="1" step="1" value="24">
           <span style="color:#667;font-size:10px;">単発時の発生数</span>
+        </div>
+        <div style="border-top:1px solid #24264a;margin-top:6px;padding-top:6px;">
+          <div style="font-size:10px;color:#667;margin-bottom:4px;">物理連携（物理テストの弾と連動）</div>
+          <div class="row">
+            <label>着弾で発生</label>
+            <input type="checkbox" id="sel-onimpact">
+            <span style="color:#667;font-size:10px;">弾の着弾点で1回発生</span>
+          </div>
+          <div class="row">
+            <label>力の強さ</label>
+            <input type="range" id="sel-force" min="0" max="15" step="0.5" value="0">
+            <span class="val" id="sel-force-val">0.0</span>
+          </div>
+          <div class="row">
+            <label>力の半径</label>
+            <input type="range" id="sel-forceradius" min="0.5" max="6" step="0.1" value="2">
+            <span class="val" id="sel-forceradius-val">2.0</span>
+          </div>
         </div>
         <div style="border-top:1px solid #24264a;margin-top:6px;padding-top:6px;">
           <div style="font-size:10px;color:#667;margin-bottom:4px;">パラメータ（プリセット別・timelineに保存）</div>
