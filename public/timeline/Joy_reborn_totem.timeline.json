@@ -1,0 +1,92 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 98,
+  "trimIn": 0,
+  "trimOut": 98,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g5",
+      "ranges": [
+        {
+          "start": 4,
+          "end": 39
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g6",
+      "ranges": [
+        {
+          "start": 4,
+          "end": 39
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g9",
+      "ranges": [
+        {
+          "start": 4,
+          "end": 39
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 4,
+          "end": 39
+        }
+      ]
+    },
+    {
+      "kind": "effect",
+      "id": 1,
+      "preset": "custom:totem",
+      "mode": "range",
+      "anchor": "world",
+      "pos": [
+        0,
+        0.02200023223440528,
+        -3.2645165969647074
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "count": 24,
+      "params": {},
+      "start": 48,
+      "end": 98
+    },
+    {
+      "kind": "effect",
+      "id": 2,
+      "preset": "custom:explode",
+      "mode": "range",
+      "anchor": "world",
+      "pos": [
+        0,
+        0.05127532464666884,
+        -2.357461595962845
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "count": 24,
+      "params": {},
+      "start": 30,
+      "end": 53
+    }
+  ],
+  "vrma": "attack02.vrma"
+}

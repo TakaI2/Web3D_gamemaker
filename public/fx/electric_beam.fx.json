@@ -17,12 +17,16 @@
   "tube": true,
   "tubeRadius": 0.16,
   "tubeColor": "#5aa0ff",
-  "tubeEmissive": 1.4,
-  "tubeOpacity": 0.7,
+  "tubeEmissive": 2.6,
+  "tubeOpacity": 0.85,
   "tubeScroll": 0.8,
   "tubeRepeat": 2,
   "tubeFresnel": 1.6,
   "tubeTwist": 0.6,
+  "tubeSpin": 1,
+  "tubeAngle": 0,
+  "tubeSoft": 0.3,
+  "tubeSheet": false,
   "tubeTexture": "builtin:perlin",
   "tubeFrames": { "cols": 1, "rows": 1, "fps": 12 }
 }

@@ -92,12 +92,36 @@ function applyBeamTex(ef) {
 function applyTubeTex(ef) {
   if (ef.preset === 'beam' && ef.fx.setTubeTexture) ef.fx.setTubeTexture(ef.tubeTex.src, ef.tubeTex.cols, ef.tubeTex.rows, ef.tubeTex.fps);
 }
+// 経路パラメータ（位相ずらし・タイル）を fx へ反映
+function applyBeamPath(ef) {
+  if (ef.preset === 'beam' && ef.fx.setParam) { ef.fx.setParam('pathPhase', ef.path.phase); ef.fx.setParam('pathTiles', ef.path.tiles); }
+}
+// 中間点オフセット配列を mid 個に揃える（不足分は原点[0,0,0]）
+function ensurePathPoints(ef) {
+  const pts = ef.path.points;
+  while (pts.length < ef.path.mid) pts.push([0, 0, 0]);
+}
+// 経路のワールド座標点 [基準, 中間…, 到達] を算出（中間点は直線上の基準+オフセット）
+function beamPathPoints(ef) {
+  beamEndpoints(ef, _beamFrom, _beamTo);
+  const mid = ef.path.mid, count = mid + 2;
+  while (_pathPool.length < count) _pathPool.push(new THREE.Vector3());
+  _pathPool[0].copy(_beamFrom);
+  for (let k = 0; k < mid; k++) {
+    const t = (k + 1) / (mid + 1);
+    const v = _pathPool[k + 1].lerpVectors(_beamFrom, _beamTo, t);
+    const off = ef.path.points[k];
+    if (off) v.set(v.x + off[0], v.y + off[1], v.z + off[2]);
+  }
+  _pathPool[mid + 1].copy(_beamTo);
+  return _pathPool.slice(0, count);
+}
 // ビームのスタイル（jagged/sheet）は build 時に決まるため、変更時は fx を作り直す
 function rebuildBeamFx(ef) {
   scene.remove(ef.object3D); ef.fx.dispose();
   ef.fx = makeFx('beam', ef.params, { beamStyle: ef.beamStyle });
   ef.object3D = ef.fx.object3D;
-  applyBeamTex(ef); applyTubeTex(ef);
+  applyBeamTex(ef); applyTubeTex(ef); applyBeamPath(ef);
   if (selectedEffectId === ef.id) selectEffect(ef.id);
 }
 
@@ -130,13 +154,17 @@ const FX_PARAM_DEFS = {
     { key: 'repeat',   label: '密度',     type: 'range', min: 0.5, max: 8,   step: 0.1,  default: 3 },
     { key: 'core',     label: '芯',       type: 'range', min: 0.5, max: 5,   step: 0.1,  default: 2 },
     { key: 'tube',        label: '円筒',      type: 'check', default: true },
+    { key: 'tubeSheet',   label: '円筒 シート抜き', type: 'check', default: false },
     { key: 'tubeRadius',  label: '円筒 太さ', type: 'range', min: 0.02, max: 1,  step: 0.01, default: 0.16 },
     { key: 'tubeColor',   label: '円筒 色',   type: 'color', default: '#5aa0ff' },
-    { key: 'tubeEmissive',label: '円筒 発光', type: 'range', min: 0.2,  max: 4,  step: 0.05, default: 1.4 },
-    { key: 'tubeOpacity', label: '円筒 濃さ', type: 'range', min: 0,    max: 1,  step: 0.02, default: 0.7 },
+    { key: 'tubeEmissive',label: '円筒 発光', type: 'range', min: 0.2,  max: 8,  step: 0.05, default: 2.6 },
+    { key: 'tubeOpacity', label: '円筒 濃さ', type: 'range', min: 0,    max: 1,  step: 0.02, default: 0.85 },
     { key: 'tubeScroll',  label: '円筒 流れ', type: 'range', min: 0,    max: 3,  step: 0.05, default: 0.8 },
+    { key: 'tubeAngle',   label: '円筒 角度', type: 'range', min: 0,    max: 360, step: 5,   default: 0 },
+    { key: 'tubeSpin',    label: '円筒 回転', type: 'range', min: -6,   max: 6,  step: 0.1,  default: 1 },
     { key: 'tubeTwist',   label: '円筒 ねじれ', type: 'range', min: -6, max: 6,  step: 0.1,  default: 0.6 },
     { key: 'tubeFresnel', label: '円筒 縁',   type: 'range', min: 0.3,  max: 4,  step: 0.1,  default: 1.6 },
+    { key: 'tubeSoft',    label: '円筒 ぼかし', type: 'range', min: 0,   max: 1,  step: 0.02, default: 0.3 },
   ],
   fire:  particleParamDefs('fire'),
   smoke: particleParamDefs('smoke'),
@@ -176,8 +204,10 @@ const ANCHOR_BONES = [
 let gizmo = null;
 let handle = null;         // scene 直下に置くワールド空間ハンドル（=ビームの基準/from）
 let handle2 = null;        // ビームの到達点(to)用ハンドル
+const MAX_MID = 6;         // 経路の中間点の最大数
+const midHandles = [];     // 経路の中間点ハンドル（プール）
 let gizmoMode = 'translate';
-let beamEdit = 'from';     // ビーム選択時にギズモで動かす端点（'from' | 'to'）
+let beamEdit = 'from';      // ビーム選択時にギズモで動かす点（'from' | 'to' | 'mid0'..）
 
 // ── タイムライン Canvas 状態 ─────────────────────────────────────
 let tlPxPerFrame = 8;
@@ -197,6 +227,7 @@ const _bonePos = new THREE.Vector3(), _boneQuat = new THREE.Quaternion(), _boneI
 const D2R = THREE.MathUtils.degToRad, R2D = THREE.MathUtils.radToDeg;
 const _fv = new THREE.Vector3(), _phDir = new THREE.Vector3();
 const _beamFrom = new THREE.Vector3(), _beamTo = new THREE.Vector3();
+const _pathPool = [];   // 経路点のワールド座標プール（毎フレーム再利用）
 
 // ── 物理テスト（弾＝物理ボール。基準点から発射→壁/床でバウンド。着弾で効果・力をテスト）──
 const PROOM = { s: 12, h: 3.2 };   // buildRoom と一致（床y=0, 壁±6, 天井3.2）
@@ -490,11 +521,20 @@ function createEffect(opts) {
       fps: opts.tubeTex?.fps ?? (beamSpec?.tubeFrames?.fps ?? 12),
     },
     beamStyle,
+    // 経路（スプライン）：帯を基準→中間点→到達点の曲線に沿わせる
+    path: {
+      on: opts.path?.on ?? false,
+      mid: opts.path?.mid ?? 2,
+      spline: opts.path?.spline ?? true,
+      phase: opts.path?.phase ?? 1,
+      tiles: opts.path?.tiles ?? 1,
+      points: Array.isArray(opts.path?.points) ? opts.path.points.map(p => p.slice()) : [],
+    },
     params,
     fx: makeFx(preset, params, { beamStyle }),
   };
   ef.object3D = ef.fx.object3D;
-  if (ef.preset === 'beam') { applyBeamTex(ef); applyTubeTex(ef); }
+  if (ef.preset === 'beam') { ensurePathPoints(ef); applyBeamTex(ef); applyTubeTex(ef); applyBeamPath(ef); }
   if (ef.id >= nextEffectId) nextEffectId = ef.id + 1;
   effects.push(ef);
   return ef;
@@ -545,14 +585,19 @@ function selectEffect(id) {
   handle.position.copy(_sp);
   handle.quaternion.copy(_sq);
   handle.visible = true;
-  // 到達点(to)ハンドル（ビーム時のみ表示。gizmo=手動時だけドラッグ可）
+  // 到達点(to)・中間点ハンドル（ビーム時のみ表示。gizmo=手動時だけドラッグ可）
   if (isBeam) {
-    beamEndpoints(ef, _beamFrom, _beamTo);
-    handle2.position.copy(_beamTo);
+    positionBeamHandles(ef);
     handle2.visible = true;
+    const mid = ef.path.on ? ef.path.mid : 0;
+    for (let k = 0; k < midHandles.length; k++) midHandles[k].visible = k < mid;
+    // beamEdit が範囲外なら基準へ戻す
+    if (beamEdit === 'to' && ef.to.mode !== 'gizmo') beamEdit = 'from';
+    if (beamEdit.startsWith('mid') && parseInt(beamEdit.slice(3)) >= mid) beamEdit = 'from';
     attachGizmoForBeam(ef);
   } else {
     if (handle2) handle2.visible = false;
+    for (const h of midHandles) h.visible = false;
     gizmo.attach(handle);
   }
   gizmo.setMode(gizmoMode);
@@ -561,10 +606,47 @@ function selectEffect(id) {
   rebuildFxList();
 }
 
-// ビーム：編集対象(from/to)に応じてギズモを付け替え。to は手動(gizmo)モードのときだけ編集可。
+// ビーム：編集点ボタン列（基準 / 中1…中N / 到達）を動的生成
+function rebuildBeamEditButtons(ef) {
+  const host = document.getElementById('sel-beam-edit');
+  if (!host) return;
+  host.innerHTML = '';
+  const items = [{ id: 'from', label: '基準' }];
+  if (ef.path.on) for (let k = 0; k < ef.path.mid; k++) items.push({ id: 'mid' + k, label: '中' + (k + 1) });
+  items.push({ id: 'to', label: '到達', disabled: ef.to.mode !== 'gizmo' });
+  for (const it of items) {
+    const b = document.createElement('button');
+    b.textContent = it.label;
+    if (beamEdit === it.id) b.classList.add('toggle-on');
+    if (it.disabled) b.disabled = true;
+    b.addEventListener('click', () => { beamEdit = it.id; attachGizmoForBeam(ef); rebuildBeamEditButtons(ef); });
+    host.appendChild(b);
+  }
+}
+
+// ビーム：from/to/中間点ハンドルをワールド位置へ配置（表示状態は変えない）
+function positionBeamHandles(ef) {
+  beamEndpoints(ef, _beamFrom, _beamTo);
+  handle.position.copy(_beamFrom);
+  handle2.position.copy(_beamTo);
+  const mid = ef.path.on ? ef.path.mid : 0;
+  for (let k = 0; k < mid && k < midHandles.length; k++) {
+    _sp.lerpVectors(_beamFrom, _beamTo, (k + 1) / (mid + 1));
+    const off = ef.path.points[k];
+    if (off) _sp.set(_sp.x + off[0], _sp.y + off[1], _sp.z + off[2]);
+    midHandles[k].position.copy(_sp);
+  }
+}
+
+// ビーム：編集対象(基準/到達/中間点)に応じてギズモを付け替え。
 function attachGizmoForBeam(ef) {
-  if (beamEdit === 'to' && ef.to.mode === 'gizmo') gizmo.attach(handle2);
-  else gizmo.attach(handle);
+  if (!gizmo) return;
+  if (beamEdit === 'to' && ef.to.mode === 'gizmo') { gizmo.attach(handle2); return; }
+  if (ef.path.on && beamEdit.startsWith('mid')) {
+    const k = parseInt(beamEdit.slice(3));
+    if (k < ef.path.mid) { gizmo.attach(midHandles[k]); return; }
+  }
+  gizmo.attach(handle);   // 既定＝基準
 }
 
 // 発生位置のワールド変換を算出（anchor に応じて）
@@ -606,6 +688,15 @@ function beamEndpoints(ef, outFrom, outTo) {
 function onGizmoChange() {
   const ef = selectedEffect();
   if (!ef) return;
+  // ビームの中間点ハンドルを動かした場合（基準→到達点の直線上の点からのオフセットで保存）
+  if (ef.preset === 'beam' && ef.path.on && beamEdit.startsWith('mid') && gizmo.object === midHandles[parseInt(beamEdit.slice(3))]) {
+    const k = parseInt(beamEdit.slice(3));
+    beamEndpoints(ef, _beamFrom, _beamTo);
+    _sp.lerpVectors(_beamFrom, _beamTo, (k + 1) / (ef.path.mid + 1));
+    const h = midHandles[k];
+    ef.path.points[k] = [h.position.x - _sp.x, h.position.y - _sp.y, h.position.z - _sp.z];
+    return;
+  }
   // ビームの到達点(to)ハンドルを動かした場合
   if (ef.preset === 'beam' && gizmo.object === handle2) {
     if (ef.to.mode === 'gizmo') ef.to.pos = [handle2.position.x, handle2.position.y, handle2.position.z];
@@ -647,9 +738,7 @@ function syncSelectedHandle() {
   const ef = selectedEffect();
   if (!ef) return;
   if (ef.preset === 'beam') {
-    beamEndpoints(ef, _beamFrom, _beamTo);
-    handle.position.copy(_beamFrom);
-    if (handle2 && handle2.visible) handle2.position.copy(_beamTo);
+    positionBeamHandles(ef);   // from/to/中間点ハンドルを追従
     return;
   }
   if (ef.anchor !== 'bone') return;
@@ -677,10 +766,19 @@ function updateEffects(dt) {
     if (ef._impactCd > 0) ef._impactCd -= dt;
     if (ef.onImpact) { ef.fx.update(dt); continue; }   // 着弾系は onPhysImpact 側で配置・発生
     if (ef.preset === 'beam') {
-      // 基準(from)→到達点(to) を毎フレーム結ぶ。range 内だけ表示。
+      // 基準(from)→到達点(to)（経路モードなら中間点を通る曲線）を毎フレーム結ぶ。range 内だけ表示。
       const visible = ef.mode === 'range' ? (f >= ef.start && f <= ef.end) : true;
       ef.fx.setEmitting(visible);
-      if (visible) { beamEndpoints(ef, _beamFrom, _beamTo); ef.fx.setEndpoints(_beamFrom, _beamTo, camera.position); }
+      if (visible) {
+        if (ef.path.on && ef.fx.setPathMode) {
+          ef.fx.setPathMode(true);
+          ef.fx.setPathPoints(beamPathPoints(ef), camera.position, ef.path.spline);
+        } else {
+          if (ef.fx.setPathMode) ef.fx.setPathMode(false);
+          beamEndpoints(ef, _beamFrom, _beamTo);
+          ef.fx.setEndpoints(_beamFrom, _beamTo, camera.position);
+        }
+      }
       ef.fx.update(dt);
       continue;
     }
@@ -846,11 +944,6 @@ function syncSelEditor() {
       document.getElementById('sel-beam-target').value = ef.to.mode;
       document.getElementById('sel-beam-bone-row').style.display = ef.to.mode === 'bone' ? 'flex' : 'none';
       const bb = document.getElementById('sel-beam-bone'); if (bb && ef.to.bone) bb.value = ef.to.bone;
-      const canTo = ef.to.mode === 'gizmo';
-      document.getElementById('btn-beam-from').classList.toggle('toggle-on', !(beamEdit === 'to' && canTo));
-      const toBtn = document.getElementById('btn-beam-to');
-      toBtn.classList.toggle('toggle-on', beamEdit === 'to' && canTo);
-      toBtn.disabled = !canTo;
       const stsel = document.getElementById('sel-beam-style'); if (stsel) stsel.value = ef.beamStyle;
       const tsel = document.getElementById('sel-beam-tex'); if (tsel) tsel.value = ef.beamTex.src;
       document.getElementById('sel-beam-cols').value = ef.beamTex.cols;
@@ -860,6 +953,16 @@ function syncSelEditor() {
       document.getElementById('sel-tube-cols').value = ef.tubeTex.cols;
       document.getElementById('sel-tube-rows').value = ef.tubeTex.rows;
       document.getElementById('sel-tube-fps').value = ef.tubeTex.fps;
+      // 経路（スプライン）
+      document.getElementById('sel-path-on').checked = ef.path.on;
+      document.getElementById('sel-path-mid').value = ef.path.mid;
+      document.getElementById('sel-path-mid-val').textContent = String(ef.path.mid);
+      document.getElementById('sel-path-spline').checked = ef.path.spline;
+      document.getElementById('sel-path-phase').value = ef.path.phase;
+      document.getElementById('sel-path-phase-val').textContent = Number(ef.path.phase).toFixed(1);
+      document.getElementById('sel-path-tiles').value = ef.path.tiles;
+      document.getElementById('sel-path-tiles-val').textContent = String(ef.path.tiles);
+      rebuildBeamEditButtons(ef);
     }
   }
 }
@@ -879,7 +982,7 @@ function changePreset(ef, preset) {
   ef.params = defaultParams(preset);
   ef.fx = makeFx(preset, ef.params, { beamStyle: ef.beamStyle || 'jagged' });
   ef.object3D = ef.fx.object3D;
-  if (preset === 'beam') { applyBeamTex(ef); applyTubeTex(ef); }
+  if (preset === 'beam') { ensurePathPoints(ef); applyBeamTex(ef); applyTubeTex(ef); applyBeamPath(ef); }
   if (isPersistentPreset(preset) && ef.mode !== 'range') {
     ef.mode = 'range';
     if (ef.end <= ef.start) ef.end = Math.min(timeline.durationFrames, ef.start + 15);
@@ -1154,6 +1257,7 @@ function exportTimeline() {
       t.beamTex = { ...ef.beamTex };
       t.tubeTex = { ...ef.tubeTex };
       t.beamStyle = ef.beamStyle;
+      t.path = { on: ef.path.on, mid: ef.path.mid, spline: ef.path.spline, phase: ef.path.phase, tiles: ef.path.tiles, points: ef.path.points.map(p => p.slice()) };
     }
     if (ef.onImpact) t.onImpact = true;
     if (ef.force) { t.force = ef.force; t.forceRadius = ef.forceRadius; }
@@ -1198,6 +1302,7 @@ function importTimeline(json) {
         beamTex: (t.beamTex && typeof t.beamTex === 'object') ? t.beamTex : undefined,
         tubeTex: (t.tubeTex && typeof t.tubeTex === 'object') ? t.tubeTex : undefined,
         beamStyle: t.beamStyle,
+        path: (t.path && typeof t.path === 'object') ? t.path : undefined,
         params: (t.params && typeof t.params === 'object') ? t.params : undefined,
       });
     } else {
@@ -1389,10 +1494,25 @@ function setupUI() {
     selectEffect(ef.id);                              // ハンドル/ギズモ再構成
   });
   const beamBone = document.getElementById('sel-beam-bone');
-  if (beamBone) beamBone.addEventListener('change', () => { const ef = selectedEffect(); if (ef) ef.to.bone = beamBone.value; });
-  const bFrom = document.getElementById('btn-beam-from'), bTo = document.getElementById('btn-beam-to');
-  if (bFrom) bFrom.addEventListener('click', () => { beamEdit = 'from'; const ef = selectedEffect(); if (ef && ef.preset === 'beam') { attachGizmoForBeam(ef); syncSelEditor(); } });
-  if (bTo) bTo.addEventListener('click', () => { beamEdit = 'to'; const ef = selectedEffect(); if (ef && ef.preset === 'beam') { attachGizmoForBeam(ef); syncSelEditor(); } });
+  if (beamBone) beamBone.addEventListener('change', () => { const ef = selectedEffect(); if (ef) { ef.to.bone = beamBone.value; rebuildBeamEditButtons(ef); } });
+  // ビーム：経路（スプライン）
+  const pathOn = document.getElementById('sel-path-on');
+  if (pathOn) pathOn.addEventListener('change', () => { const ef = selectedEffect(); if (ef && ef.preset === 'beam') { ef.path.on = pathOn.checked; ensurePathPoints(ef); selectEffect(ef.id); } });
+  const pathMid = document.getElementById('sel-path-mid'), pathMidVal = document.getElementById('sel-path-mid-val');
+  if (pathMid) pathMid.addEventListener('input', () => {
+    const ef = selectedEffect(); if (!ef || ef.preset !== 'beam') return;
+    ef.path.mid = Math.min(MAX_MID, parseInt(pathMid.value) || 0);
+    if (pathMidVal) pathMidVal.textContent = String(ef.path.mid);
+    ensurePathPoints(ef);
+    if (beamEdit.startsWith('mid') && parseInt(beamEdit.slice(3)) >= ef.path.mid) beamEdit = 'from';
+    selectEffect(ef.id);   // ハンドル数/編集ボタン更新
+  });
+  const pathSpline = document.getElementById('sel-path-spline');
+  if (pathSpline) pathSpline.addEventListener('change', () => { const ef = selectedEffect(); if (ef) ef.path.spline = pathSpline.checked; });
+  const pathPhase = document.getElementById('sel-path-phase'), pathPhaseVal = document.getElementById('sel-path-phase-val');
+  if (pathPhase) pathPhase.addEventListener('input', () => { const ef = selectedEffect(); if (!ef) return; ef.path.phase = parseFloat(pathPhase.value); if (pathPhaseVal) pathPhaseVal.textContent = ef.path.phase.toFixed(1); if (ef.fx.setParam) ef.fx.setParam('pathPhase', ef.path.phase); });
+  const pathTiles = document.getElementById('sel-path-tiles'), pathTilesVal = document.getElementById('sel-path-tiles-val');
+  if (pathTiles) pathTiles.addEventListener('input', () => { const ef = selectedEffect(); if (!ef) return; ef.path.tiles = parseInt(pathTiles.value) || 1; if (pathTilesVal) pathTilesVal.textContent = String(ef.path.tiles); if (ef.fx.setParam) ef.fx.setParam('pathTiles', ef.path.tiles); });
   // ビーム：スタイル（ギザギザ／シート）→ build時決定のため作り直し
   const beamStyleSel = document.getElementById('sel-beam-style');
   if (beamStyleSel) beamStyleSel.addEventListener('change', () => { const ef = selectedEffect(); if (ef && ef.preset === 'beam') { ef.beamStyle = beamStyleSel.value; rebuildBeamFx(ef); } });
@@ -1576,6 +1696,17 @@ async function init() {
   handle2.add(new THREE.AxesHelper(0.13));
   handle2.visible = false;
   scene.add(handle2);
+
+  // 経路の中間点ハンドル（ビーム用・ピンク、プール）
+  for (let i = 0; i < MAX_MID; i++) {
+    const g = new THREE.Group();
+    const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.05, 0), new THREE.MeshBasicMaterial({ color: 0xff66cc, depthTest: false, transparent: true, opacity: 0.9 }));
+    m.renderOrder = 999;
+    g.add(m);
+    g.visible = false;
+    scene.add(g);
+    midHandles.push(g);
+  }
 
   gizmo = new TransformControls(camera, renderer.domElement);
   gizmo.setMode('translate');

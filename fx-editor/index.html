@@ -373,10 +373,36 @@
             <span style="color:#667;font-size:10px;margin-left:4px;">fps</span>
             <input type="number" id="sel-tube-fps" min="1" step="1" value="12" style="width:42px;">
           </div>
+          <div style="border-top:1px dashed #2a2c4a;margin-top:6px;padding-top:6px;">
+            <div style="font-size:10px;color:#667;margin-bottom:4px;">経路（スプライン）※シート帯を曲げる</div>
+            <div class="row">
+              <label>経路モード</label>
+              <input type="checkbox" id="sel-path-on">
+              <span style="color:#667;font-size:10px;">N点の曲線に沿わせる</span>
+            </div>
+            <div class="row">
+              <label>中間点の数</label>
+              <input type="range" id="sel-path-mid" min="0" max="6" step="1" value="2">
+              <span class="val" id="sel-path-mid-val">2</span>
+            </div>
+            <div class="row">
+              <label>形</label>
+              <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sel-path-spline" checked>スプライン(曲線)</label>
+            </div>
+            <div class="row">
+              <label>位相ずらし</label>
+              <input type="range" id="sel-path-phase" min="0" max="8" step="0.1" value="1">
+              <span class="val" id="sel-path-phase-val">1.0</span>
+            </div>
+            <div class="row">
+              <label>タイル</label>
+              <input type="range" id="sel-path-tiles" min="1" max="12" step="1" value="1">
+              <span class="val" id="sel-path-tiles-val">1</span>
+            </div>
+          </div>
           <div class="row">
-            <label>ギズモ編集</label>
-            <button id="btn-beam-from" class="toggle-on">基準◆</button>
-            <button id="btn-beam-to">到達点◆</button>
+            <label>編集点</label>
+            <div id="sel-beam-edit" class="row-wrap" style="flex:1;gap:3px;margin-bottom:0;"></div>
           </div>
         </div>
         <div class="row" id="sel-frame-row">

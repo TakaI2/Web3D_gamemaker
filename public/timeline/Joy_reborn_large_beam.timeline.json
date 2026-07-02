@@ -1,0 +1,115 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 87,
+  "trimIn": 0,
+  "trimOut": 87,
+  "tracks": [
+    {
+      "kind": "effect",
+      "id": 1,
+      "preset": "beam",
+      "mode": "range",
+      "anchor": "bone",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "count": 24,
+      "params": {
+        "color": "#ffbdbd",
+        "emissive": 1.7,
+        "jitter": 0,
+        "freq": 17,
+        "scroll": 1.5,
+        "repeat": 3.3,
+        "core": 2,
+        "tube": true,
+        "tubeSheet": true,
+        "tubeRadius": 0.12,
+        "tubeColor": "#ff5c5c",
+        "tubeEmissive": 2.6,
+        "tubeOpacity": 0.85,
+        "tubeScroll": 1.05,
+        "tubeAngle": 55,
+        "tubeSpin": -1.1,
+        "tubeTwist": 0,
+        "tubeFresnel": 1.6,
+        "tubeSoft": 0.3
+      },
+      "bone": "rightHand",
+      "to": {
+        "mode": "gizmo",
+        "pos": [
+          0.19514367898381324,
+          1.2,
+          -5.912711152948928
+        ]
+      },
+      "beamTex": {
+        "src": "../laser.png",
+        "cols": 4,
+        "rows": 4,
+        "fps": 18
+      },
+      "tubeTex": {
+        "src": "../laser.png",
+        "cols": 1,
+        "rows": 1,
+        "fps": 12
+      },
+      "beamStyle": "jagged",
+      "path": {
+        "on": false,
+        "mid": 2,
+        "spline": true,
+        "phase": 1,
+        "tiles": 1,
+        "points": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ]
+      },
+      "start": 13,
+      "end": 49
+    },
+    {
+      "kind": "effect",
+      "id": 7,
+      "preset": "custom:spark_effect",
+      "mode": "range",
+      "anchor": "bone",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "count": 24,
+      "params": {},
+      "bone": "rightHand",
+      "start": 0,
+      "end": 49
+    }
+  ],
+  "speed": 2,
+  "vrma": "attack_drain.vrma"
+}

@@ -35,7 +35,7 @@ async function loadSheetManifest() {
 function defaultMeshLayer() {
   return {
     type: 'mesh', geom: 'cylinder', size: 1, height: 1.5, color: '#ff8b4d', opacity: 1, emissive: 1.4,
-    texture: 'builtin:perlin', repeat: [2, 1], scroll: [0, 0.3], alphaSource: 'luminance',
+    texture: 'builtin:perlin', repeat: [2, 1], scroll: [0, 0.3], alphaSource: 'luminance', texAngle: 0,
     twist: 0, spin: 0.4, pulse: 0, blending: 'additive', doubleSide: true, fadeEdges: true,
     pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1],
   };
@@ -326,6 +326,7 @@ function rebuildLayerEditor() {
     uiSelect(host, '合成', [{ value: 'additive', label: '加算' }, { value: 'normal', label: '通常' }], l.blending, v => { l.blending = v; markDirty(); });
     uiVec2(host, 'リピートUV', l.repeat, 0.5, () => markDirty());
     uiVec2(host, 'スクロールUV', l.scroll, 0.05, () => markDirty());
+    uiSlider(host, 'テクスチャ角度', l.texAngle || 0, 0, 360, 5, v => { l.texAngle = v; markDirty(); });
     uiSlider(host, 'ねじれ', l.twist, -5, 5, 0.05, v => { l.twist = v; markDirty(); });
     uiSlider(host, '自転', l.spin, -3, 3, 0.05, v => { l.spin = v; markDirty(); });
     uiSlider(host, '脈動', l.pulse, 0, 1, 0.02, v => { l.pulse = v; markDirty(); });

@@ -1,0 +1,243 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 60,
+  "trimIn": 0,
+  "trimOut": 60,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g7",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 49
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 49
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g9",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 50
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g9",
+      "keyframes": [
+        {
+          "frame": 25,
+          "offset": [
+            0.03525332016259004,
+            0.1375278371174517,
+            0.4
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 49
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g10",
+      "keyframes": [
+        {
+          "frame": 25,
+          "offset": [
+            -0.21801941472116615,
+            0.1536784296761195,
+            0.4
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "effect",
+      "id": 4,
+      "preset": "beam",
+      "mode": "range",
+      "anchor": "bone",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "count": 24,
+      "params": {
+        "color": "#ffbdbd",
+        "emissive": 3.35,
+        "jitter": 0.37,
+        "freq": 15,
+        "scroll": 0.9,
+        "repeat": 4.7,
+        "core": 3.4,
+        "tube": false,
+        "tubeSheet": false,
+        "tubeRadius": 0.16,
+        "tubeColor": "#ff5c5c",
+        "tubeEmissive": 2.6,
+        "tubeOpacity": 0.85,
+        "tubeScroll": 0.8,
+        "tubeAngle": 0,
+        "tubeSpin": 1,
+        "tubeTwist": 0.6,
+        "tubeFresnel": 1.6,
+        "tubeSoft": 0.3
+      },
+      "bone": "rightHand",
+      "to": {
+        "mode": "gizmo",
+        "pos": [
+          0,
+          1.7282816265929388,
+          -5.859729037570655
+        ]
+      },
+      "beamTex": {
+        "src": "../electric.png",
+        "cols": 4,
+        "rows": 4,
+        "fps": 18
+      },
+      "tubeTex": {
+        "src": "builtin:perlin",
+        "cols": 1,
+        "rows": 1,
+        "fps": 12
+      },
+      "beamStyle": "sheet",
+      "path": {
+        "on": true,
+        "mid": 2,
+        "spline": true,
+        "phase": 1,
+        "tiles": 1,
+        "points": [
+          [
+            0.26511592531508094,
+            0.08513844402499093,
+            0.19558896156022643
+          ],
+          [
+            -0.15986566730649046,
+            -0.17477383918711942,
+            0
+          ]
+        ]
+      },
+      "start": 22,
+      "end": 37
+    },
+    {
+      "kind": "effect",
+      "id": 5,
+      "preset": "beam",
+      "mode": "range",
+      "anchor": "bone",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "count": 24,
+      "params": {
+        "color": "#ffbdbd",
+        "emissive": 1.7,
+        "jitter": 0,
+        "freq": 15,
+        "scroll": 0.7,
+        "repeat": 3,
+        "core": 2,
+        "tube": false,
+        "tubeSheet": false,
+        "tubeRadius": 0.16,
+        "tubeColor": "#ef6b6b",
+        "tubeEmissive": 2.6,
+        "tubeOpacity": 0.85,
+        "tubeScroll": 0.8,
+        "tubeAngle": 0,
+        "tubeSpin": 1,
+        "tubeTwist": 0.6,
+        "tubeFresnel": 1.6,
+        "tubeSoft": 0.3
+      },
+      "bone": "leftHand",
+      "to": {
+        "mode": "gizmo",
+        "pos": [
+          0,
+          1.7018084866851755,
+          -6.827496472809571
+        ]
+      },
+      "beamTex": {
+        "src": "../electric.png",
+        "cols": 4,
+        "rows": 4,
+        "fps": 18
+      },
+      "tubeTex": {
+        "src": "builtin:perlin",
+        "cols": 1,
+        "rows": 1,
+        "fps": 12
+      },
+      "beamStyle": "sheet",
+      "path": {
+        "on": true,
+        "mid": 2,
+        "spline": true,
+        "phase": 1,
+        "tiles": 1,
+        "points": [
+          [
+            -0.29676847650514276,
+            0,
+            0.7602083816216352
+          ],
+          [
+            0.1954795086048755,
+            0,
+            0
+          ]
+        ]
+      },
+      "start": 22,
+      "end": 37
+    }
+  ],
+  "speed": 2,
+  "vrma": "attack04.vrma"
+}

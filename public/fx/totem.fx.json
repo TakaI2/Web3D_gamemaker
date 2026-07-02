@@ -1,0 +1,30 @@
+{
+  "format": "fx-preset",
+  "version": 1,
+  "name": "totem",
+  "layers": [
+    {
+      "type": "tornado",
+      "color": "#ff4d4d",
+      "timeScale": 0.2,
+      "parabolStrength": 1.25,
+      "parabolOffset": 0.35,
+      "parabolAmplitude": 0.37,
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        3,
+        3
+      ]
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "format": "fx-preset",
+  "version": 1,
+  "name": "explode",
+  "layers": [
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#ffb3b3",
+      "colorEnd": "#e23b13",
+      "spawnRate": 1,
+      "sizeStart": 1.03,
+      "sizeEnd": 0.88,
+      "texture": "../explosion2.png",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        5,
+        5,
+        5
+      ],
+      "frames": {
+        "cols": 4,
+        "rows": 4,
+        "fps": 12
+      },
+      "radius": 0.32,
+      "spread": 0,
+      "shape": "point",
+      "dir": [
+        0,
+        0,
+        0
+      ],
+      "gravity": -0.1,
+      "speed": [
+        0.9,
+        1
+      ],
+      "drag": 2.15
+    }
+  ]
+}
