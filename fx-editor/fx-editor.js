@@ -1,0 +1,1936 @@
+// fx-editor.js — エフェクト・タイムライン編集
+// 地面＋壁の小部屋に NPC を1体置き、timeline(VRMA)を再生しながら
+// タイムライン上の任意フレームでエフェクトを発生させ、発生位置をギズモで移動/回転する。
+//
+// エフェクトは lib/fx-particles.js のプリセット(fire/smoke/spark/frost)を使用。
+// 各エフェクトは timeline.json に kind:'effect' トラックとして埋め込む
+//   （cloth-preview の importTimeline は未知 kind を無視するため互換）。
+//   tps-flight 等はこの effect トラックを読んで再生できる。
+//
+// エフェクト基準: 'world'（ギズモで置いた絶対位置に固定）/ 'bone'（NPCのボーン追従＝ローカルオフセット）
+// 発生種類:       'burst'（指定1フレームで単発）/ 'range'（開始〜終了フレームで持続発生）
+
+import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
+import { positionWorld, mix, color, pass } from 'https://esm.sh/three@0.184.0/tsl';
+import { bloom } from 'https://esm.sh/three@0.184.0/examples/jsm/tsl/display/BloomNode.js';
+import { OrbitControls }    from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
+import { GLTFLoader }       from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
+import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
+import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
+  from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
+import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
+import { createTornado } from '../lib/fx-tornado.js';
+import { createMeshFx } from '../lib/fx-mesh.js';
+import { createBeamFx } from '../lib/fx-beam.js';
+import { BUILTIN_TEXTURES } from '../lib/fx-textures.js';
+import { createVRMCloth } from '../lib/vrm-cloth.js';
+import { createDissolve } from '../lib/fx-dissolve.js';
+
+// ── シーングローバル ─────────────────────────────────────────────
+let renderer, scene, camera, controls;
+const timer = new THREE.Timer();
+let currentVRM = null;
+let currentCloth = null;        // マント布シミュ（createVRMCloth）。NPCバンドルに cloth があれば生成。
+let loadedTimelineJson = null;  // 直近に読み込んだ timeline 生データ（布グリップ再適用用）
+const clothParams = { wind: 1.0, stiffness: 0.2 };
+
+// ── VRMA プレイヤー ──────────────────────────────────────────────
+let mixer = null, vrmaClip = null, vrmaAction = null;
+let vrmaPlaying = false, vrmaLoop = true;
+let currentVrmaName = '';   // public/vrma 基準のファイル名。timeline.json に保存。
+
+// ── タイムライン状態 ─────────────────────────────────────────────
+const timeline = {
+  fps: 30, durationFrames: 90, currentFrame: 0,
+  trimIn: 0, trimOut: 90, speed: 1,
+};
+let lastTlName = '';
+let lastBundleName = '';
+let otherTracks = [];   // 読み込んだ effect 以外のトラック（grip/blendShape等）を保持して再保存時に温存
+
+// ── エフェクト ───────────────────────────────────────────────────
+// ef: { id, preset, mode:'burst'|'range', frame, start, end, anchor:'world'|'bone', bone, pos:[3], rot:[3]deg, count, fx, object3D }
+const effects = [];
+let selectedEffectId = null;
+let nextEffectId = 1;
+
+// ── 音声キュー（タイムラインの発射音等）: { id, src, frame, volume, name, _audio } ──
+const audioCues = [];
+let nextAudioId = 1;
+let audioFiles = [];   // /audio/manifest.json
+const PRESET_COLORS = { fire: '#ff8844', smoke: '#9aa0b0', spark: '#ffd060', frost: '#66ccff', tornado: '#ff8b4d', beam: '#7ea8ff' };
+
+// ビーム（fx-beam）プリセット。electric_beam.fx.json を読み込み、無ければ既定値。
+let beamSpec = null;
+async function loadBeamSpec() {
+  try { beamSpec = await (await fetch('../fx/electric_beam.fx.json')).json(); }
+  catch { beamSpec = {}; }
+}
+// public/ 直下のスプライトシート画像（ビームの帯テクスチャ切替に使う。FX Builder と同じソース）
+let sheetTextures = [];
+async function loadSheetTextures() {
+  try { const files = await (await fetch('../sheets/manifest.json')).json(); sheetTextures = (Array.isArray(files) ? files : []).map(f => ({ value: '../' + f, label: f })); }
+  catch { sheetTextures = []; }
+  populateBeamTexSelect();
+}
+function fillTexSelect(id, curSrc) {
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  sel.innerHTML = '';
+  const addOpt = (v, l) => { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.appendChild(o); };
+  for (const s of sheetTextures) addOpt(s.value, '🎞 ' + s.label);       // public/ のシート画像
+  for (const t of BUILTIN_TEXTURES) addOpt('builtin:' + t.id, t.label);  // 内蔵テクスチャ
+  if (curSrc) sel.value = curSrc;
+}
+function populateBeamTexSelect() {
+  const ef = selectedEffect();
+  const beam = ef && ef.preset === 'beam';
+  fillTexSelect('sel-beam-tex', beam ? ef.beamTex.src : '');   // 帯（稲妻）
+  fillTexSelect('sel-tube-tex', beam ? ef.tubeTex.src : '');   // 円筒（エネルギー流）
+}
+// ビームのテクスチャ/コマを fx へ反映
+function applyBeamTex(ef) {
+  if (ef.preset === 'beam' && ef.fx.setTexture) ef.fx.setTexture(ef.beamTex.src, ef.beamTex.cols, ef.beamTex.rows, ef.beamTex.fps);
+}
+// 円筒テクスチャ/コマを fx へ反映
+function applyTubeTex(ef) {
+  if (ef.preset === 'beam' && ef.fx.setTubeTexture) ef.fx.setTubeTexture(ef.tubeTex.src, ef.tubeTex.cols, ef.tubeTex.rows, ef.tubeTex.fps);
+}
+// 経路パラメータ（位相ずらし・タイル）を fx へ反映
+function applyBeamPath(ef) {
+  if (ef.preset === 'beam' && ef.fx.setParam) { ef.fx.setParam('pathPhase', ef.path.phase); ef.fx.setParam('pathTiles', ef.path.tiles); }
+}
+// 着弾エフェクトの子FXを必要に応じて生成/破棄（ビームの到達点で発生）
+function ensureImpactFx(ef) {
+  const want = (ef.preset === 'beam' && ef.impact.preset && ef.impact.preset !== 'none') ? ef.impact.preset : '';
+  if (want === ef._impactPreset) return;
+  if (ef._impactFx) { scene.remove(ef._impactFx.object3D); ef._impactFx.dispose(); ef._impactFx = null; }
+  ef._impactPreset = want;
+  if (want) ef._impactFx = makeFx(want, defaultParams(want));   // makeFx が scene 追加＋setEmitting(false)
+}
+// 中間点オフセット配列を mid 個に揃える（不足分は原点[0,0,0]）
+function ensurePathPoints(ef) {
+  const pts = ef.path.points;
+  while (pts.length < ef.path.mid) pts.push([0, 0, 0]);
+}
+// 経路のワールド座標点 [基準, 中間…, 到達] を算出（中間点は直線上の基準+オフセット）
+function beamPathPoints(ef) {
+  beamEndpoints(ef, _beamFrom, _beamTo);
+  const mid = ef.path.mid, count = mid + 2;
+  while (_pathPool.length < count) _pathPool.push(new THREE.Vector3());
+  _pathPool[0].copy(_beamFrom);
+  for (let k = 0; k < mid; k++) {
+    const t = (k + 1) / (mid + 1);
+    const v = _pathPool[k + 1].lerpVectors(_beamFrom, _beamTo, t);
+    const off = ef.path.points[k];
+    if (off) v.set(v.x + off[0], v.y + off[1], v.z + off[2]);
+  }
+  _pathPool[mid + 1].copy(_beamTo);
+  return _pathPool.slice(0, count);
+}
+// ビームのスタイル（jagged/sheet）は build 時に決まるため、変更時は fx を作り直す
+function rebuildBeamFx(ef) {
+  scene.remove(ef.object3D); ef.fx.dispose();
+  ef.fx = makeFx('beam', ef.params, { beamStyle: ef.beamStyle });
+  ef.object3D = ef.fx.object3D;
+  applyBeamTex(ef); applyTubeTex(ef); applyBeamPath(ef);
+  if (selectedEffectId === ef.id) selectEffect(ef.id);
+}
+
+// プリセット別の調整パラメータ定義（エディタが汎用的にUIを生成。default は適用前の初期値）
+function particleParamDefs(preset) {
+  const p = FX_PRESETS[preset];
+  return [
+    { key: 'colorStart', label: '開始色', type: 'color', default: p.color.start },
+    { key: 'colorEnd',   label: '終了色', type: 'color', default: p.color.end },
+    { key: 'spawnRate',  label: '発生/秒', type: 'range', min: 0, max: 200, step: 1, default: p.spawnRate },
+    { key: 'sizeStart',  label: '開始サイズ', type: 'range', min: 0.02, max: 1.5, step: 0.01, default: p.size.start },
+    { key: 'sizeEnd',    label: '終了サイズ', type: 'range', min: 0.02, max: 1.5, step: 0.01, default: p.size.end },
+  ];
+}
+const FX_PARAM_DEFS = {
+  tornado: [
+    { key: 'color',            label: '色',      type: 'color', default: '#ff8b4d' },
+    { key: 'timeScale',        label: '回転速度', type: 'range', min: -1, max: 1, step: 0.01, default: 0.2 },
+    { key: 'parabolStrength',  label: '広がり',   type: 'range', min: 0, max: 2, step: 0.01, default: 1 },
+    { key: 'parabolOffset',    label: '中心高',   type: 'range', min: 0, max: 1, step: 0.01, default: 0.3 },
+    { key: 'parabolAmplitude', label: '太さ',     type: 'range', min: 0, max: 2, step: 0.01, default: 0.2 },
+    { key: 'scale',            label: 'サイズ',   type: 'range', min: 0.2, max: 6, step: 0.1, default: 1.5 },
+  ],
+  beam: [
+    { key: 'color',    label: '帯 色',    type: 'color', default: '#bfe0ff' },
+    { key: 'emissive', label: '帯 発光',  type: 'range', min: 0.2, max: 4,   step: 0.05, default: 1.7 },
+    { key: 'jitter',   label: 'ギザギザ', type: 'range', min: 0,   max: 0.8, step: 0.01, default: 0.3 },
+    { key: 'freq',     label: '細かさ',   type: 'range', min: 4,   max: 40,  step: 1,    default: 15 },
+    { key: 'scroll',   label: '流れ',     type: 'range', min: 0,   max: 3,   step: 0.05, default: 0.7 },
+    { key: 'repeat',   label: '密度',     type: 'range', min: 0.5, max: 8,   step: 0.1,  default: 3 },
+    { key: 'core',     label: '芯',       type: 'range', min: 0.5, max: 5,   step: 0.1,  default: 2 },
+    { key: 'tube',        label: '円筒',      type: 'check', default: true },
+    { key: 'tubeSheet',   label: '円筒 シート抜き', type: 'check', default: false },
+    { key: 'tubeRadius',  label: '円筒 太さ', type: 'range', min: 0.02, max: 1,  step: 0.01, default: 0.16 },
+    { key: 'tubeColor',   label: '円筒 色',   type: 'color', default: '#5aa0ff' },
+    { key: 'tubeEmissive',label: '円筒 発光', type: 'range', min: 0.2,  max: 8,  step: 0.05, default: 2.6 },
+    { key: 'tubeOpacity', label: '円筒 濃さ', type: 'range', min: 0,    max: 1,  step: 0.02, default: 0.85 },
+    { key: 'tubeScroll',  label: '円筒 流れ', type: 'range', min: 0,    max: 3,  step: 0.05, default: 0.8 },
+    { key: 'tubeAngle',   label: '円筒 角度', type: 'range', min: 0,    max: 360, step: 5,   default: 0 },
+    { key: 'tubeSpin',    label: '円筒 回転', type: 'range', min: -6,   max: 6,  step: 0.1,  default: 1 },
+    { key: 'tubeTwist',   label: '円筒 ねじれ', type: 'range', min: -6, max: 6,  step: 0.1,  default: 0.6 },
+    { key: 'tubeFresnel', label: '円筒 縁',   type: 'range', min: 0.3,  max: 4,  step: 0.1,  default: 1.6 },
+    { key: 'tubeSoft',    label: '円筒 ぼかし', type: 'range', min: 0,   max: 1,  step: 0.02, default: 0.3 },
+  ],
+  fire:  particleParamDefs('fire'),
+  smoke: particleParamDefs('smoke'),
+  spark: particleParamDefs('spark'),
+  frost: particleParamDefs('frost'),
+};
+function defaultParams(preset) {
+  const out = {};
+  for (const d of (FX_PARAM_DEFS[preset] || [])) out[d.key] = d.default;
+  return out;
+}
+// 粒子プリセットの config にパラメータを反映
+function applyParticleParams(cfg, params) {
+  if (params.colorStart != null) cfg.color.start = params.colorStart;
+  if (params.colorEnd   != null) cfg.color.end   = params.colorEnd;
+  if (params.spawnRate  != null) cfg.spawnRate   = params.spawnRate;
+  if (params.sizeStart  != null) cfg.size.start  = params.sizeStart;
+  if (params.sizeEnd    != null) cfg.size.end    = params.sizeEnd;
+}
+
+// ── Bloom（ポストプロセス。シーン全体・emissive が強く発光）──
+let post = null, bloomPass = null;
+const bloomParams = { strength: 1.0, radius: 0.1, threshold: 1.0 };
+
+// ── カスタムプリセット（fx-builder が作った *.fx.json）。'custom:<name>' で参照 ──
+const customSpecs = new Map();
+function isPersistentPreset(preset) { return preset === 'tornado' || preset === 'beam' || preset.startsWith('custom:'); }
+const ANCHOR_BONES = [
+  'hips', 'spine', 'chest', 'upperChest', 'neck', 'head',
+  'leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand',
+  'rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand',
+  'leftUpperLeg', 'leftLowerLeg', 'leftFoot',
+  'rightUpperLeg', 'rightLowerLeg', 'rightFoot',
+];
+
+// ── ギズモ（選択エフェクトの発生位置ハンドル）─────────────────────
+let gizmo = null;
+let handle = null;         // scene 直下に置くワールド空間ハンドル（=ビームの基準/from）
+let handle2 = null;        // ビームの到達点(to)用ハンドル
+const MAX_MID = 6;         // 経路の中間点の最大数
+const midHandles = [];     // 経路の中間点ハンドル（プール）
+let gizmoMode = 'translate';
+let beamEdit = 'from';      // ビーム選択時にギズモで動かす点（'from' | 'to' | 'mid0'..）
+
+// ── タイムライン Canvas 状態 ─────────────────────────────────────
+let tlPxPerFrame = 8;
+let tlScrollX = 0;
+const HEADER_W = 150;
+const ROW_H = 22;
+const RULER_H = 24;
+const TRIM_HANDLE_W = 9;
+
+// ── FPS ──────────────────────────────────────────────────────────
+let fpsFrameCount = 0, fpsLastTime = performance.now();
+
+// ── 再利用テンポラリ ─────────────────────────────────────────────
+const _sp = new THREE.Vector3(), _sq = new THREE.Quaternion(), _se = new THREE.Euler();
+const _tq = new THREE.Quaternion();   // computeSpawnTransform 内部用（outQuat との別名衝突回避）
+const _bonePos = new THREE.Vector3(), _boneQuat = new THREE.Quaternion(), _boneInv = new THREE.Quaternion();
+const D2R = THREE.MathUtils.degToRad, R2D = THREE.MathUtils.radToDeg;
+const _fv = new THREE.Vector3(), _phDir = new THREE.Vector3();
+const _beamFrom = new THREE.Vector3(), _beamTo = new THREE.Vector3();
+const _pathPool = [];   // 経路点のワールド座標プール（毎フレーム再利用）
+
+// ── 物理テスト（弾＝物理ボール。基準点から発射→壁/床でバウンド。着弾で効果・力をテスト）──
+const PROOM = { s: 12, h: 3.2 };   // buildRoom と一致（床y=0, 壁±6, 天井3.2）
+const physBalls = [];              // { mesh, pos, vel, radius }
+const phys = { count: 1, gravity: -4, restitution: 0.5, radius: 0.14, speed: 8, pitch: 10, yaw: 0 };
+const PHYS_SPAWN = new THREE.Vector3(0, 1.2, -4);   // 基準点（手前から前方+Zへ）
+
+// ── ディソルブ（溶解）テスト ──
+let dissolve = null;         // createDissolve の戻り
+let dissTestGroup = null;    // テスト形状(箱/球)
+let dissAuto = false;        // 自動再生
+let dissSpeed = 0.4;         // 進行/秒
+const dissCfg = { noiseScale: 5, noiseAmt: 0.45, edge: 0.10, rimColor: '#7fe6ff', rimIntensity: 2.4, liquidColor: '#bfeaff', puddleScale: 1.9, doubleSide: true };
+
+// ============================================================
+// 部屋（地面＋壁）
+// ============================================================
+function buildRoom() {
+  const S = 12, H = 3.2, t = 0.2;
+  const group = new THREE.Group();
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0x2a2e44, roughness: 0.95 });
+  const wallMat  = new THREE.MeshStandardMaterial({ color: 0x343a58, roughness: 0.9, transparent: true, opacity: 0.55, side: THREE.DoubleSide });
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(S, t, S), floorMat);
+  floor.position.y = -t / 2;
+  group.add(floor);
+  const grid = new THREE.GridHelper(S, S, 0x4488ff, 0x2a3050);
+  grid.material.transparent = true; grid.material.opacity = 0.35; grid.position.y = 0.002;
+  group.add(grid);
+  const wall = (x, z, w) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, H, t), wallMat);
+    m.position.set(x, H / 2, z); return m;
+  };
+  group.add(wall(0, -S / 2, S));
+  const back = wall(0, S / 2, S); group.add(back);
+  const left = new THREE.Mesh(new THREE.BoxGeometry(t, H, S), wallMat);  left.position.set(-S / 2, H / 2, 0); group.add(left);
+  const right = new THREE.Mesh(new THREE.BoxGeometry(t, H, S), wallMat); right.position.set(S / 2, H / 2, 0); group.add(right);
+  scene.add(group);
+}
+
+// ============================================================
+// VRM 読み込み
+// ============================================================
+function dataURIToBlob(uri) {
+  const [head, data] = uri.split(',');
+  const mime = (head.match(/:(.*?);/) || [])[1] || 'application/octet-stream';
+  const bin = atob(data); const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+async function loadVRM(file) {
+  const loader = new GLTFLoader();
+  loader.register(parser => new VRMLoaderPlugin(parser, {
+    mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, { materialType: MToonNodeMaterial }),
+  }));
+  const url = URL.createObjectURL(file);
+  try {
+    const gltf = await loader.loadAsync(url);
+    const vrm = gltf.userData.vrm;
+    if (!vrm) throw new Error('VRMデータが見つかりません');
+    unloadVRM();
+    currentVRM = vrm;
+    scene.add(vrm.scene);
+    vrm.scene.updateMatrixWorld(true);
+    populateBoneSelects(vrm);
+    document.getElementById('btn-vrma-load').disabled = false;
+    document.getElementById('vrma-select').disabled = false;
+    showToast('VRM 読み込み完了');
+    return vrm;
+  } finally { URL.revokeObjectURL(url); }
+}
+
+function unloadVRM() {
+  if (!currentVRM) return;
+  unloadVRMA();
+  if (currentCloth) { currentCloth.dispose(); currentCloth = null; }
+  scene.remove(currentVRM.scene);
+  currentVRM.scene.traverse(obj => {
+    if (obj.isMesh) {
+      obj.geometry?.dispose();
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const m of mats) m?.dispose();
+    }
+  });
+  currentVRM = null;
+  document.getElementById('btn-vrma-load').disabled = true;
+  document.getElementById('vrma-select').disabled = true;
+}
+
+async function importNPCBundle(bundle) {
+  if (!bundle || !bundle.vrm) { showToast('VRM を含まないファイルです', 'error'); return; }
+  const name = bundle.name || 'imported';
+  lastBundleName = name;
+  await loadVRM(new File([dataURIToBlob(bundle.vrm)], `${name}.vrm`, { type: 'application/octet-stream' }));
+  // マント（布）。NPC に cloth があれば着せる。NPCは原点・floorY=0。
+  if (bundle.cloth) {
+    try {
+      currentCloth = createVRMCloth({
+        renderer, scene, vrm: currentVRM, cloth: bundle.cloth,
+        basePos: new THREE.Vector3(0, 0, 0), floorY: 0,
+        wind: clothParams.wind, stiffness: clothParams.stiffness,
+      });
+      // すでに timeline 読込済みなら、その grip を布へ適用
+      if (loadedTimelineJson) currentCloth.setTimeline(loadedTimelineJson);
+    } catch (e) { console.warn('マント生成失敗:', e); showToast('マント生成失敗（布データ不正）', 'warn'); }
+  }
+  const parts = ['VRM', bundle.cloth ? 'マント' : null].filter(Boolean);
+  showToast(`NPC読み込み完了（${parts.join(' + ')}）`);
+}
+
+function populateBoneSelects(vrm) {
+  const present = ANCHOR_BONES.filter(b => vrm.humanoid?.getNormalizedBoneNode(b));
+  for (const id of ['add-bone', 'sel-bone', 'sel-beam-bone']) {
+    const sel = document.getElementById(id);
+    if (!sel) continue;
+    const prev = sel.value;
+    sel.innerHTML = '';
+    for (const b of present) {
+      const o = document.createElement('option'); o.value = b; o.textContent = b; sel.appendChild(o);
+    }
+    const fallback = id === 'sel-beam-bone' ? 'head' : 'rightHand';
+    if (present.includes(prev)) sel.value = prev;
+    else if (present.includes(fallback)) sel.value = fallback;
+  }
+}
+
+// ============================================================
+// VRMA プレイヤー（トリム再生）
+// ============================================================
+// ルートモーション除去：position トラックの水平(X,Z)をフレーム0で固定（NPCを中央に保つ）。
+function stripRootMotion(clip) {
+  for (const t of clip.tracks) {
+    if (!t.name.endsWith('.position')) continue;
+    const v = t.values, x0 = v[0], z0 = v[2];
+    for (let i = 0; i < v.length; i += 3) { v[i] = x0; v[i + 2] = z0; }
+  }
+}
+
+async function loadVrmaByName(name) {
+  try {
+    const res = await fetch('/vrma/' + encodeURIComponent(name));
+    if (!res.ok) throw new Error('取得失敗');
+    await loadVRMA(new File([await res.blob()], name, { type: 'application/octet-stream' }), name);
+    const sel = document.getElementById('vrma-select'); if (sel) sel.value = name;
+  } catch (err) { showToast(`VRMA自動読込失敗: ${name}`, 'warn'); console.warn(err); }
+}
+
+async function loadVRMA(file, srcName) {
+  if (!currentVRM) { showToast('先にVRM/NPCを読み込んでください', 'error'); return; }
+  const loader = new GLTFLoader();
+  loader.register(parser => new VRMAnimationLoaderPlugin(parser));
+  const url = URL.createObjectURL(file);
+  try {
+    const gltf = await loader.loadAsync(url);
+    const vrmAnims = gltf.userData.vrmAnimations;
+    if (!vrmAnims?.length) throw new Error('VRMAアニメーションデータが見つかりません');
+    unloadVRMA();
+    currentVrmaName = srcName || '';
+    vrmaClip = createVRMAnimationClip(vrmAnims[0], currentVRM);
+    stripRootMotion(vrmaClip);
+    mixer = new THREE.AnimationMixer(currentVRM.scene);
+    vrmaAction = mixer.clipAction(vrmaClip);
+    vrmaAction.timeScale = 1.0;
+    vrmaSetLoop(vrmaLoop);
+    vrmaAction.play();
+    vrmaAction.paused = true;
+    timeline.durationFrames = Math.round(vrmaClip.duration * timeline.fps);
+    timeline.trimIn = 0; timeline.trimOut = timeline.durationFrames;
+    document.getElementById('lbl-duration').textContent = timeline.durationFrames.toString();
+    updateTrimLabel();
+    document.getElementById('btn-play').disabled = false;
+    document.getElementById('btn-pause').disabled = false;
+    renderTimeline();
+    showToast(`VRMA 読み込み完了 (${timeline.durationFrames}フレーム)`);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+function vrmaPlay() {
+  if (!mixer || !vrmaAction || vrmaPlaying) return;
+  if (timeline.currentFrame < timeline.trimIn || timeline.currentFrame >= timeline.trimOut) vrmaSeek(timeline.trimIn);
+  vrmaPlaying = true; vrmaAction.paused = false;
+  updatePlayButtons();
+}
+function vrmaPause() {
+  if (!vrmaPlaying) return;
+  vrmaPlaying = false; if (vrmaAction) vrmaAction.paused = true;
+  updatePlayButtons();
+}
+function vrmaSeek(frame) {
+  const f = Math.max(0, Math.min(frame, timeline.durationFrames));
+  timeline.currentFrame = f;
+  if (mixer && vrmaAction && vrmaClip) {
+    vrmaAction.time = Math.min(f / timeline.fps, vrmaClip.duration);
+    mixer.update(0);
+  }
+  updateFrameLabel();
+  renderTimeline();
+}
+function vrmaSetSpeed(s) { timeline.speed = s; if (vrmaAction) vrmaAction.timeScale = s; }
+function vrmaSetLoop(on) {
+  vrmaLoop = on;
+  if (vrmaAction) { vrmaAction.setLoop(THREE.LoopRepeat, Infinity); vrmaAction.clampWhenFinished = false; }
+}
+function unloadVRMA() {
+  if (vrmaAction) vrmaAction.stop();
+  if (mixer) mixer.stopAllAction();
+  mixer = null; vrmaClip = null; vrmaAction = null; vrmaPlaying = false;
+  document.getElementById('btn-play').disabled = true;
+  document.getElementById('btn-pause').disabled = true;
+}
+function updatePlayButtons() {
+  document.getElementById('btn-play').disabled = !mixer || vrmaPlaying;
+  document.getElementById('btn-pause').disabled = !mixer || !vrmaPlaying;
+}
+
+// ============================================================
+// エフェクト
+// ============================================================
+function makeFx(preset, params, opts) {
+  // tornado=TSL VFX / beam=2点ビーム / custom:*=fx-builder のメッシュVFX / それ以外=スプライト粒子。
+  let fx;
+  if (preset === 'tornado') {
+    fx = createTornado({
+      color: params.color, timeScale: params.timeScale,
+      parabolStrength: params.parabolStrength, parabolOffset: params.parabolOffset,
+      parabolAmplitude: params.parabolAmplitude, scale: params.scale,
+    });
+  } else if (preset === 'beam') {
+    fx = createBeamFx({ ...(beamSpec || {}), style: opts?.beamStyle || 'jagged' });
+    for (const k in params) fx.setParam(k, params[k]);   // 調整値を反映
+  } else if (preset.startsWith('custom:')) {
+    const spec = customSpecs.get(preset);
+    fx = spec ? createMeshFx(spec) : createFxSystem(cloneFxConfig(FX_PRESETS.fire));
+  } else {
+    const cfg = cloneFxConfig(FX_PRESETS[preset] || FX_PRESETS.fire);
+    applyParticleParams(cfg, params);
+    fx = createFxSystem(cfg);
+  }
+  fx.setEmitting(false);
+  scene.add(fx.object3D);
+  return fx;
+}
+
+// パラメータをライブ反映（tornado=uniform直接 / 粒子=config再設定）
+function applyEffectParam(ef, key, value) {
+  ef.params[key] = value;
+  if (ef.preset === 'tornado' || ef.preset === 'beam') {
+    ef.fx.setParam(key, value);
+  } else {
+    const cfg = cloneFxConfig(FX_PRESETS[ef.preset] || FX_PRESETS.fire);
+    applyParticleParams(cfg, ef.params);
+    ef.fx.setConfig(cfg);
+  }
+}
+
+function createEffect(opts) {
+  const preset = opts.preset || 'fire';
+  // tornado/custom は持続VFXなので range（期間）固定。単発指定でも range に寄せる。
+  const mode = isPersistentPreset(preset) ? 'range' : (opts.mode || 'burst');
+  // 調整パラメータ：プリセット既定 ＋ 保存値で上書き
+  const params = defaultParams(preset);
+  if (opts.params) for (const k in opts.params) if (k in params) params[k] = opts.params[k];
+  const beamStyle = opts.beamStyle || 'jagged';   // ビームの見た目：'jagged'(手続き) / 'sheet'(シート1枚)
+  const ef = {
+    id: opts.id ?? nextEffectId,
+    preset,
+    mode,
+    frame: opts.frame ?? timeline.currentFrame,
+    start: opts.start ?? timeline.currentFrame,
+    end: opts.end ?? Math.min(timeline.durationFrames, timeline.currentFrame + 15),
+    anchor: opts.anchor || 'world',
+    bone: opts.bone || 'rightHand',
+    pos: opts.pos ? opts.pos.slice() : defaultSpawnPos(opts.anchor || 'world'),
+    rot: opts.rot ? opts.rot.slice() : [0, 0, 0],
+    count: opts.count ?? 24,
+    onImpact: !!opts.onImpact,                 // 弾の着弾で発生
+    force: opts.force ?? 0,                     // 発生時に物理ボールへ加える力
+    forceRadius: opts.forceRadius ?? 2,
+    _impactCd: 0,
+    // ビーム(preset='beam')の到達点。mode: 'gizmo'(手動)/'ball'(弾に追従)/'bone'(NPCボーン)
+    to: {
+      mode: opts.to?.mode || 'gizmo',
+      pos: Array.isArray(opts.to?.pos) ? opts.to.pos.slice() : [0, 1.2, 2],
+      bone: opts.to?.bone || 'head',
+    },
+    // ビームの帯テクスチャ（スプライトシート）。差し替え可。
+    beamTex: {
+      src: opts.beamTex?.src ?? (beamSpec?.texture ?? '../electric.png'),
+      cols: opts.beamTex?.cols ?? (beamSpec?.frames?.cols ?? 4),
+      rows: opts.beamTex?.rows ?? (beamSpec?.frames?.rows ?? 4),
+      fps: opts.beamTex?.fps ?? (beamSpec?.frames?.fps ?? 18),
+    },
+    // 円筒テクスチャ（スプライトシート）。差し替え可。既定はperlin（エネルギー流）。
+    tubeTex: {
+      src: opts.tubeTex?.src ?? (beamSpec?.tubeTexture ?? 'builtin:perlin'),
+      cols: opts.tubeTex?.cols ?? (beamSpec?.tubeFrames?.cols ?? 1),
+      rows: opts.tubeTex?.rows ?? (beamSpec?.tubeFrames?.rows ?? 1),
+      fps: opts.tubeTex?.fps ?? (beamSpec?.tubeFrames?.fps ?? 12),
+    },
+    beamStyle,
+    // 経路（スプライン）：帯を基準→中間点→到達点の曲線に沿わせる
+    path: {
+      on: opts.path?.on ?? false,
+      mid: opts.path?.mid ?? 2,
+      spline: opts.path?.spline ?? true,
+      phase: opts.path?.phase ?? 1,
+      tiles: opts.path?.tiles ?? 1,
+      points: Array.isArray(opts.path?.points) ? opts.path.points.map(p => p.slice()) : [],
+    },
+    // 着弾エフェクト：ビームの到達点(to)で発生する粒子/カスタムFX（none=無し）
+    impact: {
+      preset: opts.impact?.preset || 'none',
+      mode: opts.impact?.mode || 'range',   // 'range'=表示中ずっと / 'burst'=発生時1回
+      count: opts.impact?.count ?? 20,
+    },
+    _impactFx: null, _impactPreset: '', _beamVis: false,
+    params,
+    fx: makeFx(preset, params, { beamStyle }),
+  };
+  ef.object3D = ef.fx.object3D;
+  if (ef.preset === 'beam') { ensurePathPoints(ef); applyBeamTex(ef); applyTubeTex(ef); applyBeamPath(ef); ensureImpactFx(ef); }
+  if (ef.id >= nextEffectId) nextEffectId = ef.id + 1;
+  effects.push(ef);
+  return ef;
+}
+
+// world 基準の初期発生位置（NPC前方・腰高さあたり）/ bone・object 基準は原点オフセット
+function defaultSpawnPos(anchor) {
+  return (anchor === 'bone' || anchor === 'object') ? [0, 0, 0] : [0, 1.0, 0.4];
+}
+
+function removeEffect(id) {
+  const i = effects.findIndex(e => e.id === id);
+  if (i < 0) return;
+  const ef = effects[i];
+  scene.remove(ef.object3D);
+  ef.fx.dispose();
+  if (ef._impactFx) { scene.remove(ef._impactFx.object3D); ef._impactFx.dispose(); ef._impactFx = null; }
+  effects.splice(i, 1);
+  if (selectedEffectId === id) selectEffect(null);
+  rebuildFxList();
+  renderTimeline();
+}
+
+function clearEffects() {
+  for (const ef of effects) {
+    scene.remove(ef.object3D); ef.fx.dispose();
+    if (ef._impactFx) { scene.remove(ef._impactFx.object3D); ef._impactFx.dispose(); ef._impactFx = null; }
+  }
+  effects.length = 0;
+  selectEffect(null);
+}
+
+function selectedEffect() { return effects.find(e => e.id === selectedEffectId) || null; }
+
+function selectEffect(id) {
+  selectedEffectId = id;
+  const ef = selectedEffect();
+  const editor = document.getElementById('sel-editor');
+  document.getElementById('btn-test-fire').disabled = !ef;
+  if (!ef) {
+    editor.style.display = 'none';
+    if (gizmo) gizmo.detach();
+    if (handle) handle.visible = false;
+    if (handle2) handle2.visible = false;
+    rebuildFxList();
+    return;
+  }
+  editor.style.display = 'block';
+  const isBeam = ef.preset === 'beam';
+  // 基準(from)ハンドルを発生位置へ
+  computeSpawnTransform(ef, _sp, _sq);
+  handle.position.copy(_sp);
+  handle.quaternion.copy(_sq);
+  handle.visible = true;
+  // 到達点(to)・中間点ハンドル（ビーム時のみ表示。gizmo=手動時だけドラッグ可）
+  if (isBeam) {
+    positionBeamHandles(ef);
+    handle2.visible = true;
+    const mid = ef.path.on ? ef.path.mid : 0;
+    for (let k = 0; k < midHandles.length; k++) midHandles[k].visible = k < mid;
+    // beamEdit が範囲外なら基準へ戻す
+    if (beamEdit === 'to' && ef.to.mode !== 'gizmo') beamEdit = 'from';
+    if (beamEdit.startsWith('mid') && parseInt(beamEdit.slice(3)) >= mid) beamEdit = 'from';
+    attachGizmoForBeam(ef);
+  } else {
+    if (handle2) handle2.visible = false;
+    for (const h of midHandles) h.visible = false;
+    gizmo.attach(handle);
+  }
+  gizmo.setMode(gizmoMode);
+  syncSelEditor();
+  rebuildParamUI(ef);
+  rebuildFxList();
+}
+
+// ビーム：編集点ボタン列（基準 / 中1…中N / 到達）を動的生成
+function rebuildBeamEditButtons(ef) {
+  const host = document.getElementById('sel-beam-edit');
+  if (!host) return;
+  host.innerHTML = '';
+  const items = [{ id: 'from', label: '基準' }];
+  if (ef.path.on) for (let k = 0; k < ef.path.mid; k++) items.push({ id: 'mid' + k, label: '中' + (k + 1) });
+  items.push({ id: 'to', label: '到達', disabled: ef.to.mode !== 'gizmo' });
+  for (const it of items) {
+    const b = document.createElement('button');
+    b.textContent = it.label;
+    if (beamEdit === it.id) b.classList.add('toggle-on');
+    if (it.disabled) b.disabled = true;
+    b.addEventListener('click', () => { beamEdit = it.id; attachGizmoForBeam(ef); rebuildBeamEditButtons(ef); });
+    host.appendChild(b);
+  }
+}
+
+// ビーム：from/to/中間点ハンドルをワールド位置へ配置（表示状態は変えない）
+function positionBeamHandles(ef) {
+  beamEndpoints(ef, _beamFrom, _beamTo);
+  handle.position.copy(_beamFrom);
+  handle2.position.copy(_beamTo);
+  const mid = ef.path.on ? ef.path.mid : 0;
+  for (let k = 0; k < mid && k < midHandles.length; k++) {
+    _sp.lerpVectors(_beamFrom, _beamTo, (k + 1) / (mid + 1));
+    const off = ef.path.points[k];
+    if (off) _sp.set(_sp.x + off[0], _sp.y + off[1], _sp.z + off[2]);
+    midHandles[k].position.copy(_sp);
+  }
+}
+
+// ビーム：編集対象(基準/到達/中間点)に応じてギズモを付け替え。
+function attachGizmoForBeam(ef) {
+  if (!gizmo) return;
+  if (beamEdit === 'to' && ef.to.mode === 'gizmo') { gizmo.attach(handle2); return; }
+  if (ef.path.on && beamEdit.startsWith('mid')) {
+    const k = parseInt(beamEdit.slice(3));
+    if (k < ef.path.mid) { gizmo.attach(midHandles[k]); return; }
+  }
+  gizmo.attach(handle);   // 既定＝基準
+}
+
+// 発生位置のワールド変換を算出（anchor に応じて）
+function computeSpawnTransform(ef, outPos, outQuat) {
+  _se.set(D2R(ef.rot[0]), D2R(ef.rot[1]), D2R(ef.rot[2]));
+  if (ef.anchor === 'object' && physBalls.length) {
+    outPos.set(ef.pos[0], ef.pos[1], ef.pos[2]).add(physBalls[0].pos);   // 弾に追従（オフセット付き）
+    outQuat.setFromEuler(_se);
+    return;
+  }
+  if (ef.anchor === 'bone' && currentVRM) {
+    const node = currentVRM.humanoid?.getNormalizedBoneNode(ef.bone);
+    if (node) {
+      node.updateWorldMatrix(true, false);
+      node.getWorldPosition(_bonePos);
+      node.getWorldQuaternion(_boneQuat);
+      outQuat.copy(_boneQuat).multiply(_tq.setFromEuler(_se));
+      outPos.set(ef.pos[0], ef.pos[1], ef.pos[2]).applyQuaternion(_boneQuat).add(_bonePos);
+      return;
+    }
+  }
+  outPos.set(ef.pos[0], ef.pos[1], ef.pos[2]);
+  outQuat.setFromEuler(_se);
+}
+
+// ビームの端点（from=基準/anchor準拠、to=到達点mode別）をワールド座標で算出
+function beamEndpoints(ef, outFrom, outTo) {
+  computeSpawnTransform(ef, outFrom, _sq);   // from（world/bone/object の基準）
+  const to = ef.to;
+  if (to.mode === 'ball' && physBalls.length) { outTo.copy(physBalls[0].pos); return; }
+  if (to.mode === 'bone' && currentVRM) {
+    const node = currentVRM.humanoid?.getNormalizedBoneNode(to.bone);
+    if (node) { node.updateWorldMatrix(true, false); node.getWorldPosition(outTo); return; }
+  }
+  outTo.set(to.pos[0], to.pos[1], to.pos[2]);   // gizmo（手動）
+}
+
+// ギズモ操作 → 選択エフェクトの pos/rot（基準相対）へ書き戻し
+function onGizmoChange() {
+  const ef = selectedEffect();
+  if (!ef) return;
+  // ビームの中間点ハンドルを動かした場合（基準→到達点の直線上の点からのオフセットで保存）
+  if (ef.preset === 'beam' && ef.path.on && beamEdit.startsWith('mid') && gizmo.object === midHandles[parseInt(beamEdit.slice(3))]) {
+    const k = parseInt(beamEdit.slice(3));
+    beamEndpoints(ef, _beamFrom, _beamTo);
+    _sp.lerpVectors(_beamFrom, _beamTo, (k + 1) / (ef.path.mid + 1));
+    const h = midHandles[k];
+    ef.path.points[k] = [h.position.x - _sp.x, h.position.y - _sp.y, h.position.z - _sp.z];
+    return;
+  }
+  // ビームの到達点(to)ハンドルを動かした場合
+  if (ef.preset === 'beam' && gizmo.object === handle2) {
+    if (ef.to.mode === 'gizmo') ef.to.pos = [handle2.position.x, handle2.position.y, handle2.position.z];
+    return;
+  }
+  if (ef.anchor === 'object') {
+    // 弾中心からのオフセットとして記録（弾が無ければワールド位置をそのまま）
+    if (physBalls.length) { _sp.copy(handle.position).sub(physBalls[0].pos); ef.pos = [_sp.x, _sp.y, _sp.z]; }
+    else ef.pos = [handle.position.x, handle.position.y, handle.position.z];
+    _se.setFromQuaternion(handle.quaternion);
+    ef.rot = [R2D(_se.x), R2D(_se.y), R2D(_se.z)];
+    syncSelEditor();
+    return;
+  }
+  if (ef.anchor === 'bone' && currentVRM) {
+    const node = currentVRM.humanoid?.getNormalizedBoneNode(ef.bone);
+    if (node) {
+      node.getWorldPosition(_bonePos);
+      node.getWorldQuaternion(_boneQuat);
+      _boneInv.copy(_boneQuat).invert();
+      _sp.copy(handle.position).sub(_bonePos).applyQuaternion(_boneInv);
+      ef.pos = [_sp.x, _sp.y, _sp.z];
+      _sq.copy(_boneInv).multiply(handle.quaternion);
+      _se.setFromQuaternion(_sq);
+      ef.rot = [R2D(_se.x), R2D(_se.y), R2D(_se.z)];
+      syncSelEditor();
+      return;
+    }
+  }
+  ef.pos = [handle.position.x, handle.position.y, handle.position.z];
+  _se.setFromQuaternion(handle.quaternion);
+  ef.rot = [R2D(_se.x), R2D(_se.y), R2D(_se.z)];
+  syncSelEditor();
+}
+
+// 選択ハンドルを毎フレーム追従（ドラッグ中は除く）。bone基準／ビームの動く端点用。
+function syncSelectedHandle() {
+  if (!handle || !handle.visible || (gizmo && gizmo.dragging)) return;
+  const ef = selectedEffect();
+  if (!ef) return;
+  if (ef.preset === 'beam') {
+    positionBeamHandles(ef);   // from/to/中間点ハンドルを追従
+    return;
+  }
+  if (ef.anchor !== 'bone') return;
+  computeSpawnTransform(ef, _sp, _sq);
+  handle.position.copy(_sp);
+  handle.quaternion.copy(_sq);
+}
+
+// 単発バーストを prev<frame<=cur の範囲で発火
+function fireBurstsBetween(prev, cur) {
+  for (const ef of effects) {
+    if (ef.mode !== 'burst') continue;
+    if (ef.frame > prev && ef.frame <= cur) {
+      computeSpawnTransform(ef, _sp, _sq);
+      ef.object3D.position.copy(_sp); ef.object3D.quaternion.copy(_sq);
+      ef.fx.burst(ef.count);
+      applyEffectForce(ef, _sp);   // 発生時に力
+    }
+  }
+}
+
+function updateEffects(dt) {
+  const f = timeline.currentFrame;
+  for (const ef of effects) {
+    if (ef._impactCd > 0) ef._impactCd -= dt;
+    if (ef.onImpact) { ef.fx.update(dt); continue; }   // 着弾系は onPhysImpact 側で配置・発生
+    if (ef.preset === 'beam') {
+      // 基準(from)→到達点(to)（経路モードなら中間点を通る曲線）を毎フレーム結ぶ。range 内だけ表示。
+      const visible = ef.mode === 'range' ? (f >= ef.start && f <= ef.end) : true;
+      ef.fx.setEmitting(visible);
+      if (visible) {
+        if (ef.path.on && ef.fx.setPathMode) {
+          ef.fx.setPathMode(true);
+          ef.fx.setPathPoints(beamPathPoints(ef), camera.position, ef.path.spline);
+        } else {
+          if (ef.fx.setPathMode) ef.fx.setPathMode(false);
+          beamEndpoints(ef, _beamFrom, _beamTo);
+          ef.fx.setEndpoints(_beamFrom, _beamTo, camera.position);
+        }
+      }
+      // 着弾エフェクト：到達点(_beamTo)で発生
+      if (ef._impactFx) {
+        if (visible) { ef._impactFx.object3D.position.copy(_beamTo); ef._impactFx.object3D.quaternion.identity(); }
+        if (ef.impact.mode === 'burst') { if (visible && !ef._beamVis) ef._impactFx.burst(ef.impact.count || 12); }
+        else ef._impactFx.setEmitting(visible);
+        ef._impactFx.update(dt);
+      }
+      ef._beamVis = visible;
+      ef.fx.update(dt);
+      continue;
+    }
+    if (ef.anchor === 'object') {
+      // 弾に追従するワールド空間トレイル：object3D は原点に固定し、発生原点だけを弾へ動かす。
+      // これにより生成済み粒子はその場に残り、軌跡(トレイル)になる（object3Dごと動かすと塊になる）。
+      ef.object3D.position.set(0, 0, 0);
+      ef.object3D.quaternion.identity();
+      let emit = false;
+      if (physBalls.length) {
+        const b = physBalls[0];
+        if (ef.fx.setEmitOrigin) ef.fx.setEmitOrigin(b.pos.x + ef.pos[0], b.pos.y + ef.pos[1], b.pos.z + ef.pos[2]);
+        else ef.object3D.position.set(b.pos.x + ef.pos[0], b.pos.y + ef.pos[1], b.pos.z + ef.pos[2]);
+        emit = b.vel.lengthSq() > 0.25;   // 弾が動いている間だけ発生
+      }
+      ef.fx.setEmitting(emit);
+      ef.fx.update(dt);
+      continue;
+    }
+    computeSpawnTransform(ef, _sp, _sq);
+    ef.object3D.position.copy(_sp);
+    ef.object3D.quaternion.copy(_sq);
+    const emit = ef.mode === 'range' && f >= ef.start && f <= ef.end;
+    ef.fx.setEmitting(emit);
+    ef.fx.update(dt);
+  }
+}
+
+// ============================================================
+// 物理テスト（弾・着弾・力）
+// ============================================================
+function clearPhysBalls() { for (const b of physBalls) scene.remove(b.mesh); physBalls.length = 0; }
+
+function setPhysBalls(n) {
+  clearPhysBalls();
+  const geom = new THREE.SphereGeometry(phys.radius, 16, 12);
+  for (let i = 0; i < n; i++) {
+    const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0xffcc44, emissive: 0x442200, roughness: 0.4, metalness: 0.2 }));
+    const a = n > 1 ? (i / n) * Math.PI * 2 : 0;
+    const pos = new THREE.Vector3(Math.cos(a) * (n > 1 ? 1.2 : 0), phys.radius, Math.sin(a) * (n > 1 ? 1.2 : 0)).add(n > 1 ? new THREE.Vector3(0, 0, 0) : PHYS_SPAWN.clone().setY(phys.radius));
+    mesh.position.copy(pos);
+    scene.add(mesh);
+    physBalls.push({ mesh, pos, vel: new THREE.Vector3(), radius: phys.radius });
+  }
+}
+
+// 基準点から前方(+Z を pitch/yaw で回した向き)へ発射
+function launchPhys() {
+  if (!physBalls.length) setPhysBalls(phys.count);
+  const cp = Math.cos(D2R(phys.pitch)), sp = Math.sin(D2R(phys.pitch)), cy = Math.cos(D2R(phys.yaw)), sy = Math.sin(D2R(phys.yaw));
+  _phDir.set(cp * sy, sp, cp * cy).normalize();
+  for (const b of physBalls) {
+    b.pos.copy(PHYS_SPAWN);
+    b.vel.copy(_phDir).multiplyScalar(phys.speed);
+    b.vel.x += (Math.random() - 0.5) * phys.speed * 0.08;
+    b.vel.y += (Math.random() - 0.5) * phys.speed * 0.04;
+    b.mesh.position.copy(b.pos);
+  }
+}
+
+function updatePhysics(dt) {
+  if (!physBalls.length) return;
+  const hs = PROOM.s / 2, ceil = PROOM.h, e = phys.restitution;
+  for (const b of physBalls) {
+    b.vel.y += phys.gravity * dt;
+    b.pos.addScaledVector(b.vel, dt);
+    const r = b.radius, pre = b.vel.length();
+    let hit = false;
+    if (b.pos.y < r)        { b.pos.y = r;        if (b.vel.y < 0) { b.vel.y = -b.vel.y * e; b.vel.x *= 0.8; b.vel.z *= 0.8; hit = true; } }
+    else if (b.pos.y > ceil - r) { b.pos.y = ceil - r; if (b.vel.y > 0) { b.vel.y = -b.vel.y * e; hit = true; } }
+    if (b.pos.x < -hs + r)  { b.pos.x = -hs + r;  if (b.vel.x < 0) { b.vel.x = -b.vel.x * e; hit = true; } }
+    else if (b.pos.x > hs - r) { b.pos.x = hs - r; if (b.vel.x > 0) { b.vel.x = -b.vel.x * e; hit = true; } }
+    if (b.pos.z < -hs + r)  { b.pos.z = -hs + r;  if (b.vel.z < 0) { b.vel.z = -b.vel.z * e; hit = true; } }
+    else if (b.pos.z > hs - r) { b.pos.z = hs - r; if (b.vel.z > 0) { b.vel.z = -b.vel.z * e; hit = true; } }
+    if (hit && pre > 1.5) onPhysImpact(b.pos);   // 静止ジッタでは発生させない（一定速度以上のみ）
+    b.mesh.position.copy(b.pos);
+  }
+}
+
+// 着弾：onImpact エフェクトを衝突点で1回発生＋力を適用
+function onPhysImpact(point) {
+  for (const ef of effects) {
+    if (!ef.onImpact || ef._impactCd > 0) continue;
+    // 発生原点をワールド衝突点に焼き込む（object3D は原点固定）。次の着弾で原点を動かしても
+    // 前回の粒子は残る＝多段バウンドでも過去のスパークが着弾点に留まる。
+    if (ef.fx.setEmitOrigin) { ef.object3D.position.set(0, 0, 0); ef.object3D.quaternion.identity(); ef.fx.setEmitOrigin(point.x, point.y, point.z); }
+    else { ef.object3D.position.copy(point); ef.object3D.quaternion.identity(); }
+    ef.object3D.visible = true;
+    ef.fx.burst(ef.count || 12);
+    applyEffectForce(ef, point);
+    ef._impactCd = 0.12;   // 連続着弾の多重発火を抑制
+  }
+}
+
+// エフェクト発生時、範囲内の物理ボールへ中心から外向きの力
+function applyEffectForce(ef, center) {
+  if (!ef.force || ef.force <= 0) return;
+  const R = ef.forceRadius || 2;
+  for (const b of physBalls) {
+    _fv.copy(b.pos).sub(center);
+    const d = _fv.length();
+    if (d < R && d > 1e-3) { _fv.multiplyScalar(1 / d); b.vel.addScaledVector(_fv, ef.force * (1 - d / R)); }
+  }
+}
+
+// ============================================================
+// 右パネル：一覧 + 選択エディタ
+// ============================================================
+function fxLabel(ef) {
+  const m = ef.mode === 'burst' ? `@${ef.frame}` : `${ef.start}–${ef.end}`;
+  const a = ef.anchor === 'bone' ? ef.bone : 'world';
+  return `${ef.preset} ${m} (${a})`;
+}
+
+function rebuildFxList() {
+  const list = document.getElementById('fx-list');
+  list.innerHTML = '';
+  if (!effects.length) {
+    const e = document.createElement('div'); e.id = 'fx-empty'; e.textContent = 'エフェクトはまだありません';
+    list.appendChild(e); return;
+  }
+  for (const ef of effects) {
+    const item = document.createElement('div');
+    item.className = 'fx-item' + (ef.id === selectedEffectId ? ' sel' : '');
+    const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = PRESET_COLORS[ef.preset] || '#fff';
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = fxLabel(ef);
+    const del = document.createElement('button'); del.className = 'del'; del.textContent = '✕';
+    del.title = '削除';
+    del.addEventListener('click', (e) => { e.stopPropagation(); removeEffect(ef.id); });
+    item.appendChild(dot); item.appendChild(nm); item.appendChild(del);
+    item.addEventListener('click', () => selectEffect(ef.id));
+    list.appendChild(item);
+  }
+}
+
+function syncSelEditor() {
+  const ef = selectedEffect();
+  if (!ef) return;
+  document.getElementById('sel-preset').value = ef.preset;
+  document.getElementById('sel-anchor').value = ef.anchor;
+  document.getElementById('sel-bone-row').style.display = ef.anchor === 'bone' ? 'flex' : 'none';
+  document.getElementById('sel-bone').value = ef.bone;
+  document.getElementById('sel-frame-row').style.display = ef.mode === 'burst' ? 'flex' : 'none';
+  document.getElementById('sel-range-row').style.display = ef.mode === 'range' ? 'flex' : 'none';
+  document.getElementById('sel-count-row').style.display = ef.mode === 'burst' ? 'flex' : 'none';
+  document.getElementById('sel-frame').value = ef.frame;
+  document.getElementById('sel-start').value = ef.start;
+  document.getElementById('sel-end').value = ef.end;
+  document.getElementById('sel-count').value = ef.count;
+  // 物理連携（着弾で発生 / 力）
+  const onImp = document.getElementById('sel-onimpact');
+  if (onImp) onImp.checked = !!ef.onImpact;
+  const forceSl = document.getElementById('sel-force'), forceVal = document.getElementById('sel-force-val');
+  if (forceSl) { forceSl.value = ef.force; if (forceVal) forceVal.textContent = Number(ef.force).toFixed(1); }
+  const frSl = document.getElementById('sel-forceradius'), frVal = document.getElementById('sel-forceradius-val');
+  if (frSl) { frSl.value = ef.forceRadius; if (frVal) frVal.textContent = Number(ef.forceRadius).toFixed(1); }
+  // ビーム：到達点モード＆ギズモ編集トグル
+  const beamBox = document.getElementById('sel-beam-box');
+  if (beamBox) {
+    const isBeam = ef.preset === 'beam';
+    beamBox.style.display = isBeam ? 'block' : 'none';
+    if (isBeam) {
+      document.getElementById('sel-beam-target').value = ef.to.mode;
+      document.getElementById('sel-beam-bone-row').style.display = ef.to.mode === 'bone' ? 'flex' : 'none';
+      const bb = document.getElementById('sel-beam-bone'); if (bb && ef.to.bone) bb.value = ef.to.bone;
+      const stsel = document.getElementById('sel-beam-style'); if (stsel) stsel.value = ef.beamStyle;
+      const tsel = document.getElementById('sel-beam-tex'); if (tsel) tsel.value = ef.beamTex.src;
+      document.getElementById('sel-beam-cols').value = ef.beamTex.cols;
+      document.getElementById('sel-beam-rows').value = ef.beamTex.rows;
+      document.getElementById('sel-beam-fps').value = ef.beamTex.fps;
+      const ttsel = document.getElementById('sel-tube-tex'); if (ttsel) ttsel.value = ef.tubeTex.src;
+      document.getElementById('sel-tube-cols').value = ef.tubeTex.cols;
+      document.getElementById('sel-tube-rows').value = ef.tubeTex.rows;
+      document.getElementById('sel-tube-fps').value = ef.tubeTex.fps;
+      // 経路（スプライン）
+      document.getElementById('sel-path-on').checked = ef.path.on;
+      document.getElementById('sel-path-mid').value = ef.path.mid;
+      document.getElementById('sel-path-mid-val').textContent = String(ef.path.mid);
+      document.getElementById('sel-path-spline').checked = ef.path.spline;
+      document.getElementById('sel-path-phase').value = ef.path.phase;
+      document.getElementById('sel-path-phase-val').textContent = Number(ef.path.phase).toFixed(1);
+      document.getElementById('sel-path-tiles').value = ef.path.tiles;
+      document.getElementById('sel-path-tiles-val').textContent = String(ef.path.tiles);
+      const ip = document.getElementById('sel-impact-preset'); if (ip) ip.value = ef.impact.preset;
+      document.getElementById('sel-impact-mode').value = ef.impact.mode;
+      document.getElementById('sel-impact-count').value = ef.impact.count;
+      rebuildBeamEditButtons(ef);
+    }
+  }
+}
+
+function setGizmoMode(mode) {
+  gizmoMode = mode;
+  if (gizmo) gizmo.setMode(mode);
+  document.getElementById('btn-gz-move').classList.toggle('toggle-on', mode === 'translate');
+  document.getElementById('btn-gz-rot').classList.toggle('toggle-on', mode === 'rotate');
+}
+
+// プリセット変更時は fx を作り直す
+function changePreset(ef, preset) {
+  if (ef.preset === preset) return;
+  scene.remove(ef.object3D); ef.fx.dispose();
+  ef.preset = preset;
+  ef.params = defaultParams(preset);
+  ef.fx = makeFx(preset, ef.params, { beamStyle: ef.beamStyle || 'jagged' });
+  ef.object3D = ef.fx.object3D;
+  if (preset === 'beam') { ensurePathPoints(ef); applyBeamTex(ef); applyTubeTex(ef); applyBeamPath(ef); }
+  ensureImpactFx(ef);   // beam以外へ変更時は着弾FXを破棄
+  if (isPersistentPreset(preset) && ef.mode !== 'range') {
+    ef.mode = 'range';
+    if (ef.end <= ef.start) ef.end = Math.min(timeline.durationFrames, ef.start + 15);
+  }
+  syncSelEditor();
+  rebuildParamUI(ef);
+}
+
+// 選択エフェクトの調整パラメータUI（プリセット別スライダー/カラー）を生成
+function rebuildParamUI(ef) {
+  const host = document.getElementById('sel-params');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const d of (FX_PARAM_DEFS[ef.preset] || [])) {
+    const row = document.createElement('div'); row.className = 'row';
+    const lab = document.createElement('label'); lab.textContent = d.label; row.appendChild(lab);
+    if (d.type === 'color') {
+      const inp = document.createElement('input');
+      inp.type = 'color'; inp.value = ef.params[d.key];
+      inp.style.cssText = 'width:40px;height:22px;padding:0;border:1px solid #3a3a60;background:#16162c;cursor:pointer;';
+      inp.addEventListener('input', () => applyEffectParam(ef, d.key, inp.value));
+      row.appendChild(inp);
+    } else if (d.type === 'check') {
+      const inp = document.createElement('input');
+      inp.type = 'checkbox'; inp.checked = !!ef.params[d.key];
+      inp.addEventListener('change', () => applyEffectParam(ef, d.key, inp.checked));
+      row.appendChild(inp);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = 'range'; inp.min = d.min; inp.max = d.max; inp.step = d.step; inp.value = ef.params[d.key];
+      inp.style.flex = '1';
+      const val = document.createElement('span'); val.className = 'val'; val.textContent = Number(ef.params[d.key]).toFixed(2);
+      inp.addEventListener('input', () => { const v = parseFloat(inp.value); val.textContent = v.toFixed(2); applyEffectParam(ef, d.key, v); });
+      row.appendChild(inp); row.appendChild(val);
+    }
+    host.appendChild(row);
+  }
+}
+
+// ============================================================
+// タイムライン Canvas
+// ============================================================
+function frameToX(frame) { return HEADER_W + frame * tlPxPerFrame - tlScrollX; }
+function xToFrame(x) { return Math.round((x - HEADER_W + tlScrollX) / tlPxPerFrame); }
+function rowToY(rowIdx) { return RULER_H + rowIdx * ROW_H; }
+function maxScrollX() {
+  const canvas = document.getElementById('timeline');
+  const visible = (canvas?.width ?? 0) - HEADER_W;
+  const content = (timeline.durationFrames + 5) * tlPxPerFrame;
+  return Math.max(0, content - visible);
+}
+
+function renderTimeline() {
+  const canvas = document.getElementById('timeline');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  ctx.fillStyle = '#08081a'; ctx.fillRect(0, 0, W, H);
+
+  // フレームグリッド
+  const startF = Math.max(0, Math.floor(tlScrollX / tlPxPerFrame));
+  const endF = Math.ceil((tlScrollX + W - HEADER_W) / tlPxPerFrame);
+  for (let f = startF; f <= endF; f++) {
+    const x = frameToX(f);
+    if (x < HEADER_W) continue;
+    if (f % 10 === 0) { ctx.strokeStyle = '#1c1c32'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, RULER_H); ctx.lineTo(x, H); ctx.stroke(); }
+    else if (tlPxPerFrame >= 12 && f % 5 === 0) { ctx.strokeStyle = '#14142a'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, RULER_H); ctx.lineTo(x, H); ctx.stroke(); }
+  }
+
+  // エフェクト行
+  effects.forEach((ef, ri) => {
+    const y = rowToY(ri);
+    const sel = ef.id === selectedEffectId;
+    ctx.fillStyle = sel ? '#1a2240' : (ri % 2 === 0 ? '#0d0d20' : '#0f0f25');
+    ctx.fillRect(HEADER_W, y, W - HEADER_W, ROW_H);
+    ctx.fillStyle = sel ? '#141d38' : '#0a0a18';
+    ctx.fillRect(0, y, HEADER_W, ROW_H);
+
+    ctx.fillStyle = PRESET_COLORS[ef.preset] || '#ccc';
+    ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText(fxLabel(ef), 6, y + ROW_H - 6);
+
+    ctx.strokeStyle = '#181830'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, y + ROW_H - 0.5); ctx.lineTo(W, y + ROW_H - 0.5); ctx.stroke();
+
+    const col = PRESET_COLORS[ef.preset] || '#ccc';
+    if (ef.mode === 'range') {
+      const x0 = Math.max(HEADER_W, frameToX(ef.start));
+      const x1 = Math.min(W, frameToX(ef.end + 1));
+      if (x1 >= HEADER_W && x0 <= W) {
+        ctx.fillStyle = col + '44'; ctx.fillRect(x0, y + 3, x1 - x0, ROW_H - 6);
+        ctx.strokeStyle = col; ctx.lineWidth = sel ? 2 : 1.2; ctx.strokeRect(x0, y + 3, x1 - x0, ROW_H - 6);
+      }
+    } else {
+      const x = frameToX(ef.frame);
+      if (x >= HEADER_W - 8 && x <= W + 8) {
+        const yc = y + ROW_H / 2;
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.moveTo(x, yc - 6); ctx.lineTo(x + 6, yc); ctx.lineTo(x, yc + 6); ctx.lineTo(x - 6, yc); ctx.closePath(); ctx.fill();
+        if (sel) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
+      }
+    }
+  });
+
+  // ルーラー
+  ctx.fillStyle = '#10102a'; ctx.fillRect(0, 0, W, RULER_H);
+  const tickEvery = tlPxPerFrame >= 8 ? 10 : tlPxPerFrame >= 4 ? 30 : 60;
+  ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  for (let f = 0; f <= timeline.durationFrames + tickEvery; f += tickEvery) {
+    const x = frameToX(f);
+    if (x < HEADER_W || x > W) continue;
+    ctx.fillStyle = '#666'; ctx.fillText(f.toString(), x, RULER_H - 5);
+    ctx.fillStyle = '#444'; ctx.fillRect(x - 0.5, RULER_H - 14, 1, 9);
+  }
+  ctx.strokeStyle = '#2a2a44'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(HEADER_W - 0.5, 0); ctx.lineTo(HEADER_W - 0.5, H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, RULER_H - 0.5); ctx.lineTo(W, RULER_H - 0.5); ctx.stroke();
+
+  drawTrim(ctx, W, H);
+  drawAudioCues(ctx, W);
+  drawPlayhead(ctx, W, H);
+}
+
+function drawTrim(ctx, W, H) {
+  const xIn = frameToX(timeline.trimIn), xOut = frameToX(timeline.trimOut);
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  if (xIn > HEADER_W) ctx.fillRect(HEADER_W, RULER_H, Math.min(xIn, W) - HEADER_W, H - RULER_H);
+  if (xOut < W) { const x0 = Math.max(xOut, HEADER_W); ctx.fillRect(x0, RULER_H, W - x0, H - RULER_H); }
+  ctx.strokeStyle = '#33cc88'; ctx.lineWidth = 1.5;
+  if (xIn >= HEADER_W && xIn <= W) { ctx.beginPath(); ctx.moveTo(xIn + 0.5, RULER_H); ctx.lineTo(xIn + 0.5, H); ctx.stroke(); }
+  if (xOut >= HEADER_W && xOut <= W) { ctx.beginPath(); ctx.moveTo(xOut - 0.5, RULER_H); ctx.lineTo(xOut - 0.5, H); ctx.stroke(); }
+  ctx.fillStyle = '#33cc88';
+  if (xIn >= HEADER_W && xIn <= W) { ctx.beginPath(); ctx.moveTo(xIn, RULER_H - 14); ctx.lineTo(xIn + TRIM_HANDLE_W, RULER_H - 14); ctx.lineTo(xIn, RULER_H); ctx.closePath(); ctx.fill(); }
+  if (xOut >= HEADER_W && xOut <= W) { ctx.beginPath(); ctx.moveTo(xOut, RULER_H - 14); ctx.lineTo(xOut - TRIM_HANDLE_W, RULER_H - 14); ctx.lineTo(xOut, RULER_H); ctx.closePath(); ctx.fill(); }
+}
+
+function drawPlayhead(ctx, W, H) {
+  const x = frameToX(timeline.currentFrame);
+  if (x < HEADER_W - 1 || x > W + 1) return;
+  ctx.strokeStyle = '#ff3333'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  ctx.fillStyle = '#ff3333';
+  ctx.beginPath(); ctx.moveTo(x - 5, 0); ctx.lineTo(x + 5, 0); ctx.lineTo(x, 8); ctx.closePath(); ctx.fill();
+}
+
+function rowAt(offsetX, offsetY) {
+  if (offsetX < HEADER_W || offsetY < RULER_H) return null;
+  const idx = Math.floor((offsetY - RULER_H) / ROW_H);
+  if (idx < 0 || idx >= effects.length) return null;
+  const frame = Math.max(0, Math.min(xToFrame(offsetX), timeline.durationFrames));
+  return { ef: effects[idx], frame };
+}
+
+let _rangeDrag = null;   // { id, startFrame, endFrame }
+let _trimDrag = null;
+function setupTimelineEvents(canvas) {
+  let tlDragging = false, panDrag = null;
+
+  canvas.addEventListener('mousedown', e => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+
+    if (e.button === 1 || (e.button === 0 && e.altKey)) { e.preventDefault(); panDrag = { startX: x, startScroll: tlScrollX }; return; }
+
+    // ルーラー：トリムハンドル or シーク
+    if (y < RULER_H && x >= HEADER_W) {
+      const xIn = frameToX(timeline.trimIn), xOut = frameToX(timeline.trimOut), TOL = TRIM_HANDLE_W + 3;
+      const dIn = Math.abs(x - xIn), dOut = Math.abs(x - xOut);
+      if (dIn <= TOL || dOut <= TOL) { _trimDrag = (dIn <= dOut) ? 'in' : 'out'; return; }
+      tlDragging = true;
+      vrmaSeek(Math.max(0, Math.min(xToFrame(x), timeline.durationFrames)));
+      return;
+    }
+
+    if (e.button !== 0) return;
+    const hit = rowAt(x, y);
+    if (!hit) return;
+    selectEffect(hit.ef.id);
+    if (hit.ef.mode === 'burst') {
+      hit.ef.frame = hit.frame;
+      syncSelEditor();
+      renderTimeline();
+    } else {
+      _rangeDrag = { id: hit.ef.id, startFrame: hit.frame, endFrame: hit.frame };
+    }
+  });
+
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (panDrag) { tlScrollX = Math.max(0, Math.min(maxScrollX(), panDrag.startScroll - (x - panDrag.startX))); renderTimeline(); return; }
+    const f = Math.max(0, Math.min(xToFrame(x), timeline.durationFrames));
+    if (_trimDrag) {
+      if (_trimDrag === 'in') timeline.trimIn = Math.max(0, Math.min(f, timeline.trimOut - 1));
+      else timeline.trimOut = Math.min(timeline.durationFrames, Math.max(f, timeline.trimIn + 1));
+      updateTrimLabel(); renderTimeline(); return;
+    }
+    if (tlDragging) { vrmaSeek(f); return; }
+    if (_rangeDrag) {
+      _rangeDrag.endFrame = f;
+      const ef = effects.find(e2 => e2.id === _rangeDrag.id);
+      if (ef) { ef.start = Math.min(_rangeDrag.startFrame, f); ef.end = Math.max(_rangeDrag.startFrame, f); syncSelEditor(); }
+      renderTimeline();
+    }
+  });
+
+  const endDrag = () => { tlDragging = false; _trimDrag = null; panDrag = null; if (_rangeDrag) { _rangeDrag = null; rebuildFxList(); } };
+  canvas.addEventListener('mouseup', endDrag);
+  canvas.addEventListener('mouseleave', endDrag);
+
+  canvas.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const hit = rowAt(e.clientX - rect.left, e.clientY - rect.top);
+    if (hit) removeEffect(hit.ef.id);
+  });
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey) {
+      tlScrollX = Math.max(0, Math.min(maxScrollX(), tlScrollX + (e.shiftKey ? e.deltaY : e.deltaX)));
+    } else if (x < HEADER_W) {
+      tlScrollX = Math.max(0, tlScrollX + e.deltaY);
+    } else {
+      const fAt = xToFrame(x); const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2;
+      tlPxPerFrame = Math.max(2, Math.min(60, tlPxPerFrame * factor));
+      tlScrollX = Math.max(0, fAt * tlPxPerFrame - (x - HEADER_W));
+    }
+    renderTimeline();
+  }, { passive: false });
+}
+
+// ── タイムライン リサイズ ──
+function setupTimelineResize() {
+  const resizer = document.getElementById('timeline-resizer');
+  const section = document.getElementById('timeline-section');
+  let dragging = false, startY = 0, startH = 0;
+  resizer.addEventListener('mousedown', e => {
+    dragging = true; startY = e.clientY; startH = section.offsetHeight;
+    resizer.classList.add('dragging'); e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const h = Math.max(120, Math.min(window.innerHeight - 160, startH - (e.clientY - startY)));
+    section.style.height = h + 'px';
+    resizeTimeline(); renderTimeline();
+  });
+  window.addEventListener('mouseup', () => { dragging = false; resizer.classList.remove('dragging'); });
+}
+
+function resizeTimeline() {
+  const canvas = document.getElementById('timeline');
+  const section = document.getElementById('timeline-section');
+  if (!canvas || !section) return;
+  canvas.width = section.clientWidth;
+  canvas.height = section.clientHeight;
+}
+
+// ============================================================
+// 保存 / 読み込み（timeline.json に effect トラックを埋め込み）
+// ============================================================
+function exportTimeline() {
+  const tracks = otherTracks.map(t => ({ ...t }));   // effect 以外のトラックを温存
+  for (const ef of effects) {
+    const t = { kind: 'effect', id: ef.id, preset: ef.preset, mode: ef.mode, anchor: ef.anchor, pos: ef.pos.slice(), rot: ef.rot.slice(), count: ef.count, params: { ...ef.params } };
+    if (ef.anchor === 'bone') t.bone = ef.bone;
+    if (ef.preset === 'beam') {
+      t.to = { mode: ef.to.mode, pos: ef.to.pos.slice() };
+      if (ef.to.mode === 'bone') t.to.bone = ef.to.bone;
+      t.beamTex = { ...ef.beamTex };
+      t.tubeTex = { ...ef.tubeTex };
+      t.beamStyle = ef.beamStyle;
+      t.path = { on: ef.path.on, mid: ef.path.mid, spline: ef.path.spline, phase: ef.path.phase, tiles: ef.path.tiles, points: ef.path.points.map(p => p.slice()) };
+      if (ef.impact.preset && ef.impact.preset !== 'none') t.impact = { preset: ef.impact.preset, mode: ef.impact.mode, count: ef.impact.count };
+    }
+    if (ef.onImpact) t.onImpact = true;
+    if (ef.force) { t.force = ef.force; t.forceRadius = ef.forceRadius; }
+    if (ef.mode === 'range') { t.start = ef.start; t.end = ef.end; } else { t.frame = ef.frame; }
+    tracks.push(t);
+  }
+  for (const cue of audioCues) tracks.push({ kind: 'audio', id: cue.id, src: cue.src, frame: cue.frame, volume: cue.volume, name: cue.name });
+  const out = { version: 2, fps: timeline.fps, durationFrames: timeline.durationFrames, trimIn: timeline.trimIn, trimOut: timeline.trimOut, tracks };
+  if (timeline.speed && timeline.speed !== 1) out.speed = timeline.speed;
+  if (currentVrmaName) out.vrma = currentVrmaName;
+  return out;
+}
+
+function importTimeline(json) {
+  if (!Array.isArray(json.tracks)) throw new Error('無効なタイムラインファイルです');
+  clearEffects();
+  audioCues.length = 0;
+  otherTracks = [];
+  loadedTimelineJson = json;
+  if (currentCloth) currentCloth.setTimeline(json);   // マントのグリップ範囲を適用
+  if (json.fps) timeline.fps = json.fps;
+  if (json.durationFrames && !vrmaClip) timeline.durationFrames = json.durationFrames;
+  if (json.vrma) currentVrmaName = json.vrma;
+  if (Number.isFinite(json.speed) && json.speed > 0) {
+    const sl = document.getElementById('sel-speed'), vl = document.getElementById('sel-speed-val');
+    if (sl) sl.value = String(json.speed);
+    if (vl) vl.textContent = `${json.speed.toFixed(2).replace(/\.?0+$/, '')}×`;
+    vrmaSetSpeed(json.speed);
+  }
+  timeline.trimIn = Number.isFinite(json.trimIn) ? Math.max(0, Math.min(json.trimIn, timeline.durationFrames)) : 0;
+  timeline.trimOut = Number.isFinite(json.trimOut) ? Math.max(timeline.trimIn + 1, Math.min(json.trimOut, timeline.durationFrames)) : timeline.durationFrames;
+
+  for (const t of json.tracks) {
+    if (t.kind === 'effect') {
+      createEffect({
+        id: t.id, preset: t.preset, mode: t.mode || 'burst',
+        frame: t.frame, start: t.start, end: t.end,
+        anchor: t.anchor || 'world', bone: t.bone,
+        pos: Array.isArray(t.pos) ? t.pos : undefined,
+        rot: Array.isArray(t.rot) ? t.rot : undefined,
+        count: t.count,
+        onImpact: t.onImpact, force: t.force, forceRadius: t.forceRadius,
+        to: (t.to && typeof t.to === 'object') ? t.to : undefined,
+        beamTex: (t.beamTex && typeof t.beamTex === 'object') ? t.beamTex : undefined,
+        tubeTex: (t.tubeTex && typeof t.tubeTex === 'object') ? t.tubeTex : undefined,
+        beamStyle: t.beamStyle,
+        path: (t.path && typeof t.path === 'object') ? t.path : undefined,
+        impact: (t.impact && typeof t.impact === 'object') ? t.impact : undefined,
+        params: (t.params && typeof t.params === 'object') ? t.params : undefined,
+      });
+    } else if (t.kind === 'audio') {
+      addAudioCue(t.src, t.frame ?? 0, { id: t.id, volume: t.volume, name: t.name });
+    } else {
+      otherTracks.push(t);   // grip/blendShape 等はそのまま温存
+    }
+  }
+  document.getElementById('lbl-duration').textContent = timeline.durationFrames.toString();
+  updateTrimLabel();
+  rebuildFxList();
+  rebuildAudioList();
+  renderTimeline();
+}
+
+// ============================================================
+// UI
+// ============================================================
+function showToast(msg, type = 'info') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = 'visible' + (type !== 'info' ? ' ' + type : '');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => { el.className = ''; }, 2200);
+}
+// ── 音声 ─────────────────────────────────────────────────────────
+async function loadAudioManifest() {
+  try { audioFiles = await (await fetch('/audio/manifest.json')).json(); } catch { audioFiles = []; }
+  const sel = document.getElementById('audio-select');
+  if (sel) { sel.innerHTML = '<option value="">-- 音声を選択 --</option>'; for (const f of audioFiles) { const o = document.createElement('option'); o.value = f; o.textContent = f; sel.appendChild(o); } }
+}
+function audioUrl(src) { return '../audio/' + encodeURIComponent(src); }
+function addAudioCue(src, frame, opts = {}) {
+  if (!src) return;
+  const cue = { id: opts.id ?? nextAudioId, src, frame: frame | 0, volume: opts.volume ?? 1, name: opts.name || src.replace(/\.[^.]+$/, ''), _audio: new Audio(audioUrl(src)) };
+  cue._audio.preload = 'auto';
+  if (cue.id >= nextAudioId) nextAudioId = cue.id + 1;
+  audioCues.push(cue);
+  rebuildAudioList(); renderTimeline();
+  return cue;
+}
+function playCue(cue) {
+  if (!cue._audio) return;
+  try { const n = cue._audio.cloneNode(); n.volume = cue.volume; n.play(); } catch (e) { console.warn('音声再生失敗:', e); }
+}
+// 再生ヘッドが prev<frame<=cur を跨いだ音声を鳴らす
+function fireAudioBetween(prev, cur) {
+  for (const cue of audioCues) if (cue.frame > prev && cue.frame <= cur) playCue(cue);
+}
+function rebuildAudioList() {
+  const list = document.getElementById('audio-list'); if (!list) return;
+  list.innerHTML = '';
+  if (!audioCues.length) { const e = document.createElement('div'); e.style.cssText = 'font-size:11px;color:#667;padding:3px;'; e.textContent = '音声はまだありません'; list.appendChild(e); return; }
+  for (const cue of audioCues) {
+    const row = document.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:3px;';
+    const nm = document.createElement('span'); nm.textContent = cue.name; nm.title = cue.src; nm.style.cssText = 'flex:1;font-size:11px;color:#cdd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    const fr = document.createElement('input'); fr.type = 'number'; fr.min = 0; fr.step = 1; fr.value = cue.frame; fr.title = 'フレーム'; fr.style.width = '50px';
+    fr.addEventListener('change', () => { cue.frame = Math.max(0, parseInt(fr.value) || 0); renderTimeline(); });
+    const vol = document.createElement('input'); vol.type = 'range'; vol.min = 0; vol.max = 1; vol.step = 0.05; vol.value = cue.volume; vol.title = '音量'; vol.style.cssText = 'width:56px;cursor:pointer;accent-color:#5580cc;';
+    vol.addEventListener('input', () => { cue.volume = parseFloat(vol.value); });
+    const test = document.createElement('button'); test.textContent = '▶'; test.title = '試聴'; test.style.padding = '1px 6px';
+    test.addEventListener('click', () => playCue(cue));
+    const del = document.createElement('button'); del.textContent = '✕'; del.title = '削除'; del.style.padding = '1px 6px';
+    del.addEventListener('click', () => { const i = audioCues.indexOf(cue); if (i >= 0) audioCues.splice(i, 1); rebuildAudioList(); renderTimeline(); });
+    row.append(nm, fr, vol, test, del); list.appendChild(row);
+  }
+}
+// タイムラインのルーラーに音声マーカー（オレンジの▽）を描く
+function drawAudioCues(ctx, W) {
+  ctx.fillStyle = '#ffb347';
+  for (const cue of audioCues) {
+    const x = frameToX(cue.frame);
+    if (x < HEADER_W || x > W) continue;
+    ctx.beginPath(); ctx.moveTo(x - 4, 1); ctx.lineTo(x + 4, 1); ctx.lineTo(x, 8); ctx.closePath(); ctx.fill();
+  }
+}
+
+function updateFrameLabel() { document.getElementById('lbl-frame').textContent = String(timeline.currentFrame); }
+function updateTrimLabel() { document.getElementById('lbl-trim').textContent = `${timeline.trimIn} – ${timeline.trimOut}`; }
+
+// ── ディソルブ（溶解）適用/解除 ──
+function spawnDissTest() {
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.7), new THREE.MeshStandardNodeMaterial({ color: 0xdd5533, roughness: 0.6, metalness: 0.1 }));
+  box.position.set(-0.6, 0.55, 0);
+  const sph = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 24), new THREE.MeshStandardNodeMaterial({ color: 0x3388dd, roughness: 0.35, metalness: 0.1 }));
+  sph.position.set(0.6, 0.5, 0);
+  g.add(box, sph);
+  scene.add(g);
+  return g;
+}
+
+function applyDissolve(kind) {
+  clearDissolve();
+  let target = null;
+  if (kind === 'npc') {
+    if (!currentVRM) { showToast('先にNPC/VRMを読み込んでください', 'warn'); return; }
+    target = currentVRM.scene;
+  } else {
+    dissTestGroup = spawnDissTest();
+    target = dissTestGroup;
+  }
+  dissolve = createDissolve(target, { ...dissCfg, autoSpeed: 0 });
+  dissAuto = false;
+  const sl = document.getElementById('diss-progress'); if (sl) sl.value = '0';
+  const vv = document.getElementById('diss-progress-val'); if (vv) vv.textContent = '0.00';
+  dissolve.setProgress(0);
+  showToast(`ディソルブ適用（${kind === 'npc' ? 'NPC' : 'テスト形状'}）`);
+}
+
+function clearDissolve() {
+  if (dissolve) { dissolve.dispose(); dissolve = null; }
+  if (dissTestGroup) {
+    scene.remove(dissTestGroup);
+    dissTestGroup.traverse(o => { if (o.isMesh) { o.geometry?.dispose(); const m = Array.isArray(o.material) ? o.material : [o.material]; m.forEach(x => x && x.dispose()); } });
+    dissTestGroup = null;
+  }
+  dissAuto = false;
+}
+
+function updateDissolve(dt) {
+  if (!dissolve) return;
+  if (dissAuto && dissolve.progress < 1) {
+    const np = Math.min(1, dissolve.progress + dt * dissSpeed);
+    dissolve.setProgress(np);
+    const sl = document.getElementById('diss-progress'); if (sl) sl.value = String(np);
+    const vv = document.getElementById('diss-progress-val'); if (vv) vv.textContent = np.toFixed(2);
+    if (np >= 1) dissAuto = false;
+  }
+  dissolve.update(dt);
+}
+
+function setupUI() {
+  // VRM ファイル
+  const vrmFile = document.getElementById('vrm-file');
+  vrmFile.addEventListener('change', async e => {
+    const file = e.target.files?.[0]; if (!file) return; vrmFile.value = '';
+    try { await loadVRM(file); } catch (err) { showToast(`VRM 読み込み失敗: ${err.message}`, 'error'); console.error(err); }
+  });
+  document.getElementById('btn-vrm-load').addEventListener('click', () => vrmFile.click());
+
+  // NPC ドロップダウン
+  const npcSelect = document.getElementById('npc-select');
+  fetch('../npc/manifest.json').then(r => r.ok ? r.json() : []).then(files => {
+    for (const f of files) { if (!f.endsWith('.npc.json')) continue; const o = document.createElement('option'); o.value = f; o.textContent = f.replace(/\.npc\.json$/, ''); npcSelect.appendChild(o); }
+  }).catch(() => {});
+  npcSelect.addEventListener('change', async () => {
+    if (!npcSelect.value) return;
+    showToast('NPC読み込み中…');
+    try { const res = await fetch('../npc/' + npcSelect.value); if (!res.ok) throw new Error('取得失敗'); await importNPCBundle(await res.json()); }
+    catch (err) { showToast(`NPC読み込み失敗: ${err.message}`, 'error'); console.error(err); }
+  });
+
+  // VRMA ファイル
+  const vrmaFile = document.getElementById('vrma-file');
+  vrmaFile.addEventListener('change', async e => {
+    const file = e.target.files?.[0]; if (!file) return; vrmaFile.value = '';
+    try { await loadVRMA(file, file.name); } catch (err) { showToast(`VRMA 読み込み失敗: ${err.message}`, 'error'); console.error(err); }
+  });
+  document.getElementById('btn-vrma-load').addEventListener('click', () => vrmaFile.click());
+
+  // VRMA ドロップダウン
+  const vrmaSelect = document.getElementById('vrma-select');
+  fetch('/vrma/manifest.json').then(r => r.ok ? r.json() : []).then(files => {
+    for (const f of files) { const o = document.createElement('option'); o.value = f; o.textContent = f.replace(/\.vrma$/, ''); vrmaSelect.appendChild(o); }
+  }).catch(() => {});
+  vrmaSelect.addEventListener('change', async () => {
+    if (!vrmaSelect.value) return;
+    showToast('VRMA 読み込み中…');
+    try { const res = await fetch('/vrma/' + encodeURIComponent(vrmaSelect.value)); if (!res.ok) throw new Error('取得失敗'); await loadVRMA(new File([await res.blob()], vrmaSelect.value, { type: 'application/octet-stream' }), vrmaSelect.value); }
+    catch (err) { showToast(`VRMA 読み込み失敗: ${err.message}`, 'error'); console.error(err); }
+  });
+
+  // TL ドロップダウン
+  const tlSelect = document.getElementById('tl-select');
+  function populateTlSelect(selectName) {
+    fetch('../timeline/manifest.json?ext=timeline.json').then(r => r.ok ? r.json() : []).then(files => {
+      tlSelect.innerHTML = '<option value="">-- TL読込 (timeline) --</option>';
+      for (const f of files) { const o = document.createElement('option'); o.value = f; o.textContent = f.replace(/\.timeline\.json$/, ''); if (f === selectName) o.selected = true; tlSelect.appendChild(o); }
+    }).catch(() => {});
+  }
+  populateTlSelect();
+  tlSelect.addEventListener('change', async () => {
+    if (!tlSelect.value) return;
+    try {
+      const res = await fetch('../timeline/' + tlSelect.value); if (!res.ok) throw new Error('取得失敗');
+      const j = await res.json();
+      // vrma を先に読み込んで尺を確定 → その後 effect/トリムを取り込む
+      if (j.vrma && currentVRM) await loadVrmaByName(j.vrma);
+      importTimeline(j);
+      lastTlName = tlSelect.value.replace(/\.timeline\.json$/, '');
+      showToast(`TL読み込み: ${lastTlName}`);
+    } catch (err) { showToast(`TL読み込み失敗: ${err.message}`, 'error'); console.error(err); }
+  });
+
+  // TL 保存
+  document.getElementById('btn-tl-save').addEventListener('click', async () => {
+    const def = lastTlName || lastBundleName || 'effect';
+    const name = prompt('保存名（public/timeline に <名前>.timeline.json で保存）', def);
+    if (name === null) return;
+    const base = name.trim().replace(/\.timeline\.json$/, '').replace(/[^\w\-]/g, '_');
+    if (!base) { showToast('名前が不正です', 'warn'); return; }
+    const filename = `${base}.timeline.json`;
+    try {
+      const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'timeline', filename, content: JSON.stringify(exportTimeline(), null, 2) }) });
+      const j = await r.json();
+      if (j.ok) { lastTlName = base; showToast(`保存: ${j.path}`); populateTlSelect(filename); }
+      else showToast('保存失敗', 'error');
+    } catch (e) { showToast(`保存失敗: ${e}`, 'error'); }
+  });
+
+  // 再生
+  document.getElementById('btn-play').addEventListener('click', vrmaPlay);
+  document.getElementById('btn-pause').addEventListener('click', vrmaPause);
+  document.getElementById('cb-loop').addEventListener('change', e => vrmaSetLoop(e.target.checked));
+  const speedSlider = document.getElementById('sel-speed'), speedVal = document.getElementById('sel-speed-val');
+  speedSlider.addEventListener('input', e => { const v = parseFloat(e.target.value); if (speedVal) speedVal.textContent = `${v.toFixed(2).replace(/\.?0+$/, '')}×`; vrmaSetSpeed(v); });
+
+  // マント（布）スライダー
+  const windSl = document.getElementById('cloth-wind'), windVal = document.getElementById('cloth-wind-val');
+  windSl.addEventListener('input', () => { const v = parseFloat(windSl.value); windVal.textContent = v.toFixed(1); clothParams.wind = v; if (currentCloth) currentCloth.setWind(v); });
+  const stiffSl = document.getElementById('cloth-stiffness'), stiffVal = document.getElementById('cloth-stiffness-val');
+  stiffSl.addEventListener('input', () => { const v = parseFloat(stiffSl.value); stiffVal.textContent = v.toFixed(2); clothParams.stiffness = v; if (currentCloth) currentCloth.setStiffness(v); });
+
+  // Bloom スライダー（シーン全体）
+  const bStr = document.getElementById('bloom-strength'), bStrV = document.getElementById('bloom-strength-val');
+  if (bStr) bStr.addEventListener('input', () => { const v = parseFloat(bStr.value); if (bStrV) bStrV.textContent = v.toFixed(2); bloomParams.strength = v; if (bloomPass) bloomPass.strength.value = v; });
+  const bRad = document.getElementById('bloom-radius'), bRadV = document.getElementById('bloom-radius-val');
+  if (bRad) bRad.addEventListener('input', () => { const v = parseFloat(bRad.value); if (bRadV) bRadV.textContent = v.toFixed(2); bloomParams.radius = v; if (bloomPass) bloomPass.radius.value = v; });
+  const bThr = document.getElementById('bloom-threshold'), bThrV = document.getElementById('bloom-threshold-val');
+  if (bThr) bThr.addEventListener('input', () => { const v = parseFloat(bThr.value); if (bThrV) bThrV.textContent = v.toFixed(2); bloomParams.threshold = v; if (bloomPass) bloomPass.threshold.value = v; });
+
+  // トリム
+  document.getElementById('btn-trim-in').addEventListener('click', () => { timeline.trimIn = Math.min(timeline.currentFrame, timeline.trimOut - 1); updateTrimLabel(); renderTimeline(); });
+  document.getElementById('btn-trim-out').addEventListener('click', () => { timeline.trimOut = Math.max(timeline.currentFrame, timeline.trimIn + 1); updateTrimLabel(); renderTimeline(); });
+  document.getElementById('btn-trim-reset').addEventListener('click', () => { timeline.trimIn = 0; timeline.trimOut = timeline.durationFrames; updateTrimLabel(); renderTimeline(); });
+
+  // エフェクト追加
+  const addAnchor = document.getElementById('add-anchor');
+  const boneRow = document.getElementById('bone-row');
+  addAnchor.addEventListener('change', () => { boneRow.style.display = addAnchor.value === 'bone' ? 'flex' : 'none'; });
+  document.getElementById('btn-add-fx').addEventListener('click', () => {
+    const ef = createEffect({
+      preset: document.getElementById('add-preset').value,
+      mode: document.getElementById('add-mode').value,
+      anchor: addAnchor.value,
+      bone: document.getElementById('add-bone').value,
+      frame: timeline.currentFrame,
+      start: timeline.currentFrame,
+      end: Math.min(timeline.durationFrames, timeline.currentFrame + 15),
+    });
+    rebuildFxList();
+    selectEffect(ef.id);
+    renderTimeline();
+    showToast(`エフェクト追加: ${fxLabel(ef)}`);
+  });
+  document.getElementById('btn-test-fire').addEventListener('click', () => {
+    const ef = selectedEffect(); if (!ef) return;
+    computeSpawnTransform(ef, _sp, _sq); ef.object3D.position.copy(_sp); ef.object3D.quaternion.copy(_sq);
+    ef.fx.burst(ef.count > 0 ? ef.count : 24);
+  });
+
+  // 選択エディタ
+  document.getElementById('btn-gz-move').addEventListener('click', () => setGizmoMode('translate'));
+  document.getElementById('btn-gz-rot').addEventListener('click', () => setGizmoMode('rotate'));
+  document.getElementById('sel-preset').addEventListener('change', e => { const ef = selectedEffect(); if (ef) { changePreset(ef, e.target.value); selectEffect(ef.id); rebuildFxList(); renderTimeline(); } });
+  const selAnchor = document.getElementById('sel-anchor');
+  selAnchor.addEventListener('change', e => {
+    const ef = selectedEffect(); if (!ef) return;
+    // 基準切替時は現在のワールド位置を維持するよう pos を再計算
+    computeSpawnTransform(ef, _sp, _sq);
+    ef.anchor = e.target.value;
+    if (ef.anchor === 'bone') ef.pos = [0, 0, 0]; else { ef.pos = [_sp.x, _sp.y, _sp.z]; ef.rot = [0, 0, 0]; }
+    selectEffect(ef.id);   // ハンドル再配置 + UI 更新
+    rebuildFxList(); renderTimeline();
+  });
+  document.getElementById('sel-bone').addEventListener('change', e => { const ef = selectedEffect(); if (ef) { ef.bone = e.target.value; selectEffect(ef.id); rebuildFxList(); renderTimeline(); } });
+  document.getElementById('sel-frame').addEventListener('change', e => { const ef = selectedEffect(); if (ef) { ef.frame = Math.max(0, Math.min(timeline.durationFrames, parseInt(e.target.value) || 0)); rebuildFxList(); renderTimeline(); } });
+  document.getElementById('btn-frame-here').addEventListener('click', () => { const ef = selectedEffect(); if (ef) { ef.frame = timeline.currentFrame; syncSelEditor(); rebuildFxList(); renderTimeline(); } });
+  document.getElementById('sel-start').addEventListener('change', e => { const ef = selectedEffect(); if (ef) { ef.start = Math.max(0, Math.min(ef.end, parseInt(e.target.value) || 0)); rebuildFxList(); renderTimeline(); } });
+  document.getElementById('sel-end').addEventListener('change', e => { const ef = selectedEffect(); if (ef) { ef.end = Math.max(ef.start, Math.min(timeline.durationFrames, parseInt(e.target.value) || 0)); rebuildFxList(); renderTimeline(); } });
+  document.getElementById('sel-count').addEventListener('change', e => { const ef = selectedEffect(); if (ef) ef.count = Math.max(1, parseInt(e.target.value) || 1); });
+  // 物理連携：着弾で発生 / 力
+  document.getElementById('sel-onimpact').addEventListener('change', e => { const ef = selectedEffect(); if (ef) ef.onImpact = e.target.checked; });
+  const bindForce = (id, key, fmt) => {
+    const sl = document.getElementById(id), vv = document.getElementById(id + '-val');
+    sl.addEventListener('input', () => { const ef = selectedEffect(); if (!ef) return; const v = parseFloat(sl.value); ef[key] = v; if (vv) vv.textContent = fmt(v); });
+  };
+  bindForce('sel-force', 'force', v => v.toFixed(1));
+  bindForce('sel-forceradius', 'forceRadius', v => v.toFixed(1));
+  // ビーム：到達点モード / ボーン / ギズモ編集トグル（基準・到達点）
+  const beamTarget = document.getElementById('sel-beam-target');
+  if (beamTarget) beamTarget.addEventListener('change', () => {
+    const ef = selectedEffect(); if (!ef) return;
+    ef.to.mode = beamTarget.value;
+    if (ef.to.mode !== 'gizmo') beamEdit = 'from';   // 手動以外は基準編集へ
+    selectEffect(ef.id);                              // ハンドル/ギズモ再構成
+  });
+  const beamBone = document.getElementById('sel-beam-bone');
+  if (beamBone) beamBone.addEventListener('change', () => { const ef = selectedEffect(); if (ef) { ef.to.bone = beamBone.value; rebuildBeamEditButtons(ef); } });
+  // ビーム：経路（スプライン）
+  const pathOn = document.getElementById('sel-path-on');
+  if (pathOn) pathOn.addEventListener('change', () => { const ef = selectedEffect(); if (ef && ef.preset === 'beam') { ef.path.on = pathOn.checked; ensurePathPoints(ef); selectEffect(ef.id); } });
+  const pathMid = document.getElementById('sel-path-mid'), pathMidVal = document.getElementById('sel-path-mid-val');
+  if (pathMid) pathMid.addEventListener('input', () => {
+    const ef = selectedEffect(); if (!ef || ef.preset !== 'beam') return;
+    ef.path.mid = Math.min(MAX_MID, parseInt(pathMid.value) || 0);
+    if (pathMidVal) pathMidVal.textContent = String(ef.path.mid);
+    ensurePathPoints(ef);
+    if (beamEdit.startsWith('mid') && parseInt(beamEdit.slice(3)) >= ef.path.mid) beamEdit = 'from';
+    selectEffect(ef.id);   // ハンドル数/編集ボタン更新
+  });
+  const pathSpline = document.getElementById('sel-path-spline');
+  if (pathSpline) pathSpline.addEventListener('change', () => { const ef = selectedEffect(); if (ef) ef.path.spline = pathSpline.checked; });
+  const pathPhase = document.getElementById('sel-path-phase'), pathPhaseVal = document.getElementById('sel-path-phase-val');
+  if (pathPhase) pathPhase.addEventListener('input', () => { const ef = selectedEffect(); if (!ef) return; ef.path.phase = parseFloat(pathPhase.value); if (pathPhaseVal) pathPhaseVal.textContent = ef.path.phase.toFixed(1); if (ef.fx.setParam) ef.fx.setParam('pathPhase', ef.path.phase); });
+  const pathTiles = document.getElementById('sel-path-tiles'), pathTilesVal = document.getElementById('sel-path-tiles-val');
+  if (pathTiles) pathTiles.addEventListener('input', () => { const ef = selectedEffect(); if (!ef) return; ef.path.tiles = parseInt(pathTiles.value) || 1; if (pathTilesVal) pathTilesVal.textContent = String(ef.path.tiles); if (ef.fx.setParam) ef.fx.setParam('pathTiles', ef.path.tiles); });
+  // ビーム：着弾エフェクト
+  const impPreset = document.getElementById('sel-impact-preset');
+  if (impPreset) impPreset.addEventListener('change', () => { const ef = selectedEffect(); if (ef && ef.preset === 'beam') { ef.impact.preset = impPreset.value; ensureImpactFx(ef); } });
+  const impMode = document.getElementById('sel-impact-mode');
+  if (impMode) impMode.addEventListener('change', () => { const ef = selectedEffect(); if (ef) ef.impact.mode = impMode.value; });
+  const impCount = document.getElementById('sel-impact-count');
+  if (impCount) impCount.addEventListener('change', () => { const ef = selectedEffect(); if (ef) ef.impact.count = Math.max(1, parseInt(impCount.value) || 1); });
+  // ビーム：スタイル（ギザギザ／シート）→ build時決定のため作り直し
+  const beamStyleSel = document.getElementById('sel-beam-style');
+  if (beamStyleSel) beamStyleSel.addEventListener('change', () => { const ef = selectedEffect(); if (ef && ef.preset === 'beam') { ef.beamStyle = beamStyleSel.value; rebuildBeamFx(ef); } });
+  // ビーム：帯テクスチャ（スプライトシート）＋コマ数
+  const beamTexSel = document.getElementById('sel-beam-tex');
+  if (beamTexSel) beamTexSel.addEventListener('change', () => { const ef = selectedEffect(); if (ef) { ef.beamTex.src = beamTexSel.value; applyBeamTex(ef); } });
+  const bindBeamFrame = (id, key) => {
+    const el = document.getElementById(id); if (!el) return;
+    el.addEventListener('change', () => { const ef = selectedEffect(); if (!ef) return; ef.beamTex[key] = Math.max(1, parseInt(el.value) || 1); applyBeamTex(ef); });
+  };
+  bindBeamFrame('sel-beam-cols', 'cols');
+  bindBeamFrame('sel-beam-rows', 'rows');
+  bindBeamFrame('sel-beam-fps', 'fps');
+  // ビーム：円筒テクスチャ（スプライトシート）＋コマ数
+  const tubeTexSel = document.getElementById('sel-tube-tex');
+  if (tubeTexSel) tubeTexSel.addEventListener('change', () => { const ef = selectedEffect(); if (ef) { ef.tubeTex.src = tubeTexSel.value; applyTubeTex(ef); } });
+  const bindTubeFrame = (id, key) => {
+    const el = document.getElementById(id); if (!el) return;
+    el.addEventListener('change', () => { const ef = selectedEffect(); if (!ef) return; ef.tubeTex[key] = Math.max(1, parseInt(el.value) || 1); applyTubeTex(ef); });
+  };
+  bindTubeFrame('sel-tube-cols', 'cols');
+  bindTubeFrame('sel-tube-rows', 'rows');
+  bindTubeFrame('sel-tube-fps', 'fps');
+  document.getElementById('btn-del-fx').addEventListener('click', () => { if (selectedEffectId != null) removeEffect(selectedEffectId); });
+
+  // ── 音声（発射音など）──
+  const audioAdd = document.getElementById('btn-audio-add'), audioSel = document.getElementById('audio-select');
+  if (audioAdd) audioAdd.addEventListener('click', () => {
+    if (!audioSel || !audioSel.value) { showToast('音声を選択してください', 'warn'); return; }
+    addAudioCue(audioSel.value, timeline.currentFrame);
+    showToast(`音声追加: @${timeline.currentFrame}`);
+  });
+
+  // ── 物理テスト（弾）：基準点から前方へ発射 → 壁/床でバウンド → 着弾で onImpact 発生 ──
+  const bindPhys = (id, key, fmt) => {
+    const sl = document.getElementById(id), vv = document.getElementById(id + '-val');
+    if (!sl) return;
+    sl.addEventListener('input', () => { const v = parseFloat(sl.value); phys[key] = v; if (vv) vv.textContent = fmt(v); });
+  };
+  bindPhys('phys-speed', 'speed', v => v.toFixed(1));
+  bindPhys('phys-gravity', 'gravity', v => v.toFixed(1));
+  bindPhys('phys-restitution', 'restitution', v => v.toFixed(2));
+  bindPhys('phys-pitch', 'pitch', v => `${v | 0}°`);
+  bindPhys('phys-yaw', 'yaw', v => `${v | 0}°`);
+  const physCount = document.getElementById('phys-count'), physCountVal = document.getElementById('phys-count-val');
+  physCount.addEventListener('input', () => { phys.count = parseInt(physCount.value) || 1; if (physCountVal) physCountVal.textContent = String(phys.count); });
+  const physRadius = document.getElementById('phys-radius'), physRadiusVal = document.getElementById('phys-radius-val');
+  physRadius.addEventListener('input', () => { phys.radius = parseFloat(physRadius.value); if (physRadiusVal) physRadiusVal.textContent = phys.radius.toFixed(2); });
+  document.getElementById('btn-phys-fire').addEventListener('click', () => { setPhysBalls(phys.count); launchPhys(); showToast('発射'); });
+  document.getElementById('btn-phys-reset').addEventListener('click', () => { clearPhysBalls(); });
+
+  // ── ディソルブ（溶解）──
+  const dq = (id) => document.getElementById(id);
+  dq('diss-apply')?.addEventListener('click', () => applyDissolve(dq('diss-target').value));
+  dq('diss-clear')?.addEventListener('click', () => { clearDissolve(); showToast('ディソルブ解除'); });
+  const dprog = dq('diss-progress');
+  dprog?.addEventListener('input', () => { dissAuto = false; const v = parseFloat(dprog.value); const vv = dq('diss-progress-val'); if (vv) vv.textContent = v.toFixed(2); if (dissolve) dissolve.setProgress(v); });
+  dq('diss-auto')?.addEventListener('click', () => { if (!dissolve) { showToast('先に「適用」してください', 'warn'); return; } if (dissolve.progress >= 1) dissolve.setProgress(0); dissAuto = !dissAuto; });
+  dq('diss-speed')?.addEventListener('input', (e) => { dissSpeed = parseFloat(e.target.value); });
+  const dbind = (id, key, fmt) => { const el = dq(id), v = dq(id + '-val'); el?.addEventListener('input', () => { const val = parseFloat(el.value); dissCfg[key] = val; if (v) v.textContent = fmt(val); if (dissolve) dissolve.setParam(key, val); }); };
+  dbind('diss-rimint', 'rimIntensity', (x) => x.toFixed(1));
+  dbind('diss-noise', 'noiseScale', (x) => x.toFixed(1));
+  dbind('diss-noiseamt', 'noiseAmt', (x) => x.toFixed(2));
+  dbind('diss-edge', 'edge', (x) => x.toFixed(2));
+  dbind('diss-puddle', 'puddleScale', (x) => x.toFixed(1));
+  dq('diss-rimcolor')?.addEventListener('input', (e) => { dissCfg.rimColor = e.target.value; if (dissolve) dissolve.setParam('rimColor', e.target.value); });
+  dq('diss-liquidcolor')?.addEventListener('input', (e) => { dissCfg.liquidColor = e.target.value; if (dissolve) dissolve.setParam('liquidColor', e.target.value); });
+
+  // キーボード: G=移動 / R=回転 / Delete=選択削除
+  window.addEventListener('keydown', e => {
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    if (e.key === 'g' || e.key === 'G') setGizmoMode('translate');
+    else if (e.key === 'r' || e.key === 'R') setGizmoMode('rotate');
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedEffectId != null) { removeEffect(selectedEffectId); e.preventDefault(); }
+  });
+}
+
+// fx-builder が保存した *.fx.json を読み込み、プリセット一覧に追加（'custom:<name>'）
+async function loadCustomPresets() {
+  let files = [];
+  try { files = await (await fetch('../fx/manifest.json')).json(); } catch { return; }
+  const addSel = document.getElementById('add-preset'), selSel = document.getElementById('sel-preset'), impSel = document.getElementById('sel-impact-preset');
+  for (const f of files) {
+    if (!f.endsWith('.fx.json')) continue;
+    try {
+      const spec = await (await fetch('../fx/' + f)).json();
+      const name = f.replace(/\.fx\.json$/, '');
+      const key = 'custom:' + name;
+      customSpecs.set(key, spec);
+      PRESET_COLORS[key] = spec.layers?.[0]?.color || '#88ccff';
+      for (const sel of [addSel, selSel, impSel]) {   // 着弾エフェクトにもカスタムを選べる
+        if (!sel) continue;
+        const o = document.createElement('option'); o.value = key; o.textContent = '📦 ' + name; sel.appendChild(o);
+      }
+    } catch (e) { console.warn('FXプリセット読込失敗:', f, e); }
+  }
+}
+
+// ============================================================
+// Render
+// ============================================================
+function updateFPS() {
+  fpsFrameCount++;
+  const now = performance.now(), elapsed = now - fpsLastTime;
+  if (elapsed >= 500) {
+    const fps = Math.round(fpsFrameCount / (elapsed / 1000));
+    document.getElementById('fps-counter').textContent = `${fps} FPS`;
+    document.getElementById('fps-toolbar').textContent = `${fps} FPS`;
+    fpsFrameCount = 0; fpsLastTime = now;
+  }
+}
+
+function render() {
+  timer.update();
+  const dt = Math.min(timer.getDelta(), 1 / 20);
+  updateFPS();
+
+  if (mixer && vrmaAction && vrmaPlaying) {
+    const inT = timeline.trimIn / timeline.fps, outT = timeline.trimOut / timeline.fps;
+    const prevTime = vrmaAction.time;
+    mixer.update(dt);
+    let curTime = vrmaAction.time, looped = false;
+    if (curTime >= outT - 0.0005 || curTime < prevTime - 0.001) {
+      if (vrmaLoop) { curTime = inT; vrmaAction.time = inT; looped = true; }
+      else { vrmaPlaying = false; curTime = outT; vrmaAction.time = outT; timeline.currentFrame = timeline.trimOut; updatePlayButtons(); }
+    }
+    const newFrame = Math.min(Math.floor(curTime * timeline.fps), timeline.durationFrames);
+    if (newFrame !== timeline.currentFrame) {
+      const prev = timeline.currentFrame;
+      timeline.currentFrame = newFrame;
+      // ループ折返し時は先頭(trimIn)からのバーストを拾う／通常は prev→new 区間
+      if (looped) { fireBurstsBetween(timeline.trimIn - 1, newFrame); fireAudioBetween(timeline.trimIn - 1, newFrame); }
+      else if (newFrame > prev) { fireBurstsBetween(prev, newFrame); fireAudioBetween(prev, newFrame); }
+      updateFrameLabel();
+    }
+  }
+
+  renderTimeline();
+  if (currentVRM) currentVRM.update(dt);
+  if (currentCloth) currentCloth.update(dt, timeline.currentFrame);   // VRM更新後：マントがボーン/グリップ追従＋シミュ
+  updatePhysics(dt);   // 物理弾（onImpact 効果より先に）
+  updateEffects(dt);
+  updateDissolve(dt);
+  syncSelectedHandle();
+  controls.update();
+  if (post) post.render(); else renderer.render(scene, camera);   // bloom ポストプロセス
+}
+
+// ============================================================
+// Init
+// ============================================================
+async function init() {
+  const app = document.getElementById('app');
+  const loading = document.getElementById('loading');
+  if (!navigator.gpu) { document.getElementById('webgpu-warning').style.display = 'block'; throw new Error('WebGPU 非対応のブラウザです'); }
+
+  // maxStorageBuffersInVertexStage: マント(lib/vrm-cloth)が頂点ステージで位置バッファを読むため必要
+  renderer = new THREE.WebGPURenderer({ antialias: true, requiredLimits: { maxStorageBuffersInVertexStage: 1 } });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1.1;
+  app.appendChild(renderer.domElement);
+  await renderer.init();
+
+  const setRendererSize = () => {
+    const w = app.clientWidth, h = app.clientHeight;
+    renderer.setSize(w, h);
+    if (camera) { camera.aspect = w / h; camera.updateProjectionMatrix(); }
+  };
+  setRendererSize();
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x12121f);
+
+  camera = new THREE.PerspectiveCamera(45, app.clientWidth / app.clientHeight, 0.01, 100);
+  camera.position.set(0, 1.4, 3.2);
+
+  // 空（淡いグラデのスカイドーム）
+  const skyMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide });
+  const skyT = positionWorld.normalize().y.mul(0.5).add(0.5).clamp(0, 1);
+  skyMat.colorNode = mix(color(0x1a1f33), color(0x0c0c16), skyT);
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(40, 24, 12), skyMat);
+  sky.frustumCulled = false; scene.add(sky);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+  const dir = new THREE.DirectionalLight(0xffffff, 1.8); dir.position.set(2, 4, 3); scene.add(dir);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 1, 0); controls.update();
+
+  buildRoom();
+
+  // 発生位置ハンドル + ギズモ
+  handle = new THREE.Group();
+  const hMesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.06, 0), new THREE.MeshBasicMaterial({ color: 0xffdd33, depthTest: false, transparent: true, opacity: 0.9 }));
+  hMesh.renderOrder = 999;
+  handle.add(hMesh);
+  handle.add(new THREE.AxesHelper(0.16));
+  handle.visible = false;
+  scene.add(handle);
+
+  // 到達点(to)ハンドル（ビーム用・水色）
+  handle2 = new THREE.Group();
+  const h2Mesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.06, 0), new THREE.MeshBasicMaterial({ color: 0x66ddff, depthTest: false, transparent: true, opacity: 0.9 }));
+  h2Mesh.renderOrder = 999;
+  handle2.add(h2Mesh);
+  handle2.add(new THREE.AxesHelper(0.13));
+  handle2.visible = false;
+  scene.add(handle2);
+
+  // 経路の中間点ハンドル（ビーム用・ピンク、プール）
+  for (let i = 0; i < MAX_MID; i++) {
+    const g = new THREE.Group();
+    const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.05, 0), new THREE.MeshBasicMaterial({ color: 0xff66cc, depthTest: false, transparent: true, opacity: 0.9 }));
+    m.renderOrder = 999;
+    g.add(m);
+    g.visible = false;
+    scene.add(g);
+    midHandles.push(g);
+  }
+
+  gizmo = new TransformControls(camera, renderer.domElement);
+  gizmo.setMode('translate');
+  gizmo.setSize(0.8);
+  gizmo.addEventListener('dragging-changed', e => { controls.enabled = !e.value; });
+  gizmo.addEventListener('objectChange', onGizmoChange);
+  scene.add(gizmo.getHelper ? gizmo.getHelper() : gizmo);
+
+  // Bloom ポストプロセス（emissive/明るい部分を発光）。失敗時は通常レンダにフォールバック。
+  try {
+    post = new THREE.PostProcessing(renderer);
+    const scenePass = pass(scene, camera);
+    const sceneColor = scenePass.getTextureNode();
+    bloomPass = bloom(sceneColor, bloomParams.strength, bloomParams.radius, bloomParams.threshold);
+    post.outputNode = sceneColor.add(bloomPass);
+  } catch (e) { console.warn('Bloom 初期化失敗（通常レンダに切替）:', e); post = null; bloomPass = null; }
+
+  timer.connect(document);
+
+  resizeTimeline();
+  renderTimeline();
+  setupUI();
+  loadBeamSpec();        // ビーム(electric_beam.fx.json)の既定値
+  loadSheetTextures();   // ビームの帯テクスチャ候補（public/ シート画像）
+  loadAudioManifest();   // 音声候補（public/audio）
+  rebuildAudioList();
+  loadCustomPresets();   // fx-builder の *.fx.json をプリセット一覧へ
+  setupTimelineEvents(document.getElementById('timeline'));
+  setupTimelineResize();
+
+  window.addEventListener('resize', () => { setRendererSize(); resizeTimeline(); renderTimeline(); });
+
+  loading.classList.add('hidden');
+  setTimeout(() => { loading.style.display = 'none'; }, 500);
+  renderer.setAnimationLoop(render);
+}
+
+init().catch(err => { console.error(err); const l = document.getElementById('loading'); if (l) l.textContent = `初期化失敗: ${err.message}`; });

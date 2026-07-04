@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "sample",
+  "title": "サンプル：はじめての会話",
+  "actors": [
+    { "id": "lily", "npc": "lily.npc.json" },
+    { "id": "megu", "npc": "megu.npc.json" }
+  ],
+  "script": [
+    { "op": "fade.out", "duration": 0 },
+    { "op": "camera", "pos": [0, 1.4, 3.2], "target": [0, 1.15, 0], "duration": 0 },
+    { "op": "actor.show", "id": "lily", "x": -0.7, "y": 0, "z": 0, "ry": 0 },
+    { "op": "actor.show", "id": "megu", "x": 0.7, "y": 0, "z": 0, "ry": 0 },
+    { "op": "actor.face", "id": "lily", "target": "camera" },
+    { "op": "actor.face", "id": "megu", "target": "camera" },
+    { "op": "fade.in", "duration": 700 },
+    { "op": "say", "actor": "lily", "lines": ["こんにちは、メグ。", "今日はいい天気ね。"] },
+    { "op": "actor.anim", "id": "lily", "vrma": "004_hello_1.vrma", "loop": false },
+    { "op": "say", "actor": "megu", "lines": ["やっほー！", { "text": "ねえ、あそぼうよ！", "expression": "happy", "weight": 0.7 }] },
+    { "op": "actor.move", "id": "megu", "x": 0.25, "z": 0.5, "duration": 1400, "face": true, "wait": true },
+    { "op": "actor.face", "id": "megu", "target": "lily" },
+    { "op": "actor.expression", "id": "lily", "expression": "happy", "weight": 0.7, "duration": 400 },
+    { "op": "say", "actor": "lily", "lines": ["ふふ、いいわよ。"] },
+    { "op": "camera", "pos": [0.3, 1.3, 2.2], "target": [0.1, 1.1, 0.2], "duration": 1200, "wait": true },
+    { "op": "say", "actor": "megu", "lines": ["やったー！"] },
+    { "op": "delay", "duration": 500 },
+    { "op": "fade.out", "duration": 600 },
+    { "op": "actor.hide", "id": "lily" },
+    { "op": "actor.hide", "id": "megu" },
+    { "op": "end" }
+  ]
+}

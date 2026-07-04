@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "id": "ayu",
+  "displayName": "ayu",
+  "states": {
+    "idle": {
+      "mode": "loop",
+      "intervalMs": 3000,
+      "charsPerSecond": 7,
+      "lines": [
+        "……しずかね。",
+        "退屈だわ"
+      ]
+    },
+    "alert": {
+      "mode": "once",
+      "charsPerSecond": 9,
+      "lines": [
+        "……気配？"
+      ]
+    },
+    "attack": {
+      "mode": "loop",
+      "intervalMs": 1700,
+      "charsPerSecond": 8,
+      "lines": [
+        {
+          "text": "逃がさないわ",
+          "expression": "relaxed",
+          "weight": 0.6
+        },
+        "そこね"
+      ]
+    },
+    "taunt": {
+      "mode": "loop",
+      "intervalMs": 2200,
+      "charsPerSecond": 7,
+      "lines": [
+        {
+          "text": "ふふ、こっちよ",
+          "expression": "relaxed",
+          "weight": 0.5
+        }
+      ]
+    }
+  },
+  "events": {
+    "grabbed": {
+      "lines": [
+        "……っ",
+        {
+          "text": "無礼な人ね",
+          "expression": "angry",
+          "weight": 0.6
+        }
+      ]
+    },
+    "thrown": {
+      "lines": [
+        "きゃ……っ"
+      ]
+    },
+    "landed": {
+      "lines": [
+        "いた……",
+        {
+          "text": "ひどいことするのね",
+          "expression": "sad",
+          "weight": 0.5
+        }
+      ]
+    },
+    "menace": {
+      "lines": [
+        {
+          "text": "覚悟して",
+          "expression": "relaxed",
+          "weight": 0.6
+        },
+        "隙ありね"
+      ]
+    },
+    "attackHit": {
+      "lines": [
+        {
+          "text": "これで終わり？",
+          "expression": "relaxed",
+          "weight": 0.6
+        },
+        "よわいのね"
+      ]
+    }
+  }
+}

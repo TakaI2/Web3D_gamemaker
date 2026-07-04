@@ -750,6 +750,23 @@ async function init() {
   camera.position.copy(playerCollider.end);
   camera.rotation.set(playerPitch, playerYaw, 0, 'YXZ');
 
+  // cloth.json が指定されていればマテリアルパラメータを上書き
+  const clothJsonUrl = document.querySelector('script[data-cloth-json]')?.dataset.clothJson;
+  if (clothJsonUrl) {
+    try {
+      const json = await fetch(clothJsonUrl).then(r => r.json());
+      const m = json.material ?? {};
+      if (m.colorFront)     matParams.colorFront     = m.colorFront;
+      if (m.colorBack)      matParams.colorBack      = m.colorBack;
+      if (m.roughness      != null) matParams.roughness      = m.roughness;
+      if (m.sheen          != null) matParams.sheen          = m.sheen;
+      if (m.sheenRoughness != null) matParams.sheenRoughness = m.sheenRoughness;
+      if (m.sheenColor)     matParams.sheenColor     = m.sheenColor;
+    } catch (e) {
+      console.warn('cloth.json の読み込みに失敗しました:', e);
+    }
+  }
+
   stiffnessUniform     = uniform(0.2);
   dampeningUniform     = uniform(0.99);
   windUniform          = uniform(1.0);

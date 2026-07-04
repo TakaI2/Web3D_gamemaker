@@ -18,9 +18,24 @@
   }
   function toggleLoop(): void { animEditorStore.setLooping(!state.isLooping); }
 
+  // 尺（総フレーム数）を設定/延長。終了点より後ろへキーを打つには尺を延ばす。
+  function setTotalFrames(frames: number): void {
+    animEditorStore.setDuration(Math.max(1, Math.round(frames)) / state.fps);
+  }
+  function onLenChange(e: Event): void {
+    const v = parseInt((e.currentTarget as HTMLInputElement).value, 10);
+    if (Number.isFinite(v)) setTotalFrames(v);
+  }
+  function extendFrames(frames: number): void {
+    setTotalFrames(totalFrames + frames);
+  }
+
   function download(): void {
-    // T-pose 時の rest quaternion を取得（ヒューマノイドボーン名でルックアップ）
+    // T-pose 時の rest quaternion を取得（ヒューマノイドボーン名でルックアップ）。
+    // resetNormalizedPose だけでは raw ボーンに反映されない（normalized→raw のコピーは update が行う）。
+    // update() を呼ばないと、編集中の「現在ポーズ」が rest として読まれ、書き出しが現在ポーズぶんズレる。
     vrm.humanoid.resetNormalizedPose();
+    vrm.humanoid.update();
     vrm.scene.updateWorldMatrix(true, true);
 
     // ボーントラックを構築（delta = restQuat_inv ⊗ frameQuat）
@@ -122,6 +137,14 @@
     <span class="sec-label">({(state.currentFrame / state.fps).toFixed(2)}s)</span>
   </span>
 
+  <label class="len-ctrl" title="アニメの尺（総フレーム数）。増やすと終了点より後ろへキーを打てる">
+    尺
+    <input type="number" min="1" step="1" value={totalFrames} on:change={onLenChange} />
+    <span class="sec-label">f</span>
+  </label>
+  <button class="ctrl-btn" on:click={() => extendFrames(state.fps)} title="末尾に1秒(30f)追加">+1s</button>
+  <button class="ctrl-btn" on:click={() => extendFrames(10)} title="末尾に10フレーム追加">+10f</button>
+
   <button class="dl-btn" on:click={download}>↓ ダウンロード</button>
 </div>
 
@@ -154,6 +177,22 @@
     flex: 1;
   }
   .sec-label { color: #555; }
+  .len-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    color: #888;
+  }
+  .len-ctrl input {
+    width: 56px;
+    background: #16161c;
+    color: #ccd;
+    border: 1px solid #444;
+    border-radius: 3px;
+    padding: 3px 5px;
+    font-size: 12px;
+  }
   .dl-btn {
     background: #1a3a1a;
     border: 1px solid #2a5a2a;

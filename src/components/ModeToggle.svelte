@@ -3,6 +3,9 @@
 </script>
 
 <div class="mode-btns">
+  <a class="mode-btn hub-btn" href="hub/">
+    ← ハブへ
+  </a>
   <button class="mode-btn game-btn" on:click={() => appModeStore.toGame()}>
     ゲーム ▶
   </button>
@@ -15,8 +18,11 @@
   <button class="mode-btn stage-btn" on:click={() => appModeStore.toStageEditor()}>
     ステージ編集
   </button>
-  <a class="mode-btn cloth-btn" href="/cloth-editor/" target="_blank">
+  <a class="mode-btn cloth-btn" href="https://localhost:5174/htdocs/3d_game/cloth-editor/" target="_blank">
     布エディタ ↗
+  </a>
+  <a class="mode-btn npc-btn" href="https://localhost:5174/htdocs/3d_game/fps-cloth-vrm/" target="_blank">
+    VRM NPC ↗
   </a>
 </div>
 
@@ -40,6 +46,8 @@
     opacity: 0.9;
   }
   .mode-btn:hover { opacity: 1; }
+  .hub-btn { background: #333; text-decoration: none; text-align: center; }
+  .hub-btn:hover { background: #444; }
   .game-btn { background: #2a6; }
   .game-btn:hover { background: #3b7; }
   .retarget-btn { background: #47a; }
@@ -50,4 +58,6 @@
   .stage-btn:hover { background: #668; }
   .cloth-btn { background: #466; text-decoration: none; text-align: center; }
   .cloth-btn:hover { background: #577; }
+  .npc-btn { background: #644; text-decoration: none; text-align: center; }
+  .npc-btn:hover { background: #755; }
 </style>

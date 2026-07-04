@@ -1,0 +1,107 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 28,
+  "trimIn": 0,
+  "trimOut": 28,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g5",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 27
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g5",
+      "keyframes": [
+        {
+          "frame": 9,
+          "offset": [
+            -0.022084173797094386,
+            0.012665486112062462,
+            0.0332716971794686
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g7",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 27
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g7",
+      "keyframes": [
+        {
+          "frame": 9,
+          "offset": [
+            0.005205612911406711,
+            0.016144926773425192,
+            0.01941032147264604
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 27
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 8
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g10",
+      "keyframes": [
+        {
+          "frame": 3,
+          "offset": [
+            -0.4,
+            0,
+            0
+          ]
+        },
+        {
+          "frame": 5,
+          "offset": [
+            -0.4,
+            0,
+            0
+          ]
+        },
+        {
+          "frame": 7,
+          "offset": [
+            -0.3252077454276668,
+            -0.4,
+            -0.026183818782750667
+          ]
+        }
+      ]
+    }
+  ]
+}

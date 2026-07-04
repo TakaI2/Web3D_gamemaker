@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "id": "megu",
+  "displayName": "megu",
+  "states": {
+    "idle": {
+      "mode": "loop",
+      "intervalMs": 2400,
+      "charsPerSecond": 10,
+      "lines": [
+        "たいくつ〜！",
+        "ねえ、あそぼ？"
+      ]
+    },
+    "alert": {
+      "mode": "once",
+      "charsPerSecond": 12,
+      "lines": [
+        "お、きたな！"
+      ]
+    },
+    "attack": {
+      "mode": "loop",
+      "intervalMs": 1400,
+      "charsPerSecond": 11,
+      "lines": [
+        "まけないよっ！",
+        {
+          "text": "えいっ、えいっ！",
+          "expression": "happy",
+          "weight": 0.6
+        }
+      ]
+    },
+    "taunt": {
+      "mode": "loop",
+      "intervalMs": 1800,
+      "charsPerSecond": 10,
+      "lines": [
+        {
+          "text": "つかまえられるかな？",
+          "expression": "happy",
+          "weight": 0.7
+        }
+      ]
+    }
+  },
+  "events": {
+    "grabbed": {
+      "lines": [
+        "わわっ！",
+        {
+          "text": "はなして〜！",
+          "expression": "surprised",
+          "weight": 0.7
+        }
+      ]
+    },
+    "thrown": {
+      "lines": [
+        "とんでくーー！"
+      ]
+    },
+    "landed": {
+      "lines": [
+        "うぅ…",
+        {
+          "text": "もう、やったな〜",
+          "expression": "angry",
+          "weight": 0.5
+        }
+      ]
+    },
+    "menace": {
+      "lines": [
+        "そーれっ！",
+        "いくぞー！"
+      ]
+    },
+    "attackHit": {
+      "lines": [
+        "やったぁ！",
+        {
+          "text": "まだまだっ！",
+          "expression": "happy",
+          "weight": 0.7
+        }
+      ]
+    }
+  }
+}

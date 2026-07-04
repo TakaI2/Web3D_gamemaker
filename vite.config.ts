@@ -40,6 +40,194 @@ export default defineConfig({
       // 開発サーバー: 動的に返す
       configureServer(server) {
         const pub = path.resolve(__dirname, 'public');
+
+        // basic-ssl の TLS ソケットで、クライアント切断(ECONNRESET)が「未処理 error イベント」となり
+        // dev サーバのプロセスごと落ちるのを防ぐ。ソケット単位の error は握りつぶす（接続断は無害）。
+        const hs = server.httpServer;
+        if (hs) {
+          const ignore = (socket: import('net').Socket) => socket.on('error', () => { /* 接続断は無視 */ });
+          hs.on('connection', ignore);
+          hs.on('secureConnection', ignore as (socket: unknown) => void);
+          hs.on('clientError', (_err, socket) => { try { (socket as import('net').Socket).destroy(); } catch { /* noop */ } });
+        }
+
+        // VRMA 直接配信: ファイル名に '@' や空白を含む VRMA は vite/sirv が正しく解決できず
+        // SPA の index.html(HTML) を返してしまう（GLTFLoader が JSON.parse して "Unexpected token '<'"）。
+        // ここでデコードして public/vrma から直接ストリーミングし、確実に配信する。
+        server.middlewares.use((req, res, next) => {
+          const pathOnly = (req.url || '').split('?')[0];
+          const m = pathOnly.match(/\/vrma\/([^/]+\.vrma)$/i);
+          if (!m) return next();
+          let name = m[1];
+          try { name = decodeURIComponent(name); } catch { /* そのまま */ }
+          const file = path.join(pub, 'vrma', path.basename(name));
+          if (!fs.existsSync(file)) return next();
+          res.setHeader('Content-Type', 'model/gltf-binary');
+          // 開発中はキャッシュさせない（VRMA を編集・差し替えたら即反映されるように）
+          res.setHeader('Cache-Control', 'no-store, max-age=0');
+          fs.createReadStream(file).pipe(res);
+        });
+
+        // 開発用 保存エンドポイント: エディタ出力を public/<dir>/ に書き込む（dir は npc / timeline のみ許可）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (req.method !== 'POST' || !url.endsWith('/api/save')) return next();
+          let body = '';
+          req.on('data', (c) => { body += c; });
+          req.on('end', () => {
+            try {
+              const { dir, filename, content } = JSON.parse(body);
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign' };
+              const sub = allowed[dir];
+              const safe = path.basename(String(filename || ''));
+              if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
+              const outDir = path.join(pub, sub);
+              fs.mkdirSync(outDir, { recursive: true });
+              const text = typeof content === 'string' ? content : JSON.stringify(content);
+              fs.writeFileSync(path.join(outDir, safe), text);
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ ok: true, path: `public/${sub}/${safe}` }));
+            } catch (e) {
+              res.statusCode = 500; res.end(String(e));
+            }
+          });
+        });
+
+        // FX プリセット一覧（fx-builder が保存した *.fx.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/fx/manifest.json')) return next();
+          const dir = path.join(pub, 'fx');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.fx.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // スプライトシート画像一覧（public/ 直下の画像。FXビルダーのテクスチャ選択用）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/sheets/manifest.json')) return next();
+          const files = fs.existsSync(pub)
+            ? fs.readdirSync(pub).filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f))
+            : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // 捕食アライン一覧（public/bitealign/*.bite.json。bite-editor が保存）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/bitealign/manifest.json')) return next();
+          const dir = path.join(pub, 'bitealign');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.bite.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // 音声一覧（public/audio/ 直下。タイムラインの発射音等）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/audio/manifest.json')) return next();
+          const dir = path.join(pub, 'audio');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /\.(mp3|wav|ogg|m4a|aac)$/i.test(f)) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // NPC バンドル一覧（base に依らずパス末尾で判定）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/npc/manifest.json')) return next();
+          const dir = path.join(pub, 'npc');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.npc.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // ストーリー一覧（public/story/*.story.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/story/manifest.json')) return next();
+          const dir = path.join(pub, 'story');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.story.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // ゲームフロー一覧（public/flow/*.flow.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/flow/manifest.json')) return next();
+          const dir = path.join(pub, 'flow');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.flow.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // 反応セリフ一覧（public/speech/*.speech.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/speech/manifest.json')) return next();
+          const dir = path.join(pub, 'speech');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.speech.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // ステージ一覧（public/stages/*.stage.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/stages/manifest.json')) return next();
+          const dir = path.join(pub, 'stages');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.stage.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // マント一覧（public/cloth/*.cloth.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/cloth/manifest.json')) return next();
+          const dir = path.join(pub, 'cloth');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.cloth.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // ラグドール設定一覧（public/ragdoll/*.ragdoll.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/ragdoll/manifest.json')) return next();
+          const dir = path.join(pub, 'ragdoll');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.ragdoll.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // モデル(GLB)一覧（public/models/ 以下を再帰スキャン、相対パスで返す）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/models/manifest.json')) return next();
+          const dir = path.join(pub, 'models');
+          const all = findFilesRecursive(dir, '.glb', dir, 0, ['node_modules', '.git', 'gltf']);
+          // 自前 colormap を持つキット「*_GLB format」フォルダのみ採用（無印GLB format/kenney_car-kit 等の重複・無テクスチャを除外）
+          const kits = all.filter((f) => f.split('/')[0].endsWith('_GLB format'));
+          const files = kits.length ? kits : all;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // タイムライン一覧: 既定は VRMA モーション(.vrma)。?ext=timeline.json で TL(JSON) を返す
+        server.middlewares.use((req, res, next) => {
+          const [urlPath, query] = (req.url || '').split('?');
+          if (!urlPath.endsWith('/timeline/manifest.json')) return next();
+          const ext = new URLSearchParams(query || '').get('ext') === 'timeline.json' ? '.timeline.json' : '.vrma';
+          const dir = path.join(pub, 'timeline');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(ext)) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
         server.middlewares.use('/vrm/manifest.json', (_req, res) => {
           const dir = path.join(pub, 'vrm');
           const files = fs.existsSync(dir)

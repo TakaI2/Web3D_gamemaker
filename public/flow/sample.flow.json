@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "id": "sample",
+  "title": "サンプル：会話→戦闘→分岐",
+  "start": "n_intro",
+  "nodes": [
+    { "id": "n_intro",  "type": "story",  "x": 60,  "y": 140, "data": { "story": "sample.story.json" } },
+    { "id": "n_battle", "type": "battle", "x": 340, "y": 140, "data": { "battle": {
+      "title": "戦闘1",
+      "enemies": ["lily.npc.json", "megu.npc.json"],
+      "stage": "stage.json",
+      "bgm": "",
+      "win":  { "type": "defeatCount", "count": 3 },
+      "lose": { "type": "playerHp", "hp": 5 }
+    } } },
+    { "id": "n_win",  "type": "story", "x": 640, "y": 40,  "data": { "story": "win.story.json" } },
+    { "id": "n_lose", "type": "story", "x": 640, "y": 240, "data": { "story": "lose.story.json" } },
+    { "id": "n_end",  "type": "end",   "x": 900, "y": 140, "data": {} }
+  ],
+  "edges": [
+    { "from": "n_intro",  "fromPort": "next", "to": "n_battle" },
+    { "from": "n_battle", "fromPort": "win",  "to": "n_win" },
+    { "from": "n_battle", "fromPort": "lose", "to": "n_lose" },
+    { "from": "n_win",  "fromPort": "next", "to": "n_end" },
+    { "from": "n_lose", "fromPort": "next", "to": "n_end" }
+  ]
+}

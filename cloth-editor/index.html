@@ -20,14 +20,26 @@
       position: fixed;
       top: 0; left: 0;
       width: 210px;
+      min-width: 180px;
+      max-width: 60vw;
       height: 100%;
       z-index: 20;
       background: rgba(10,10,24,0.82);
       border-right: 1px solid rgba(255,255,255,0.12);
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
+    #panel-left-resizer {
+      position: fixed;
+      top: 0; height: 100%;
+      width: 7px;
+      z-index: 21;
+      cursor: ew-resize;
+      background: transparent;
+    }
+    #panel-left-resizer:hover { background: rgba(120,170,255,0.35); }
     #panel-left h2 {
       margin: 0;
       padding: 12px 14px 8px;
@@ -109,6 +121,11 @@
       border-color: rgba(80,160,255,0.6);
       color: #adf;
     }
+    .btn-grip.active {
+      background: rgba(120,170,255,0.35);
+      border-color: rgba(120,170,255,0.6);
+      color: #cef;
+    }
     .btn-grip-r.active {
       background: rgba(255,80,50,0.35);
       border-color: rgba(255,120,80,0.6);
@@ -120,6 +137,8 @@
       position: fixed;
       top: 0; right: 0;
       width: 200px;
+      min-width: 160px;
+      max-width: 60vw;
       z-index: 20;
       background: rgba(10,10,24,0.82);
       border-left: 1px solid rgba(255,255,255,0.12);
@@ -130,6 +149,14 @@
       flex-direction: column;
       gap: 10px;
     }
+    #panel-right-resizer {
+      position: absolute;
+      left: 0; top: 0;
+      width: 7px; height: 100%;
+      cursor: ew-resize;
+      background: transparent;
+    }
+    #panel-right-resizer:hover { background: rgba(120,170,255,0.35); }
     #panel-right h3 { margin: 0; font-size: 14px; color: #fff; }
 
     .ui-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
@@ -292,15 +319,54 @@
 </head>
 <body>
   <div id="app"></div>
+  <div id="panel-left-resizer" title="ドラッグで幅を調整"></div>
 
   <!-- 左パネル -->
   <div id="panel-left">
     <h2>布エディタ</h2>
+    <div style="padding:4px 14px 0;font-size:11px;">
+      <a href="../cloth-preview/" style="color:#88aaff;text-decoration:none;">→ Cloth Preview</a>
+    </div>
 
     <div class="p-section">
       <div class="p-section-title">VRM モデル</div>
       <button id="btn-vrm-load">VRM を読み込む</button>
       <input type="file" id="vrm-file" accept=".vrm" style="display:none">
+      <button id="btn-import-npc" class="btn-sm" style="width:100%;margin-top:5px;background:rgba(80,120,200,0.22);border-color:rgba(110,170,255,0.45);color:#bdf;">NPCバンドル (.npc.json) を再インポート</button>
+      <input type="file" id="import-npc-file" accept=".json" style="display:none">
+    </div>
+
+    <div class="p-section" id="npc-export-section" style="display:none;">
+      <div class="p-section-title">NPC 書き出し</div>
+      <button class="btn-sm" id="btn-export-npc" style="width:100%;background:rgba(80,120,200,0.25);border-color:rgba(110,170,255,0.5);color:#bdf;font-weight:bold;">
+        NPCバンドル書き出し (.npc.json)
+      </button>
+      <div style="font-size:10px;opacity:.6;margin-top:3px;">VRM＋選択中VRMA（＋マント/任意）を public/npc に保存。マント無しの素体もOK。</div>
+      <label style="font-size:10px;opacity:.7;display:block;margin-top:4px;">timeline.json を同梱（任意）:
+        <input type="file" id="bundle-tl-file" accept=".json" style="font-size:10px;width:100%;margin-top:2px;">
+      </label>
+    </div>
+
+    <div class="p-section">
+      <div class="p-section-title">VRMA アニメーション</div>
+      <select id="vrma-select" style="width:100%;margin-bottom:5px;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:3px 5px;font-size:11px;">
+        <option value="">-- ファイルを選択 --</option>
+      </select>
+      <div style="display:flex;gap:4px;margin-bottom:4px;">
+        <button class="btn-sm" id="btn-vrma-load" style="flex:1;">読込</button>
+        <button class="btn-sm" id="btn-vrma-play" disabled style="flex:1;">▶</button>
+        <button class="btn-sm" id="btn-vrma-pause" disabled style="flex:1;">⏸</button>
+        <button class="btn-sm" id="btn-vrma-stop" disabled style="flex:1;">■</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:5px;">
+        <label style="font-size:10px;color:#888;">速度</label>
+        <select id="vrma-speed" style="background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+        </select>
+      </div>
     </div>
 
     <div class="p-section" style="padding-bottom:6px;">
@@ -311,7 +377,7 @@
     </div>
 
     <div class="p-section">
-      <div class="p-section-title">ピン頂点</div>
+      <div class="p-section-title">ピン頂点（ワールド固定）</div>
       <div class="pin-controls">
         <button class="btn-sm" id="btn-pin-mode">ピン編集 OFF &nbsp;[P]</button>
         <button class="btn-sm" id="btn-pin-reset">ピンをリセット</button>
@@ -319,16 +385,35 @@
     </div>
 
     <div class="p-section">
-      <div class="p-section-title">グリップ頂点 (シミュ停止中に編集)</div>
-      <div class="pin-controls">
-        <button class="btn-sm btn-grip-l" id="btn-grip-left-mode">L手グリップ編集 OFF</button>
-        <button class="btn-sm btn-grip-r" id="btn-grip-right-mode">R手グリップ編集 OFF</button>
-        <button class="btn-sm" id="btn-grip-reset">グリップをリセット</button>
+      <div class="p-section-title">ボーンアンカー（ボーン追従）</div>
+      <div id="anchor-section" style="display:none;">
+        <select id="anchor-bone-select" style="width:100%;margin-bottom:5px;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+          <option value="">-- ボーンを選択 --</option>
+        </select>
+        <div class="pin-controls">
+          <button class="btn-sm" id="btn-anchor-mode">アンカー編集 OFF</button>
+          <button class="btn-sm" id="btn-anchor-clear">全解除</button>
+        </div>
+        <div style="margin-top:4px;font-size:10px;color:#556;line-height:1.4;">
+          マゼンタ = ボーン追従アンカー<br>
+          クリックで頂点を割り当て・解除
+        </div>
       </div>
-      <div style="margin-top:5px;font-size:10px;color:#666;line-height:1.4;">
-        青=L手 / 橙=R手<br>
-        <code style="font-size:10px;color:#68a;">clothAPI.gripLeft(x,y,z)</code><br>
-        <code style="font-size:10px;color:#68a;">clothAPI.releaseLeft()</code>
+      <div id="anchor-section-placeholder" style="font-size:10px;color:#444;">VRM読込後に使用可</div>
+    </div>
+
+    <div class="p-section">
+      <div class="p-section-title">グリップグループ (シミュ停止中に編集)</div>
+      <div id="grip-group-list" style="display:flex;flex-direction:column;gap:1px;max-height:160px;overflow-y:auto;"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:4px;">
+        <button class="btn-sm" id="btn-grip-add">＋グループ追加</button>
+        <button class="btn-sm btn-grip" id="btn-grip-mode">頂点割当モード OFF</button>
+      </div>
+      <button class="btn-sm" id="btn-grip-reset" style="width:100%;margin-top:4px;">割当を全リセット</button>
+      <div style="margin-top:4px;font-size:10px;color:#666;line-height:1.5;">
+        各行: ✎=編集対象選択 / 名前 / ボーン / 頂点数 / ☑=有効(プレビュー) / ×=削除。<br>
+        ✎で選び「頂点割当モード ON」→ マント頂点クリックで割当（重複不可）。<br>
+        テスト(押下中): <b>R</b>=右手 <b>L</b>=左手 <b>E</b>=R肘 <b>K</b>=L肘 のボーンを有効化。
       </div>
     </div>
 
@@ -340,7 +425,7 @@
     </div>
 
     <div class="p-section" id="mantle-export-section" style="display:none;">
-      <div class="p-section-title">エクスポート</div>
+      <div class="p-section-title">マント エクスポート</div>
       <button class="btn-sm" id="btn-export-grip" style="width:100%;background:rgba(80,160,80,0.2);border-color:rgba(100,200,100,0.4);color:#9eb;">
         グリップ付きで保存 (.json)
       </button>
@@ -352,27 +437,27 @@
         <div class="ui-row-left">
           <label style="font-size:11px;color:#888;width:14px;">X</label>
           <input type="range" id="mt-tx" min="-2" max="2" step="0.01" value="0" style="flex:1;">
-          <span class="val" id="mt-tx-val">0.00</span>
+          <input type="number" id="mt-tx-val" value="0" step="0.01" style="width:54px;font-size:11px;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:1px 3px;">
         </div>
         <div class="ui-row-left">
           <label style="font-size:11px;color:#888;width:14px;">Y</label>
           <input type="range" id="mt-ty" min="-1" max="3" step="0.01" value="0" style="flex:1;">
-          <span class="val" id="mt-ty-val">0.00</span>
+          <input type="number" id="mt-ty-val" value="0" step="0.01" style="width:54px;font-size:11px;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:1px 3px;">
         </div>
         <div class="ui-row-left">
           <label style="font-size:11px;color:#888;width:14px;">Z</label>
           <input type="range" id="mt-tz" min="-2" max="2" step="0.01" value="0" style="flex:1;">
-          <span class="val" id="mt-tz-val">0.00</span>
+          <input type="number" id="mt-tz-val" value="0" step="0.01" style="width:54px;font-size:11px;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:1px 3px;">
         </div>
         <div class="ui-row-left">
           <label style="font-size:11px;color:#888;width:14px;">R</label>
           <input type="range" id="mt-ry" min="-180" max="180" step="1" value="0" style="flex:1;">
-          <span class="val" id="mt-ry-val">0°</span>
+          <input type="number" id="mt-ry-val" value="0" step="1" style="width:54px;font-size:11px;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:1px 3px;">
         </div>
         <div class="ui-row-left">
           <label style="font-size:11px;color:#888;width:14px;">S</label>
           <input type="range" id="mt-scale" min="0.1" max="3.0" step="0.01" value="1.0" style="flex:1;">
-          <span class="val" id="mt-scale-val">1.00</span>
+          <input type="number" id="mt-scale-val" value="1" step="0.01" min="0.01" style="width:54px;font-size:11px;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:1px 3px;">
         </div>
       </div>
     </div>
@@ -380,6 +465,7 @@
 
   <!-- 右パネル -->
   <div id="panel-right">
+    <div id="panel-right-resizer" title="ドラッグで幅を調整"></div>
     <h3>シミュレーション</h3>
 
     <div class="ui-row">
@@ -414,11 +500,29 @@
       <div id="collider-list" style="display:flex;flex-direction:column;gap:5px;max-height:220px;overflow-y:auto;"></div>
       <button class="btn-sm" id="btn-collider-rebuild" style="width:100%;margin-top:6px;">ボーンから再生成</button>
     </div>
+
+    <div id="hand-grab-section" style="display:none;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;margin-top:4px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;">グラブ点オフセット (選択グループ)</span>
+        <label style="font-size:11px;color:#aaa;display:flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="hgp-visible" checked style="width:13px;height:13px;">表示
+        </label>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:4px;">
+        <div class="ui-row-left"><label style="font-size:10px;color:#888;width:14px;">X</label><input type="range" id="grip-off-x" min="-0.4" max="0.4" step="0.005" value="0" style="flex:1;"><span class="val" id="grip-off-x-val" style="font-size:10px;min-width:30px;">0.00</span></div>
+        <div class="ui-row-left"><label style="font-size:10px;color:#888;width:14px;">Y</label><input type="range" id="grip-off-y" min="-0.4" max="0.4" step="0.005" value="0" style="flex:1;"><span class="val" id="grip-off-y-val" style="font-size:10px;min-width:30px;">0.00</span></div>
+        <div class="ui-row-left"><label style="font-size:10px;color:#888;width:14px;">Z</label><input type="range" id="grip-off-z" min="-0.4" max="0.4" step="0.005" value="0" style="flex:1;"><span class="val" id="grip-off-z-val" style="font-size:10px;min-width:30px;">0.00</span></div>
+      </div>
+      <button class="btn-sm" id="btn-hgp-reset" style="width:100%;">選択グループのオフセットをリセット</button>
+      <div style="margin-top:5px;font-size:10px;color:#555;line-height:1.5;">
+        選択グループのグラブ点(色付き球)へ頂点が吸着。球をドラッグ / スライダー / 移動ギズモで関節からの位置を調整。
+      </div>
+    </div>
   </div>
 
-  <a id="back-btn" href="../">← 戻る</a>
+  <a id="back-btn" href="../hub/">← 戻る</a>
   <div id="fps-counter">-- FPS</div>
-  <div id="hint">P: ピン編集 &nbsp;|&nbsp; L/R手グリップ割り当て: 左パネルで編集 &nbsp;|&nbsp; シミュ中 L/R 長押し: グリップテスト &nbsp;|&nbsp; マウスドラッグ: 頂点をつかむ</div>
+  <div id="hint">P: ピン編集 &nbsp;|&nbsp; グリップ: 左パネルでグループ作成→✎選択→割当モードで頂点クリック &nbsp;|&nbsp; シミュ中 R/L/E/K 長押し or 各行☑: グリップ実行 &nbsp;|&nbsp; 球ドラッグ/ギズモ: グラブ位置調整</div>
 
   <div id="webgpu-warning">⚠ WebGPU 非対応: シミュレーションは使用できません</div>
   <div id="toast"></div>

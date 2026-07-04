@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "id": "win",
+  "title": "勝利",
+  "actors": [{ "id": "lily", "npc": "lily.npc.json" }],
+  "script": [
+    { "op": "fade.out", "duration": 0 },
+    { "op": "camera", "pos": [0, 1.4, 3], "target": [0, 1.15, 0], "duration": 0 },
+    { "op": "actor.show", "id": "lily", "x": 0, "y": 0, "z": 0, "ry": 0 },
+    { "op": "actor.face", "id": "lily", "target": "camera" },
+    { "op": "actor.expression", "id": "lily", "expression": "happy", "weight": 0.9, "duration": 200 },
+    { "op": "fade.in", "duration": 500 },
+    { "op": "actor.anim", "id": "lily", "vrma": "007_gekirei.vrma", "loop": false },
+    { "op": "say", "actor": "lily", "lines": ["やったね！", "わたしたちの勝ちよ！"] },
+    { "op": "fade.out", "duration": 500 },
+    { "op": "actor.hide", "id": "lily" },
+    { "op": "end" }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 40,
+  "trimIn": 0,
+  "trimOut": 40,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g5",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 47
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g6",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 47
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g9",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 39
+        }
+      ]
+    }
+  ],
+  "vrma": "move_Flying_left.vrma"
+}

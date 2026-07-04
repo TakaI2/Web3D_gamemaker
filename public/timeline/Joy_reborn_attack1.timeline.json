@@ -1,0 +1,49 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 48,
+  "trimIn": 0,
+  "trimOut": 48,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g7",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 6
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 6
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g9",
+      "ranges": [
+        {
+          "start": 7,
+          "end": 15
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 7,
+          "end": 15
+        }
+      ]
+    }
+  ]
+}

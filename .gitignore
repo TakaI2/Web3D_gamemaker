@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-*/
+dist2/
 .svelte-kit/
 .env
 .env.*
@@ -10,6 +12,16 @@ public/vrm/*.vrm
 public/vrma/*.vrma
 tests/fixtures/*.vrm
 tests/fixtures/*.vrma
+
+# 大きな public バイナリ資産（リポジトリには含めない。テキストの timeline/cloth/ragdoll は対象外）
+public/npc/
+public/models/
+public/fbx/
+public/ドライツェーン_ver1.01/
+
+# スクラッチ（.tmp の .md 設計メモは対象外）
+.tmp/*.log
+.tmp/*.html
 
 # Claude Code 個人設定
 .claude/settings.local.json

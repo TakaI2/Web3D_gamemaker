@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Character Editor — VRM NPC ステート/表情</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; font-family: sans-serif; color: #ddd; }
+    #app { position: fixed; inset: 0; }
+    .panel {
+      position: fixed; top: 0; bottom: 0; z-index: 10;
+      background: rgba(16,18,28,0.92); border-color: rgba(255,255,255,0.12);
+      padding: 12px; overflow-y: auto; font-size: 12px;
+    }
+    #left  { left: 0;  width: 210px; border-right: 1px solid rgba(255,255,255,0.12); }
+    #right { right: 0; width: 240px; border-left: 1px solid rgba(255,255,255,0.12); }
+    h3 { margin: 0 0 8px; font-size: 13px; color: #fff; }
+    h4 { margin: 14px 0 6px; font-size: 11px; color: #9fd0ff; text-transform: uppercase; letter-spacing: .05em; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 5px 0; }
+    .row label { color: #aab; flex: 1; }
+    .row input[type=range] { flex: 1; accent-color: #5580cc; min-width: 0; }
+    .row input[type=number] { width: 64px; background:#222; color:#ddd; border:1px solid #3a3a60; border-radius:3px; }
+    .val { color: #adf; min-width: 34px; text-align: right; }
+    .state-btn {
+      display: block; width: 100%; text-align: left; margin: 4px 0; padding: 7px 10px;
+      background: #202040; color: #ccd; border: 1px solid #3a3a60; border-radius: 5px; cursor: pointer; font-size: 12px;
+    }
+    .state-btn.active { border-color: #6cf; background: #243; color: #aef; }
+    button.act { background:#202040; color:#ccd; border:1px solid #3a3a60; border-radius:4px; cursor:pointer; font-size:11px; padding:5px 8px; width:100%; margin:3px 0; }
+    button.act:hover { background:#2a2a58; }
+    button.prim { border-color:#6cf; color:#aef; }
+    #topbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; gap: 8px; }
+    #topbar a, #topbar button, #topbar select { background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.25); color:#fff; padding:6px 12px; border-radius:4px; font-size:12px; cursor:pointer; text-decoration:none; }
+    #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: rgba(30,30,60,0.92); color:#eee; padding:6px 16px; border-radius:6px; font-size:12px; opacity:0; transition:opacity .3s; z-index:30; pointer-events:none; }
+    #toast.show { opacity: 1; }
+    .hint { color:#778; font-size:10px; margin-top:4px; line-height:1.5; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="topbar">
+    <a href="../hub/">← 一覧</a>
+    <select id="npc-select" title="public/npc/ から読込"></select>
+    <button id="btn-load">ファイル…</button>
+    <select id="motion-select" title="public/timeline/ のモーション"></select>
+    <button id="btn-play-motion">▶ モーション</button>
+    <button id="btn-save-speech" class="prim">セリフ保存</button>
+    <button id="btn-export">.npc.json 書き出し</button>
+    <input type="file" id="file-input" accept=".json,.npc.json" style="display:none">
+  </div>
+
+  <div id="left" class="panel">
+    <h3>ステート</h3>
+    <div id="state-list"></div>
+    <div class="hint">状態を選ぶと、その見た目（表情・視線）をプレビューします。downed はラグドール姿勢で表示。</div>
+
+    <h4>動作テスト</h4>
+    <button class="act" id="btn-sim-hit">被弾シミュ（撃墜→復帰）</button>
+    <button class="act" id="btn-sim-grab">掴みシミュ（本体）</button>
+    <button class="act" id="btn-sim-release">離す/復帰</button>
+
+    <h4>行動 (behavior)</h4>
+    <div id="behavior-panel"></div>
+  </div>
+
+  <div id="right" class="panel">
+    <h3 id="state-title">idle</h3>
+    <h4>表情 (expression)</h4>
+    <div id="expr-panel"></div>
+    <h4>視線・顔の追従</h4>
+    <div id="look-panel"></div>
+    <h4>セリフ (speech)</h4>
+    <div id="speech-panel"></div>
+    <div class="hint">このステートで話すセリフ。行ごとに表情を指定でき、未指定ならステートの表情を使います。</div>
+    <h4>イベントセリフ</h4>
+    <div id="event-speech-panel"></div>
+    <div class="hint">掴まれた・投げられた・衝突した瞬間に割り込みで話すセリフ（ステート非依存）。</div>
+  </div>
+
+  <div id="toast"></div>
+  <script type="module" src="./character-editor.js"></script>
+</body>
+</html>

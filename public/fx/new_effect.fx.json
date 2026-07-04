@@ -1,0 +1,53 @@
+{
+  "format": "fx-preset",
+  "version": 1,
+  "name": "new_effect",
+  "layers": [
+    {
+      "type": "mesh",
+      "geom": "cylinder",
+      "size": 1,
+      "height": 1.5,
+      "color": "#ff8b4d",
+      "opacity": 1,
+      "emissive": 1.4,
+      "texture": "builtin:perlin",
+      "repeat": [
+        2,
+        1
+      ],
+      "scroll": [
+        0,
+        0.3
+      ],
+      "alphaSource": "luminance",
+      "texAngle": 0,
+      "twist": 0,
+      "spin": 0.4,
+      "pulse": 0,
+      "blending": "additive",
+      "doubleSide": true,
+      "fadeEdges": true,
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "frames": {
+        "cols": 1,
+        "rows": 1,
+        "fps": 12
+      }
+    }
+  ]
+}

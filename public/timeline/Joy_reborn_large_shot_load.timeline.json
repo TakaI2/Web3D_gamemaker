@@ -1,0 +1,176 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 50,
+  "trimIn": 0,
+  "trimOut": 50,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g5",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 49
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g5",
+      "keyframes": [
+        {
+          "frame": 0,
+          "offset": [
+            0.03182519666519852,
+            0.0630991920168624,
+            0.0016545583074560194
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g6",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 49
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g6",
+      "keyframes": [
+        {
+          "frame": 0,
+          "offset": [
+            0.07535213618316053,
+            0.07359420116076403,
+            0.03327566647624321
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g7",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 49
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g7",
+      "keyframes": [
+        {
+          "frame": 0,
+          "offset": [
+            0.014648366581015466,
+            0.0436472263611026,
+            -0.021699979784337433
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 49
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g8",
+      "keyframes": [
+        {
+          "frame": 0,
+          "offset": [
+            -0.03680062344285727,
+            0.08538419131809366,
+            0.004164218797673466
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g9",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 49
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g9",
+      "keyframes": [
+        {
+          "frame": 0,
+          "offset": [
+            -0.0017998575647906925,
+            -0.1384498038642858,
+            0.4
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g10",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 49
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g10",
+      "keyframes": [
+        {
+          "frame": 0,
+          "offset": [
+            -0.4,
+            0.0411580658379675,
+            0.13486232169748202
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "effect",
+      "id": 2,
+      "preset": "custom:spark",
+      "mode": "range",
+      "anchor": "bone",
+      "pos": [
+        0.16037535197804303,
+        -0.06391293707380619,
+        -0.03608279468677324
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "count": 24,
+      "params": {},
+      "bone": "rightHand",
+      "start": 0,
+      "end": 49
+    }
+  ],
+  "vrma": "HumanF@MagicAttackDirect1H01_R - Load.vrma"
+}

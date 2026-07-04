@@ -123,6 +123,63 @@ npm run build:fps-cloth   # dist-fps-cloth/ に出力
 
 > **注意**: 布シミュレーションおよび FPS-cloth デモは WebGPU を使用するため **HTTPS** でアクセスする必要があります。HTTP 環境では WebGL2 にフォールバックしますが、布の物理演算が正常に動作しません。
 
+### FPS + VRM NPC + ラグドール（fps-cloth-vrm）
+
+FPS 視点で VRM NPC（マント付き布シミュ）と対話するデモ（`fps-cloth-vrm/`）。
+
+- VRM NPC + VRMA アニメ再生 + マント布シミュ（GPU）+ タイムライン再生
+- NPC 一括バンドル（`.npc.json` = VRM+VRMA+Cloth+Timeline）読込・群衆クローン（最大 10 体）
+- **右クリックで球を発射** → NPC 命中で**ラグドール化**（崩れ落ち）。倒れた体も追撃で小突ける
+- **R キー**で倒れている全 NPC が**滑らかに起き上がる**（復帰ブレンド）
+- マントは**床との当たり判定**付き（立ち時・ラグドール時とも床に乗る）
+- NPC#0・群衆 NPC ともラグドール対応
+
+デプロイ先: `/htdocs/fps-cloth-vrm/`
+
+```bash
+npm run build:fps-cloth-vrm   # dist-fps-cloth-vrm/ に出力（lib 同梱・import 書換）
+```
+
+### 振り回しキャッチ（swing-catch）
+
+FPS 視点のサンドボックスゲーム（`swing-catch/`）。空中を漂うオブジェクトを相手に遊ぶ。
+
+- **左クリック長押し**で照準先をキャッチ → スプリングで繋がりブンブン振り回し → 離すと勢いそのまま投擲
+- **右クリック**で球を発射してオブジェクトを吹っ飛ばす
+- 無重力で漂い壁で反射する多形状オブジェクト（箱型アリーナ）
+- 物理はすべて自前実装（固定タイムステップ・スプリング・運動量保存）
+
+デプロイ先: `/htdocs/swing-catch/`
+
+```bash
+npm run build:swing-catch   # dist-swing-catch/ に出力
+```
+
+### VRM ラグドールシステム（lib/vrm-ragdoll.js）
+
+物理エンジン不使用の自前 **PBD スケルタルラグドール**。複数デモで再利用できる共有モジュール。
+
+- humanoid ボーンを粒子 + 距離拘束として扱い、重力で崩して床に倒す（Verlet/PBD）
+- **部位別の角度制限（コーン）**で首 180°折れや関節の過伸展を防止
+- 関節粒子の AABB から境界球を算出し、**VRM 単位のフラスタムカリング**（多数体でも軽い）
+- `grab` ライクなトグル API:
+
+```js
+const rd = createRagdoll(vrm, { boneMaxBend: { neck: 40, lowerLeg: 95 } });
+setRagdollActive(rd, true);                                 // 崩れ落ち開始（呼び出し側でアニメ停止）
+applyRagdollImpulse(rd, dir.multiplyScalar(0.3), 'chest');  // 被弾の撃力
+// 毎フレーム: updateRagdoll(rd, dt, { floorY: 0, frustum }) → vrm.update(dt)
+setRagdollActive(rd, false);                                // 復帰（updateRagdollRecovery で補間）
+```
+
+---
+
+## 最近の追加
+
+- **`lib/vrm-ragdoll.js`**: 再利用可能な VRM ラグドール（被弾トリガー・部位別角度制限・復帰ブレンド・VRM 単位カリング）
+- **`fps-cloth-vrm`**: 右クリック発射体 + NPC ラグドール（NPC#0 + 群衆）+ マントの床当たり判定
+- **`swing-catch`**: 飛行オブジェクトのキャッチ＆振り回しサンドボックス（新規ゲーム）
+
 ---
 
 ## 技術スタック
@@ -155,9 +212,22 @@ fps-cloth/
 ├── index.html        # FPS+布デモ UI
 └── fps-cloth.js      # WebGPU 布物理 + FPS 移動 + Octree レベル
 
+fps-cloth-vrm/
+├── index.html        # FPS+VRM NPC+ラグドール UI
+└── fps-cloth-vrm.js  # VRM NPC + マント布 + 発射体 + ラグドール統合
+
+swing-catch/
+├── index.html        # 振り回しキャッチ UI
+└── swing-catch.js    # 飛行オブジェクトのキャッチ・振り回し・投擲（自前物理）
+
+lib/
+└── vrm-ragdoll.js    # 再利用可能な VRM PBD ラグドール（共有モジュール）
+
 scripts/
-├── build-cloth.mjs       # cloth のビルドスクリプト
-└── build-fps-cloth.mjs   # fps-cloth のビルドスクリプト
+├── build-cloth.mjs           # cloth のビルドスクリプト
+├── build-fps-cloth.mjs       # fps-cloth のビルドスクリプト
+├── build-fps-cloth-vrm.mjs   # fps-cloth-vrm のビルド（lib 同梱・import 書換）
+└── build-swing-catch.mjs     # swing-catch のビルドスクリプト
 
 src/
 ├── components/       # Svelte UI コンポーネント
@@ -200,7 +270,9 @@ npm install
 npm run dev           # 開発サーバー起動 (https://localhost:5173/htdocs/3d_game/)
 npm run build         # メインアプリ本番ビルド → dist/
 npm run build:cloth   # 布シミュレーション → dist-cloth/
-npm run build:fps-cloth  # FPS+布デモ → dist-fps-cloth/
+npm run build:fps-cloth        # FPS+布デモ → dist-fps-cloth/
+npm run build:fps-cloth-vrm    # FPS+VRM NPC+ラグドール → dist-fps-cloth-vrm/
+npm run build:swing-catch      # 振り回しキャッチ → dist-swing-catch/
 npm test              # Vitest でユニットテスト実行
 ```
 

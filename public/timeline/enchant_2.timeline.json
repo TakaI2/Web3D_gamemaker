@@ -1,0 +1,65 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 1702,
+  "trimIn": 0,
+  "trimOut": 411,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g7",
+      "ranges": [
+        {
+          "start": 5,
+          "end": 248
+        },
+        {
+          "start": 248,
+          "end": 410
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g7",
+      "keyframes": [
+        {
+          "frame": 60,
+          "offset": [
+            -0.01255612240567044,
+            0.061064990019223456,
+            -0.008280173885792563
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 5,
+          "end": 248
+        },
+        {
+          "start": 249,
+          "end": 410
+        }
+      ]
+    },
+    {
+      "kind": "gripPos",
+      "groupId": "g8",
+      "keyframes": [
+        {
+          "frame": 60,
+          "offset": [
+            0.004783608412508501,
+            0.05986114664793429,
+            0.023072074914599054
+          ]
+        }
+      ]
+    }
+  ]
+}

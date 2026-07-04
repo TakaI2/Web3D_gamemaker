@@ -1,0 +1,51 @@
+{
+  "format": "fx-preset",
+  "version": 1,
+  "name": "electric_bolt",
+  "layers": [
+    {
+      "type": "particle",
+      "preset": "spark",
+      "colorStart": "#cfe8ff",
+      "colorEnd": "#3f5bff",
+      "spawnRate": 55,
+      "sizeStart": 0.36,
+      "sizeEnd": 0.09,
+      "texture": "../electric.png",
+      "blending": "additive",
+      "pos": [0, 0, 0],
+      "rot": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "frames": { "cols": 4, "rows": 4, "fps": 18, "mode": "overLife" },
+      "gravity": 0,
+      "drag": 1.5,
+      "shape": "point",
+      "speed": [0, 0.5],
+      "spread": 25,
+      "lifetime": [0.22, 0.4],
+      "maxParticles": 260,
+      "spinStart": [-180, 180]
+    },
+    {
+      "type": "particle",
+      "preset": "spark",
+      "colorStart": "#eaf3ff",
+      "colorEnd": "#7ea0ff",
+      "spawnRate": 30,
+      "sizeStart": 0.12,
+      "sizeEnd": 0.015,
+      "texture": "builtin:spark",
+      "blending": "additive",
+      "pos": [0, 0, 0],
+      "rot": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "frames": { "cols": 1, "rows": 1, "fps": 12 },
+      "gravity": -0.5,
+      "shape": "point",
+      "speed": [0.4, 1.6],
+      "spread": 60,
+      "lifetime": [0.25, 0.55],
+      "maxParticles": 180
+    }
+  ]
+}

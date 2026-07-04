@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "id": "lily",
+  "displayName": "lily",
+  "states": {
+    "idle": {
+      "mode": "loop",
+      "intervalMs": 2500,
+      "charsPerSecond": 4,
+      "lines": [
+        {
+          "text": "何して遊ぼうかな",
+          "expression": "happy",
+          "weight": 0.25
+        },
+        {
+          "text": "ふふふ・・・",
+          "expression": "relaxed",
+          "weight": 1
+        }
+      ]
+    },
+    "alert": {
+      "mode": "once",
+      "charsPerSecond": 10,
+      "lines": [
+        "っ、だれ！？"
+      ]
+    },
+    "attack": {
+      "mode": "loop",
+      "intervalMs": 1500,
+      "charsPerSecond": 9,
+      "lines": [
+        "そ��っ！",
+        {
+          "text": "つかまえてみて？",
+          "expression": "happy",
+          "weight": 0.6
+        }
+      ]
+    },
+    "taunt": {
+      "mode": "loop",
+      "intervalMs": 2000,
+      "charsPerSecond": 8,
+      "lines": [
+        {
+          "text": "ほら、こっちこっち♪",
+          "expression": "happy",
+          "weight": 0.7
+        }
+      ]
+    }
+  },
+  "events": {
+    "grabbed": {
+      "lines": [
+        "きゃっ！",
+        {
+          "text": "離してよ！",
+          "expression": "angry",
+          "weight": 0.7
+        }
+      ]
+    },
+    "thrown": {
+      "lines": [
+        "とぶーー！"
+      ]
+    },
+    "landed": {
+      "lines": [
+        "いたた…",
+        {
+          "text": "ひどい…",
+          "expression": "sad",
+          "weight": 0.5
+        }
+      ]
+    },
+    "menace": {
+      "lines": [
+        "いくよっ！",
+        {
+          "text": "よけられる？",
+          "expression": "happy",
+          "weight": 0.7
+        }
+      ]
+    },
+    "attackHit": {
+      "lines": [
+        "えいっ！",
+        {
+          "text": "当たった♪",
+          "expression": "happy",
+          "weight": 0.8
+        }
+      ]
+    }
+  }
+}

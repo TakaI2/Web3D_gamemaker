@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Stage Editor — 配置</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #12141f; color: #e6ecf5; font-family: system-ui, sans-serif; }
+    #app { position: fixed; inset: 0; }
+    .panel { position: fixed; top: 0; bottom: 0; z-index: 10; background: rgba(16,18,28,0.92); padding: 12px; overflow-y: auto; font-size: 12px; }
+    #left { left: 0; width: 230px; border-right: 1px solid rgba(255,255,255,0.12); }
+    #right { right: 0; width: 230px; border-left: 1px solid rgba(255,255,255,0.12); }
+    h3 { margin: 0 0 8px; font-size: 13px; color: #fff; }
+    h4 { margin: 14px 0 6px; font-size: 11px; color: #9fd0ff; text-transform: uppercase; letter-spacing: .05em; }
+    .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+    .row label { flex: 0 0 60px; color: #aab; }
+    .row input[type=range] { flex: 1; min-width: 0; accent-color: #5580cc; }
+    .val { min-width: 40px; text-align: right; color: #adf; }
+    select, button { background: #202040; color: #ccd; border: 1px solid #3a3a60; border-radius: 4px; padding: 6px 8px; font-size: 12px; cursor: pointer; }
+    select { width: 100%; }
+    button.w { width: 100%; margin: 4px 0; }
+    button.prim { border-color: #6cf; color: #aef; }
+    button.danger { border-color: #c66; color: #fbb; }
+    #topbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; gap: 8px; }
+    #topbar a, #topbar button { background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; text-decoration: none; }
+    .hint { color: #889; font-size: 10px; line-height: 1.6; margin-top: 6px; }
+    .thumbgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+    .tcell { background: #1f2638; border: 1px solid #2c3650; border-radius: 6px; padding: 4px; cursor: pointer; }
+    .tcell.sel { border-color: #6cf; background: #1c3040; }
+    .tcell img { width: 100%; height: 60px; object-fit: contain; background: #222a38; border-radius: 4px; display: block; }
+    .tcell .nm { font-size: 9px; color: #bcc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+    #toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: rgba(30,40,70,0.95); color: #eef; padding: 6px 16px; border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .3s; z-index: 30; }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="topbar">
+    <a href="../hub/">← 一覧</a>
+    <select id="stage-select" title="public/stages/ から読込" style="width:auto"></select>
+    <button id="btn-new">新規</button>
+    <input id="stage-id" type="text" placeholder="ステージID" style="width:120px;background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.25);color:#fff;padding:6px 8px;border-radius:4px;font-size:12px;">
+    <button id="btn-import">現行stage取込</button>
+    <button id="btn-save" class="prim">保存</button>
+  </div>
+
+  <div id="left" class="panel">
+    <h3>配置するモデル</h3>
+    <div class="hint">モデルを選び、地面を<b>左クリック</b>で配置。配置済みは左クリックで選択／<b>右クリックで削除</b>。<b>左ドラッグで視点回転</b>・ホイールでズーム。</div>
+    <div id="palette" class="thumbgrid"></div>
+    <h4>配置済み</h4>
+    <div id="item-list"></div>
+  </div>
+
+  <div id="right" class="panel">
+    <h3 id="sel-name">未選択</h3>
+    <div id="props" style="display:none">
+      <h4>位置</h4>
+      <div class="row"><label>X</label><input type="range" id="px" min="-15" max="15" step="0.1"><span class="val" id="px-v"></span></div>
+      <div class="row"><label>Z</label><input type="range" id="pz" min="-15" max="15" step="0.1"><span class="val" id="pz-v"></span></div>
+      <div class="row"><label>高さ Y</label><input type="range" id="py" min="0" max="25" step="0.1"><span class="val" id="py-v"></span></div>
+      <h4>回転</h4>
+      <div class="row"><label>Y回転</label><input type="range" id="ry" min="0" max="360" step="1"><span class="val" id="ry-v"></span></div>
+      <button class="w danger" id="btn-del">削除</button>
+    </div>
+    <div class="hint" id="props-hint">配置済みモデルを選択すると、位置・回転を調整できます。スケールは Model Editor の設定値を使用します。</div>
+  </div>
+
+  <div id="toast"></div>
+  <script type="module" src="./stage-editor.js"></script>
+</body>
+</html>

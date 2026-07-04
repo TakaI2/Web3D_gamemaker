@@ -152,9 +152,11 @@
     {#if serverFiles.length === 0}
       <p class="empty">public/{listMode}/ にファイルがありません</p>
     {:else}
-      {#each serverFiles as f}
-        <button class="server-item" on:click={() => loadFromServer(f)}>{f}</button>
-      {/each}
+      <div class="server-list-items">
+        {#each serverFiles as f}
+          <button class="server-item" on:click={() => loadFromServer(f)}>{f}</button>
+        {/each}
+      </div>
     {/if}
   </div>
 {/if}
@@ -208,7 +210,16 @@
     border-radius: 8px;
     padding: 12px;
     min-width: 220px;
+    max-width: min(420px, 90vw);
     z-index: 40;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  /* ファイルが増えても画面内に収め、リストだけスクロール（ヘッダーは固定） */
+  .server-list-items {
+    max-height: 60vh;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -240,6 +251,7 @@
     font-size: 12px;
     cursor: pointer;
     text-align: left;
+    overflow-wrap: anywhere;   /* 長いファイル名でも横にはみ出さず折り返す */
   }
   .server-item:hover { background: #444; color: #fff; }
   .empty { font-size: 12px; color: #666; text-align: center; margin: 4px 0; }
