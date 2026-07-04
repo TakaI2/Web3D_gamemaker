@@ -241,6 +241,37 @@
       </div>
     </div>
 
+    <!-- Dissolve (liquid) -->
+    <div class="sec">
+      <h3>ディソルブ（液体溶解）</h3>
+      <div class="row">
+        <label>対象</label>
+        <select id="diss-target" style="flex:1">
+          <option value="npc">NPC/VRM</option>
+          <option value="test">テスト形状</option>
+        </select>
+        <button id="diss-apply">適用</button>
+        <button id="diss-clear">解除</button>
+      </div>
+      <div class="row">
+        <label>進行</label>
+        <input type="range" id="diss-progress" min="0" max="1" step="0.01" value="0">
+        <span class="val" id="diss-progress-val">0.00</span>
+        <button id="diss-auto" title="0→1 自動再生">▶自動</button>
+      </div>
+      <div class="row"><label>ノイズ倍率</label><input type="range" id="diss-noise" min="1" max="20" step="0.5" value="5"><span class="val" id="diss-noise-val">5.0</span></div>
+      <div class="row"><label>ノイズ量</label><input type="range" id="diss-noiseamt" min="0" max="1" step="0.01" value="0.45"><span class="val" id="diss-noiseamt-val">0.45</span></div>
+      <div class="row"><label>縁の幅</label><input type="range" id="diss-edge" min="0.02" max="0.4" step="0.01" value="0.1"><span class="val" id="diss-edge-val">0.10</span></div>
+      <div class="row"><label>縁の発光</label><input type="range" id="diss-rimint" min="0" max="6" step="0.1" value="2.4"><span class="val" id="diss-rimint-val">2.4</span></div>
+      <div class="row"><label>液だまり</label><input type="range" id="diss-puddle" min="0" max="4" step="0.1" value="1.9"><span class="val" id="diss-puddle-val">1.9</span></div>
+      <div class="row">
+        <label>縁色</label>
+        <input type="color" id="diss-rimcolor" value="#7fe6ff" style="width:38px;height:22px;padding:0;border:1px solid #3a3a60;background:#16162c;cursor:pointer;">
+        <label style="min-width:auto;">液色</label>
+        <input type="color" id="diss-liquidcolor" value="#bfeaff" style="width:38px;height:22px;padding:0;border:1px solid #3a3a60;background:#16162c;cursor:pointer;">
+      </div>
+    </div>
+
     <!-- Physics test (projectile) -->
     <div class="sec">
       <h3>物理テスト（弾）</h3>
@@ -404,6 +435,27 @@
             <label>編集点</label>
             <div id="sel-beam-edit" class="row-wrap" style="flex:1;gap:3px;margin-bottom:0;"></div>
           </div>
+          <div style="border-top:1px dashed #2a2c4a;margin-top:6px;padding-top:6px;">
+            <div style="font-size:10px;color:#667;margin-bottom:4px;">着弾エフェクト（到達点で発生）</div>
+            <div class="row">
+              <label>プリセット</label>
+              <select id="sel-impact-preset" style="flex:1">
+                <option value="none">なし</option>
+                <option value="spark">✨ spark</option>
+                <option value="fire">🔥 fire</option>
+                <option value="frost">❄ frost</option>
+                <option value="smoke">💨 smoke</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>発生</label>
+              <select id="sel-impact-mode" style="flex:1">
+                <option value="range">継続（表示中ずっと）</option>
+                <option value="burst">単発（発生時1回）</option>
+              </select>
+              <input type="number" id="sel-impact-count" min="1" step="1" value="20" title="単発時の粒数" style="width:52px;">
+            </div>
+          </div>
         </div>
         <div class="row" id="sel-frame-row">
           <label>フレーム</label>
@@ -447,6 +499,17 @@
           <button id="btn-del-fx" style="background:#3a1f28;border-color:#5a3040;color:#fbb;">このエフェクトを削除</button>
         </div>
       </div>
+    </div>
+
+    <!-- Audio cues -->
+    <div class="sec">
+      <h3>音声（発射音など）</h3>
+      <div class="row">
+        <select id="audio-select" style="flex:1"><option value="">-- 音声を選択 --</option></select>
+        <button id="btn-audio-add" title="現在フレームに追加">＋追加</button>
+      </div>
+      <div id="audio-list" style="margin-top:6px;"></div>
+      <div style="font-size:10px;color:#667;margin-top:4px;">public/audio/ に mp3/wav/ogg を置くと候補に出ます。再生ヘッドがマーカー(▽)を跨ぐと鳴ります。</div>
     </div>
 
   </div><!-- /right-panel -->

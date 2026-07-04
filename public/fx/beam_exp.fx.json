@@ -1,0 +1,82 @@
+{
+  "format": "fx-preset",
+  "version": 1,
+  "name": "beam_exp",
+  "layers": [
+    {
+      "type": "particle",
+      "preset": "frost",
+      "colorStart": "#fe9a9a",
+      "colorEnd": "#ff6161",
+      "spawnRate": 13,
+      "sizeStart": 0.58,
+      "sizeEnd": 0.45,
+      "texture": "../thunder.png",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        3,
+        3
+      ],
+      "frames": {
+        "cols": 4,
+        "rows": 4,
+        "fps": 12
+      },
+      "speed": [
+        0,
+        0
+      ],
+      "shape": "point",
+      "gravity": 0
+    },
+    {
+      "type": "particle",
+      "preset": "fire",
+      "colorStart": "#ff8080",
+      "colorEnd": "#ff8566",
+      "spawnRate": 9,
+      "sizeStart": 1.02,
+      "sizeEnd": 0.31,
+      "texture": "../explosion1.png",
+      "blending": "additive",
+      "pos": [
+        0,
+        0,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        3,
+        3
+      ],
+      "frames": {
+        "cols": 4,
+        "rows": 4,
+        "fps": 12
+      },
+      "gravity": -0.7,
+      "speed": [
+        0,
+        0.5
+      ],
+      "spread": 10,
+      "radius": 0.06
+    }
+  ]
+}

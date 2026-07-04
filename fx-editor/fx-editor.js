@@ -26,6 +26,7 @@ import { createMeshFx } from '../lib/fx-mesh.js';
 import { createBeamFx } from '../lib/fx-beam.js';
 import { BUILTIN_TEXTURES } from '../lib/fx-textures.js';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
+import { createDissolve } from '../lib/fx-dissolve.js';
 
 // ── シーングローバル ─────────────────────────────────────────────
 let renderer, scene, camera, controls;
@@ -54,6 +55,11 @@ let otherTracks = [];   // 読み込んだ effect 以外のトラック（grip/b
 const effects = [];
 let selectedEffectId = null;
 let nextEffectId = 1;
+
+// ── 音声キュー（タイムラインの発射音等）: { id, src, frame, volume, name, _audio } ──
+const audioCues = [];
+let nextAudioId = 1;
+let audioFiles = [];   // /audio/manifest.json
 const PRESET_COLORS = { fire: '#ff8844', smoke: '#9aa0b0', spark: '#ffd060', frost: '#66ccff', tornado: '#ff8b4d', beam: '#7ea8ff' };
 
 // ビーム（fx-beam）プリセット。electric_beam.fx.json を読み込み、無ければ既定値。
@@ -95,6 +101,14 @@ function applyTubeTex(ef) {
 // 経路パラメータ（位相ずらし・タイル）を fx へ反映
 function applyBeamPath(ef) {
   if (ef.preset === 'beam' && ef.fx.setParam) { ef.fx.setParam('pathPhase', ef.path.phase); ef.fx.setParam('pathTiles', ef.path.tiles); }
+}
+// 着弾エフェクトの子FXを必要に応じて生成/破棄（ビームの到達点で発生）
+function ensureImpactFx(ef) {
+  const want = (ef.preset === 'beam' && ef.impact.preset && ef.impact.preset !== 'none') ? ef.impact.preset : '';
+  if (want === ef._impactPreset) return;
+  if (ef._impactFx) { scene.remove(ef._impactFx.object3D); ef._impactFx.dispose(); ef._impactFx = null; }
+  ef._impactPreset = want;
+  if (want) ef._impactFx = makeFx(want, defaultParams(want));   // makeFx が scene 追加＋setEmitting(false)
 }
 // 中間点オフセット配列を mid 個に揃える（不足分は原点[0,0,0]）
 function ensurePathPoints(ef) {
@@ -234,6 +248,13 @@ const PROOM = { s: 12, h: 3.2 };   // buildRoom と一致（床y=0, 壁±6, 天�
 const physBalls = [];              // { mesh, pos, vel, radius }
 const phys = { count: 1, gravity: -4, restitution: 0.5, radius: 0.14, speed: 8, pitch: 10, yaw: 0 };
 const PHYS_SPAWN = new THREE.Vector3(0, 1.2, -4);   // 基準点（手前から前方+Zへ）
+
+// ── ディソルブ（溶解）テスト ──
+let dissolve = null;         // createDissolve の戻り
+let dissTestGroup = null;    // テスト形状(箱/球)
+let dissAuto = false;        // 自動再生
+let dissSpeed = 0.4;         // 進行/秒
+const dissCfg = { noiseScale: 5, noiseAmt: 0.45, edge: 0.10, rimColor: '#7fe6ff', rimIntensity: 2.4, liquidColor: '#bfeaff', puddleScale: 1.9, doubleSide: true };
 
 // ============================================================
 // 部屋（地面＋壁）
@@ -530,11 +551,18 @@ function createEffect(opts) {
       tiles: opts.path?.tiles ?? 1,
       points: Array.isArray(opts.path?.points) ? opts.path.points.map(p => p.slice()) : [],
     },
+    // 着弾エフェクト：ビームの到達点(to)で発生する粒子/カスタムFX（none=無し）
+    impact: {
+      preset: opts.impact?.preset || 'none',
+      mode: opts.impact?.mode || 'range',   // 'range'=表示中ずっと / 'burst'=発生時1回
+      count: opts.impact?.count ?? 20,
+    },
+    _impactFx: null, _impactPreset: '', _beamVis: false,
     params,
     fx: makeFx(preset, params, { beamStyle }),
   };
   ef.object3D = ef.fx.object3D;
-  if (ef.preset === 'beam') { ensurePathPoints(ef); applyBeamTex(ef); applyTubeTex(ef); applyBeamPath(ef); }
+  if (ef.preset === 'beam') { ensurePathPoints(ef); applyBeamTex(ef); applyTubeTex(ef); applyBeamPath(ef); ensureImpactFx(ef); }
   if (ef.id >= nextEffectId) nextEffectId = ef.id + 1;
   effects.push(ef);
   return ef;
@@ -551,6 +579,7 @@ function removeEffect(id) {
   const ef = effects[i];
   scene.remove(ef.object3D);
   ef.fx.dispose();
+  if (ef._impactFx) { scene.remove(ef._impactFx.object3D); ef._impactFx.dispose(); ef._impactFx = null; }
   effects.splice(i, 1);
   if (selectedEffectId === id) selectEffect(null);
   rebuildFxList();
@@ -558,7 +587,10 @@ function removeEffect(id) {
 }
 
 function clearEffects() {
-  for (const ef of effects) { scene.remove(ef.object3D); ef.fx.dispose(); }
+  for (const ef of effects) {
+    scene.remove(ef.object3D); ef.fx.dispose();
+    if (ef._impactFx) { scene.remove(ef._impactFx.object3D); ef._impactFx.dispose(); ef._impactFx = null; }
+  }
   effects.length = 0;
   selectEffect(null);
 }
@@ -779,6 +811,14 @@ function updateEffects(dt) {
           ef.fx.setEndpoints(_beamFrom, _beamTo, camera.position);
         }
       }
+      // 着弾エフェクト：到達点(_beamTo)で発生
+      if (ef._impactFx) {
+        if (visible) { ef._impactFx.object3D.position.copy(_beamTo); ef._impactFx.object3D.quaternion.identity(); }
+        if (ef.impact.mode === 'burst') { if (visible && !ef._beamVis) ef._impactFx.burst(ef.impact.count || 12); }
+        else ef._impactFx.setEmitting(visible);
+        ef._impactFx.update(dt);
+      }
+      ef._beamVis = visible;
       ef.fx.update(dt);
       continue;
     }
@@ -962,6 +1002,9 @@ function syncSelEditor() {
       document.getElementById('sel-path-phase-val').textContent = Number(ef.path.phase).toFixed(1);
       document.getElementById('sel-path-tiles').value = ef.path.tiles;
       document.getElementById('sel-path-tiles-val').textContent = String(ef.path.tiles);
+      const ip = document.getElementById('sel-impact-preset'); if (ip) ip.value = ef.impact.preset;
+      document.getElementById('sel-impact-mode').value = ef.impact.mode;
+      document.getElementById('sel-impact-count').value = ef.impact.count;
       rebuildBeamEditButtons(ef);
     }
   }
@@ -983,6 +1026,7 @@ function changePreset(ef, preset) {
   ef.fx = makeFx(preset, ef.params, { beamStyle: ef.beamStyle || 'jagged' });
   ef.object3D = ef.fx.object3D;
   if (preset === 'beam') { ensurePathPoints(ef); applyBeamTex(ef); applyTubeTex(ef); applyBeamPath(ef); }
+  ensureImpactFx(ef);   // beam以外へ変更時は着弾FXを破棄
   if (isPersistentPreset(preset) && ef.mode !== 'range') {
     ef.mode = 'range';
     if (ef.end <= ef.start) ef.end = Math.min(timeline.durationFrames, ef.start + 15);
@@ -1103,6 +1147,7 @@ function renderTimeline() {
   ctx.beginPath(); ctx.moveTo(0, RULER_H - 0.5); ctx.lineTo(W, RULER_H - 0.5); ctx.stroke();
 
   drawTrim(ctx, W, H);
+  drawAudioCues(ctx, W);
   drawPlayhead(ctx, W, H);
 }
 
@@ -1258,12 +1303,14 @@ function exportTimeline() {
       t.tubeTex = { ...ef.tubeTex };
       t.beamStyle = ef.beamStyle;
       t.path = { on: ef.path.on, mid: ef.path.mid, spline: ef.path.spline, phase: ef.path.phase, tiles: ef.path.tiles, points: ef.path.points.map(p => p.slice()) };
+      if (ef.impact.preset && ef.impact.preset !== 'none') t.impact = { preset: ef.impact.preset, mode: ef.impact.mode, count: ef.impact.count };
     }
     if (ef.onImpact) t.onImpact = true;
     if (ef.force) { t.force = ef.force; t.forceRadius = ef.forceRadius; }
     if (ef.mode === 'range') { t.start = ef.start; t.end = ef.end; } else { t.frame = ef.frame; }
     tracks.push(t);
   }
+  for (const cue of audioCues) tracks.push({ kind: 'audio', id: cue.id, src: cue.src, frame: cue.frame, volume: cue.volume, name: cue.name });
   const out = { version: 2, fps: timeline.fps, durationFrames: timeline.durationFrames, trimIn: timeline.trimIn, trimOut: timeline.trimOut, tracks };
   if (timeline.speed && timeline.speed !== 1) out.speed = timeline.speed;
   if (currentVrmaName) out.vrma = currentVrmaName;
@@ -1273,6 +1320,7 @@ function exportTimeline() {
 function importTimeline(json) {
   if (!Array.isArray(json.tracks)) throw new Error('無効なタイムラインファイルです');
   clearEffects();
+  audioCues.length = 0;
   otherTracks = [];
   loadedTimelineJson = json;
   if (currentCloth) currentCloth.setTimeline(json);   // マントのグリップ範囲を適用
@@ -1303,8 +1351,11 @@ function importTimeline(json) {
         tubeTex: (t.tubeTex && typeof t.tubeTex === 'object') ? t.tubeTex : undefined,
         beamStyle: t.beamStyle,
         path: (t.path && typeof t.path === 'object') ? t.path : undefined,
+        impact: (t.impact && typeof t.impact === 'object') ? t.impact : undefined,
         params: (t.params && typeof t.params === 'object') ? t.params : undefined,
       });
+    } else if (t.kind === 'audio') {
+      addAudioCue(t.src, t.frame ?? 0, { id: t.id, volume: t.volume, name: t.name });
     } else {
       otherTracks.push(t);   // grip/blendShape 等はそのまま温存
     }
@@ -1312,6 +1363,7 @@ function importTimeline(json) {
   document.getElementById('lbl-duration').textContent = timeline.durationFrames.toString();
   updateTrimLabel();
   rebuildFxList();
+  rebuildAudioList();
   renderTimeline();
 }
 
@@ -1324,8 +1376,112 @@ function showToast(msg, type = 'info') {
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => { el.className = ''; }, 2200);
 }
+// ── 音声 ─────────────────────────────────────────────────────────
+async function loadAudioManifest() {
+  try { audioFiles = await (await fetch('/audio/manifest.json')).json(); } catch { audioFiles = []; }
+  const sel = document.getElementById('audio-select');
+  if (sel) { sel.innerHTML = '<option value="">-- 音声を選択 --</option>'; for (const f of audioFiles) { const o = document.createElement('option'); o.value = f; o.textContent = f; sel.appendChild(o); } }
+}
+function audioUrl(src) { return '../audio/' + encodeURIComponent(src); }
+function addAudioCue(src, frame, opts = {}) {
+  if (!src) return;
+  const cue = { id: opts.id ?? nextAudioId, src, frame: frame | 0, volume: opts.volume ?? 1, name: opts.name || src.replace(/\.[^.]+$/, ''), _audio: new Audio(audioUrl(src)) };
+  cue._audio.preload = 'auto';
+  if (cue.id >= nextAudioId) nextAudioId = cue.id + 1;
+  audioCues.push(cue);
+  rebuildAudioList(); renderTimeline();
+  return cue;
+}
+function playCue(cue) {
+  if (!cue._audio) return;
+  try { const n = cue._audio.cloneNode(); n.volume = cue.volume; n.play(); } catch (e) { console.warn('音声再生失敗:', e); }
+}
+// 再生ヘッドが prev<frame<=cur を跨いだ音声を鳴らす
+function fireAudioBetween(prev, cur) {
+  for (const cue of audioCues) if (cue.frame > prev && cue.frame <= cur) playCue(cue);
+}
+function rebuildAudioList() {
+  const list = document.getElementById('audio-list'); if (!list) return;
+  list.innerHTML = '';
+  if (!audioCues.length) { const e = document.createElement('div'); e.style.cssText = 'font-size:11px;color:#667;padding:3px;'; e.textContent = '音声はまだありません'; list.appendChild(e); return; }
+  for (const cue of audioCues) {
+    const row = document.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:3px;';
+    const nm = document.createElement('span'); nm.textContent = cue.name; nm.title = cue.src; nm.style.cssText = 'flex:1;font-size:11px;color:#cdd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    const fr = document.createElement('input'); fr.type = 'number'; fr.min = 0; fr.step = 1; fr.value = cue.frame; fr.title = 'フレーム'; fr.style.width = '50px';
+    fr.addEventListener('change', () => { cue.frame = Math.max(0, parseInt(fr.value) || 0); renderTimeline(); });
+    const vol = document.createElement('input'); vol.type = 'range'; vol.min = 0; vol.max = 1; vol.step = 0.05; vol.value = cue.volume; vol.title = '音量'; vol.style.cssText = 'width:56px;cursor:pointer;accent-color:#5580cc;';
+    vol.addEventListener('input', () => { cue.volume = parseFloat(vol.value); });
+    const test = document.createElement('button'); test.textContent = '▶'; test.title = '試聴'; test.style.padding = '1px 6px';
+    test.addEventListener('click', () => playCue(cue));
+    const del = document.createElement('button'); del.textContent = '✕'; del.title = '削除'; del.style.padding = '1px 6px';
+    del.addEventListener('click', () => { const i = audioCues.indexOf(cue); if (i >= 0) audioCues.splice(i, 1); rebuildAudioList(); renderTimeline(); });
+    row.append(nm, fr, vol, test, del); list.appendChild(row);
+  }
+}
+// タイムラインのルーラーに音声マーカー（オレンジの▽）を描く
+function drawAudioCues(ctx, W) {
+  ctx.fillStyle = '#ffb347';
+  for (const cue of audioCues) {
+    const x = frameToX(cue.frame);
+    if (x < HEADER_W || x > W) continue;
+    ctx.beginPath(); ctx.moveTo(x - 4, 1); ctx.lineTo(x + 4, 1); ctx.lineTo(x, 8); ctx.closePath(); ctx.fill();
+  }
+}
+
 function updateFrameLabel() { document.getElementById('lbl-frame').textContent = String(timeline.currentFrame); }
 function updateTrimLabel() { document.getElementById('lbl-trim').textContent = `${timeline.trimIn} – ${timeline.trimOut}`; }
+
+// ── ディソルブ（溶解）適用/解除 ──
+function spawnDissTest() {
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.7), new THREE.MeshStandardNodeMaterial({ color: 0xdd5533, roughness: 0.6, metalness: 0.1 }));
+  box.position.set(-0.6, 0.55, 0);
+  const sph = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 24), new THREE.MeshStandardNodeMaterial({ color: 0x3388dd, roughness: 0.35, metalness: 0.1 }));
+  sph.position.set(0.6, 0.5, 0);
+  g.add(box, sph);
+  scene.add(g);
+  return g;
+}
+
+function applyDissolve(kind) {
+  clearDissolve();
+  let target = null;
+  if (kind === 'npc') {
+    if (!currentVRM) { showToast('先にNPC/VRMを読み込んでください', 'warn'); return; }
+    target = currentVRM.scene;
+  } else {
+    dissTestGroup = spawnDissTest();
+    target = dissTestGroup;
+  }
+  dissolve = createDissolve(target, { ...dissCfg, autoSpeed: 0 });
+  dissAuto = false;
+  const sl = document.getElementById('diss-progress'); if (sl) sl.value = '0';
+  const vv = document.getElementById('diss-progress-val'); if (vv) vv.textContent = '0.00';
+  dissolve.setProgress(0);
+  showToast(`ディソルブ適用（${kind === 'npc' ? 'NPC' : 'テスト形状'}）`);
+}
+
+function clearDissolve() {
+  if (dissolve) { dissolve.dispose(); dissolve = null; }
+  if (dissTestGroup) {
+    scene.remove(dissTestGroup);
+    dissTestGroup.traverse(o => { if (o.isMesh) { o.geometry?.dispose(); const m = Array.isArray(o.material) ? o.material : [o.material]; m.forEach(x => x && x.dispose()); } });
+    dissTestGroup = null;
+  }
+  dissAuto = false;
+}
+
+function updateDissolve(dt) {
+  if (!dissolve) return;
+  if (dissAuto && dissolve.progress < 1) {
+    const np = Math.min(1, dissolve.progress + dt * dissSpeed);
+    dissolve.setProgress(np);
+    const sl = document.getElementById('diss-progress'); if (sl) sl.value = String(np);
+    const vv = document.getElementById('diss-progress-val'); if (vv) vv.textContent = np.toFixed(2);
+    if (np >= 1) dissAuto = false;
+  }
+  dissolve.update(dt);
+}
 
 function setupUI() {
   // VRM ファイル
@@ -1513,6 +1669,13 @@ function setupUI() {
   if (pathPhase) pathPhase.addEventListener('input', () => { const ef = selectedEffect(); if (!ef) return; ef.path.phase = parseFloat(pathPhase.value); if (pathPhaseVal) pathPhaseVal.textContent = ef.path.phase.toFixed(1); if (ef.fx.setParam) ef.fx.setParam('pathPhase', ef.path.phase); });
   const pathTiles = document.getElementById('sel-path-tiles'), pathTilesVal = document.getElementById('sel-path-tiles-val');
   if (pathTiles) pathTiles.addEventListener('input', () => { const ef = selectedEffect(); if (!ef) return; ef.path.tiles = parseInt(pathTiles.value) || 1; if (pathTilesVal) pathTilesVal.textContent = String(ef.path.tiles); if (ef.fx.setParam) ef.fx.setParam('pathTiles', ef.path.tiles); });
+  // ビーム：着弾エフェクト
+  const impPreset = document.getElementById('sel-impact-preset');
+  if (impPreset) impPreset.addEventListener('change', () => { const ef = selectedEffect(); if (ef && ef.preset === 'beam') { ef.impact.preset = impPreset.value; ensureImpactFx(ef); } });
+  const impMode = document.getElementById('sel-impact-mode');
+  if (impMode) impMode.addEventListener('change', () => { const ef = selectedEffect(); if (ef) ef.impact.mode = impMode.value; });
+  const impCount = document.getElementById('sel-impact-count');
+  if (impCount) impCount.addEventListener('change', () => { const ef = selectedEffect(); if (ef) ef.impact.count = Math.max(1, parseInt(impCount.value) || 1); });
   // ビーム：スタイル（ギザギザ／シート）→ build時決定のため作り直し
   const beamStyleSel = document.getElementById('sel-beam-style');
   if (beamStyleSel) beamStyleSel.addEventListener('change', () => { const ef = selectedEffect(); if (ef && ef.preset === 'beam') { ef.beamStyle = beamStyleSel.value; rebuildBeamFx(ef); } });
@@ -1538,6 +1701,14 @@ function setupUI() {
   bindTubeFrame('sel-tube-fps', 'fps');
   document.getElementById('btn-del-fx').addEventListener('click', () => { if (selectedEffectId != null) removeEffect(selectedEffectId); });
 
+  // ── 音声（発射音など）──
+  const audioAdd = document.getElementById('btn-audio-add'), audioSel = document.getElementById('audio-select');
+  if (audioAdd) audioAdd.addEventListener('click', () => {
+    if (!audioSel || !audioSel.value) { showToast('音声を選択してください', 'warn'); return; }
+    addAudioCue(audioSel.value, timeline.currentFrame);
+    showToast(`音声追加: @${timeline.currentFrame}`);
+  });
+
   // ── 物理テスト（弾）：基準点から前方へ発射 → 壁/床でバウンド → 着弾で onImpact 発生 ──
   const bindPhys = (id, key, fmt) => {
     const sl = document.getElementById(id), vv = document.getElementById(id + '-val');
@@ -1556,6 +1727,23 @@ function setupUI() {
   document.getElementById('btn-phys-fire').addEventListener('click', () => { setPhysBalls(phys.count); launchPhys(); showToast('発射'); });
   document.getElementById('btn-phys-reset').addEventListener('click', () => { clearPhysBalls(); });
 
+  // ── ディソルブ（溶解）──
+  const dq = (id) => document.getElementById(id);
+  dq('diss-apply')?.addEventListener('click', () => applyDissolve(dq('diss-target').value));
+  dq('diss-clear')?.addEventListener('click', () => { clearDissolve(); showToast('ディソルブ解除'); });
+  const dprog = dq('diss-progress');
+  dprog?.addEventListener('input', () => { dissAuto = false; const v = parseFloat(dprog.value); const vv = dq('diss-progress-val'); if (vv) vv.textContent = v.toFixed(2); if (dissolve) dissolve.setProgress(v); });
+  dq('diss-auto')?.addEventListener('click', () => { if (!dissolve) { showToast('先に「適用」してください', 'warn'); return; } if (dissolve.progress >= 1) dissolve.setProgress(0); dissAuto = !dissAuto; });
+  dq('diss-speed')?.addEventListener('input', (e) => { dissSpeed = parseFloat(e.target.value); });
+  const dbind = (id, key, fmt) => { const el = dq(id), v = dq(id + '-val'); el?.addEventListener('input', () => { const val = parseFloat(el.value); dissCfg[key] = val; if (v) v.textContent = fmt(val); if (dissolve) dissolve.setParam(key, val); }); };
+  dbind('diss-rimint', 'rimIntensity', (x) => x.toFixed(1));
+  dbind('diss-noise', 'noiseScale', (x) => x.toFixed(1));
+  dbind('diss-noiseamt', 'noiseAmt', (x) => x.toFixed(2));
+  dbind('diss-edge', 'edge', (x) => x.toFixed(2));
+  dbind('diss-puddle', 'puddleScale', (x) => x.toFixed(1));
+  dq('diss-rimcolor')?.addEventListener('input', (e) => { dissCfg.rimColor = e.target.value; if (dissolve) dissolve.setParam('rimColor', e.target.value); });
+  dq('diss-liquidcolor')?.addEventListener('input', (e) => { dissCfg.liquidColor = e.target.value; if (dissolve) dissolve.setParam('liquidColor', e.target.value); });
+
   // キーボード: G=移動 / R=回転 / Delete=選択削除
   window.addEventListener('keydown', e => {
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
@@ -1569,7 +1757,7 @@ function setupUI() {
 async function loadCustomPresets() {
   let files = [];
   try { files = await (await fetch('../fx/manifest.json')).json(); } catch { return; }
-  const addSel = document.getElementById('add-preset'), selSel = document.getElementById('sel-preset');
+  const addSel = document.getElementById('add-preset'), selSel = document.getElementById('sel-preset'), impSel = document.getElementById('sel-impact-preset');
   for (const f of files) {
     if (!f.endsWith('.fx.json')) continue;
     try {
@@ -1578,7 +1766,7 @@ async function loadCustomPresets() {
       const key = 'custom:' + name;
       customSpecs.set(key, spec);
       PRESET_COLORS[key] = spec.layers?.[0]?.color || '#88ccff';
-      for (const sel of [addSel, selSel]) {
+      for (const sel of [addSel, selSel, impSel]) {   // 着弾エフェクトにもカスタムを選べる
         if (!sel) continue;
         const o = document.createElement('option'); o.value = key; o.textContent = '📦 ' + name; sel.appendChild(o);
       }
@@ -1619,8 +1807,8 @@ function render() {
       const prev = timeline.currentFrame;
       timeline.currentFrame = newFrame;
       // ループ折返し時は先頭(trimIn)からのバーストを拾う／通常は prev→new 区間
-      if (looped) fireBurstsBetween(timeline.trimIn - 1, newFrame);
-      else if (newFrame > prev) fireBurstsBetween(prev, newFrame);
+      if (looped) { fireBurstsBetween(timeline.trimIn - 1, newFrame); fireAudioBetween(timeline.trimIn - 1, newFrame); }
+      else if (newFrame > prev) { fireBurstsBetween(prev, newFrame); fireAudioBetween(prev, newFrame); }
       updateFrameLabel();
     }
   }
@@ -1630,6 +1818,7 @@ function render() {
   if (currentCloth) currentCloth.update(dt, timeline.currentFrame);   // VRM更新後：マントがボーン/グリップ追従＋シミュ
   updatePhysics(dt);   // 物理弾（onImpact 効果より先に）
   updateEffects(dt);
+  updateDissolve(dt);
   syncSelectedHandle();
   controls.update();
   if (post) post.render(); else renderer.render(scene, camera);   // bloom ポストプロセス
@@ -1731,6 +1920,8 @@ async function init() {
   setupUI();
   loadBeamSpec();        // ビーム(electric_beam.fx.json)の既定値
   loadSheetTextures();   // ビームの帯テクスチャ候補（public/ シート画像）
+  loadAudioManifest();   // 音声候補（public/audio）
+  rebuildAudioList();
   loadCustomPresets();   // fx-builder の *.fx.json をプリセット一覧へ
   setupTimelineEvents(document.getElementById('timeline'));
   setupTimelineResize();
