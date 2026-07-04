@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Bite Editor — 捕食アライン調整</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; color: #ddd; font-family: system-ui, sans-serif; font-size: 13px; }
+    body { display: flex; flex-direction: column; height: 100vh; }
+
+    #toolbar { flex-shrink: 0; min-height: 44px; background: #0e0e1e; border-bottom: 1px solid #2a2a44; display: flex; align-items: center; gap: 6px; padding: 0 10px; flex-wrap: wrap; }
+    #toolbar .sep { width: 1px; height: 20px; background: #333; margin: 0 2px; }
+    #toolbar span.fps { font-size: 11px; color: #0f0; margin-left: auto; }
+    #toolbar .grp { display: flex; align-items: center; gap: 4px; }
+    #toolbar .grp > label { font-size: 10px; color: #778; }
+
+    #main { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+    #app { flex: 0 0 68%; position: relative; overflow: hidden; }
+    #app canvas { display: block; }
+    #fps-counter { position: absolute; top: 6px; left: 6px; font-size: 11px; color: #0f0; background: rgba(0,0,0,.6); padding: 2px 7px; border-radius: 3px; pointer-events: none; z-index: 5; }
+    #webgpu-warning { display: none; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); background: #604010; border: 1px solid #a06020; color: #ffc; padding: 4px 14px; border-radius: 4px; font-size: 12px; z-index: 5; }
+    #hint { position: absolute; bottom: 6px; left: 6px; font-size: 11px; color: #9ab; background: rgba(0,0,0,.55); padding: 3px 8px; border-radius: 3px; pointer-events: none; z-index: 5; }
+    #gap { position: absolute; top: 6px; right: 8px; font-size: 13px; color: #ffd060; background: rgba(0,0,0,.6); padding: 3px 10px; border-radius: 4px; pointer-events: none; z-index: 5; font-variant-numeric: tabular-nums; }
+
+    #right-panel { flex: 0 0 32%; background: #111325; border-left: 1px solid #2a2a44; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+    .sec { background: #0d0f22; border: 1px solid #252540; border-radius: 6px; padding: 8px; }
+    .sec h3 { font-size: 10px; color: #667; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 7px; }
+    .row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .row label { font-size: 11px; color: #889; min-width: 52px; }
+    .row input[type=range] { flex: 1; cursor: pointer; accent-color: #5580cc; }
+    .row .val { font-size: 11px; color: #bbb; min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+    .row-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-bottom: 4px; }
+
+    button { padding: 4px 9px; background: #202040; color: #ccd; border: 1px solid #3a3a60; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+    button:hover { background: #2a2a58; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button.toggle-on { background: #2c4c7c; border-color: #4a6aa0; color: #dff; }
+    button.snap-on { background: #6a2a2a; border-color: #a05050; color: #fdd; }
+    select, input[type=text], input[type=number] { background: #16162c; color: #ccc; border: 1px solid #3a3a60; border-radius: 3px; padding: 3px 6px; font-size: 12px; }
+    input[type=number] { width: 56px; }
+    input[type=checkbox] { cursor: pointer; accent-color: #5580cc; }
+
+    #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #282844; color: #eee; padding: 6px 16px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .3s; z-index: 200; pointer-events: none; white-space: nowrap; }
+    #toast.visible { opacity: 1; }
+    #toast.error { background: #581818; color: #faa; }
+    #toast.warn { background: #583800; color: #fca; }
+    #loading { position: fixed; inset: 0; background: #1a1a2e; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #99a; z-index: 300; transition: opacity .4s; }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <a href="../hub/" style="padding:4px 9px;background:#2a2a44;color:#cdd;border:1px solid #3a3a60;border-radius:4px;text-decoration:none;font-size:12px;">← hub</a>
+  <div class="sep"></div>
+  <div class="grp">
+    <label>プレイヤー</label>
+    <select id="player-npc" style="max-width:130px;background:#1f3050;color:#bdf;border:1px solid #3a5a8a;"><option value="">-- NPC --</option></select>
+    <button id="player-vrm-btn" title="VRMファイル">VRM</button>
+    <input type="file" id="player-vrm-file" accept=".vrm" style="display:none">
+  </div>
+  <div class="sep"></div>
+  <div class="grp">
+    <label>NPC</label>
+    <select id="npc-npc" style="max-width:130px;background:#502f3a;color:#fbd;border:1px solid #8a3a5a;"><option value="">-- NPC --</option></select>
+    <button id="npc-vrm-btn" title="VRMファイル">VRM</button>
+    <input type="file" id="npc-vrm-file" accept=".vrm" style="display:none">
+  </div>
+  <div class="sep"></div>
+  <div class="grp">
+    <select id="ba-select" title="bite-align 読込" style="max-width:150px;"><option value="">-- BiteAlign読込 --</option></select>
+    <button id="ba-save" title="public/bitealign に保存">保存</button>
+  </div>
+  <span class="fps" id="fps-toolbar">-- FPS</span>
+</div>
+
+<div id="main">
+  <div id="app">
+    <div id="fps-counter">-- FPS</div>
+    <div id="webgpu-warning">⚠ WebGPU非対応</div>
+    <div id="gap">gap: -- cm</div>
+    <div id="hint">口(緑)＝プレイヤー / 噛みつき点(赤)＝NPC。編集点を選んでギズモで動かす（G=移動 R=回転）</div>
+  </div>
+
+  <div id="right-panel">
+
+    <!-- 再生 -->
+    <div class="sec">
+      <h3>再生（ペア同時）</h3>
+      <div class="row-wrap">
+        <button id="btn-play" disabled>▶ 再生</button>
+        <button id="btn-pause" disabled>⏸ 停止</button>
+        <label style="font-size:11px;color:#889;display:flex;align-items:center;gap:3px;cursor:pointer;"><input type="checkbox" id="cb-loop" checked>ループ</label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#889;">速度
+          <input type="range" id="speed" min="0.1" max="2" step="0.05" value="1" style="width:80px;accent-color:#5580cc;">
+          <span id="speed-val" style="color:#bbb;min-width:32px;">1.00×</span>
+        </label>
+      </div>
+      <div class="row" style="margin-top:4px;">
+        <label>フレーム</label>
+        <input type="range" id="scrub" min="0" max="1" step="1" value="0" style="flex:1;accent-color:#cc5580;">
+        <span class="val" id="frame-lbl">0 / 0</span>
+      </div>
+      <div class="row-wrap">
+        <label style="min-width:auto;color:#889;">トリム</label>
+        <button id="btn-in">In=現在</button>
+        <button id="btn-out">Out=現在</button>
+        <button id="btn-trim-reset">全体</button>
+        <span class="val" id="trim-lbl" style="color:#3c9;min-width:auto;">0–0</span>
+      </div>
+    </div>
+
+    <!-- アニメペア -->
+    <div class="sec">
+      <h3>アニメ（噛む側／噛まれる側）</h3>
+      <div class="row">
+        <label>プレイヤー</label>
+        <select id="anim-player" style="flex:1"><option value="">-- VRMA --</option></select>
+      </div>
+      <div class="row">
+        <label>NPC(被)</label>
+        <select id="anim-victim" style="flex:1"><option value="">-- VRMA --</option></select>
+      </div>
+      <div class="row">
+        <label style="min-width:auto;color:#889;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="cb-loop-victim" checked>被食側もループ</label>
+      </div>
+    </div>
+
+    <!-- 口アンカー -->
+    <div class="sec">
+      <h3>口アンカー（プレイヤー）</h3>
+      <div class="row">
+        <label>ボーン</label>
+        <select id="mouth-bone" style="flex:1"></select>
+        <button id="edit-mouth" class="toggle-on" title="ギズモで口を編集">編集</button>
+      </div>
+      <div class="row"><label>X</label><input type="range" id="mouth-x" min="-0.3" max="0.3" step="0.005" value="0"><span class="val" id="mouth-x-val">0.000</span></div>
+      <div class="row"><label>Y</label><input type="range" id="mouth-y" min="-0.3" max="0.3" step="0.005" value="-0.03"><span class="val" id="mouth-y-val">-0.030</span></div>
+      <div class="row"><label>Z</label><input type="range" id="mouth-z" min="-0.3" max="0.3" step="0.005" value="0.09"><span class="val" id="mouth-z-val">0.090</span></div>
+    </div>
+
+    <!-- 噛みつき点 -->
+    <div class="sec">
+      <h3>噛みつき点（NPC）</h3>
+      <div class="row">
+        <label>ボーン</label>
+        <select id="bite-bone" style="flex:1"></select>
+        <button id="edit-bite" title="ギズモで噛みつき点を編集">編集</button>
+      </div>
+      <div class="row"><label>X</label><input type="range" id="bite-x" min="-0.3" max="0.3" step="0.005" value="-0.03"><span class="val" id="bite-x-val">-0.030</span></div>
+      <div class="row"><label>Y</label><input type="range" id="bite-y" min="-0.3" max="0.3" step="0.005" value="0.02"><span class="val" id="bite-y-val">0.020</span></div>
+      <div class="row"><label>Z</label><input type="range" id="bite-z" min="-0.3" max="0.3" step="0.005" value="0.03"><span class="val" id="bite-z-val">0.030</span></div>
+    </div>
+
+    <!-- アライン -->
+    <div class="sec">
+      <h3>アライン（噛みロック）</h3>
+      <div class="row-wrap">
+        <button id="btn-snap" class="snap-on" title="剛体で座り直して噛みつきをロック">● Snap ON</button>
+        <span style="font-size:10px;color:#778;">口フレームに対しNPCを座らせる</span>
+      </div>
+      <div style="font-size:10px;color:#667;margin:4px 0 2px;">寄せ（口ローカル・m）</div>
+      <div class="row"><label>pos X</label><input type="range" id="al-x" min="-0.2" max="0.2" step="0.002" value="0"><span class="val" id="al-x-val">0.000</span></div>
+      <div class="row"><label>pos Y</label><input type="range" id="al-y" min="-0.2" max="0.2" step="0.002" value="0"><span class="val" id="al-y-val">0.000</span></div>
+      <div class="row"><label>pos Z</label><input type="range" id="al-z" min="-0.2" max="0.2" step="0.002" value="0.02"><span class="val" id="al-z-val">0.020</span></div>
+      <div style="font-size:10px;color:#667;margin:4px 0 2px;">向き（度）</div>
+      <div class="row"><label>Pitch</label><input type="range" id="al-rx" min="-180" max="180" step="1" value="0"><span class="val" id="al-rx-val">0</span></div>
+      <div class="row"><label>Yaw</label><input type="range" id="al-ry" min="-180" max="180" step="1" value="180"><span class="val" id="al-ry-val">180</span></div>
+      <div class="row"><label>Roll</label><input type="range" id="al-rz" min="-180" max="180" step="1" value="0"><span class="val" id="al-rz-val">0</span></div>
+    </div>
+
+    <!-- 保存名 -->
+    <div class="sec">
+      <div class="row">
+        <label style="min-width:auto;">保存名</label>
+        <input type="text" id="ba-name" value="" placeholder="NPC名で自動" style="flex:1;">
+        <span style="font-size:10px;color:#667;">.bite.json</span>
+      </div>
+      <div style="font-size:10px;color:#667;margin-top:4px;">保存先 public/bitealign/。tps-flight がキャラごとに読みます。</div>
+    </div>
+
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="loading">読み込み中…</div>
+
+<script type="module" src="./bite-editor.js"></script>
+</body>
+</html>

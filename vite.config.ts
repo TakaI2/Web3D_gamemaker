@@ -41,6 +41,16 @@ export default defineConfig({
       configureServer(server) {
         const pub = path.resolve(__dirname, 'public');
 
+        // basic-ssl の TLS ソケットで、クライアント切断(ECONNRESET)が「未処理 error イベント」となり
+        // dev サーバのプロセスごと落ちるのを防ぐ。ソケット単位の error は握りつぶす（接続断は無害）。
+        const hs = server.httpServer;
+        if (hs) {
+          const ignore = (socket: import('net').Socket) => socket.on('error', () => { /* 接続断は無視 */ });
+          hs.on('connection', ignore);
+          hs.on('secureConnection', ignore as (socket: unknown) => void);
+          hs.on('clientError', (_err, socket) => { try { (socket as import('net').Socket).destroy(); } catch { /* noop */ } });
+        }
+
         // VRMA 直接配信: ファイル名に '@' や空白を含む VRMA は vite/sirv が正しく解決できず
         // SPA の index.html(HTML) を返してしまう（GLTFLoader が JSON.parse して "Unexpected token '<'"）。
         // ここでデコードして public/vrma から直接ストリーミングし、確実に配信する。
@@ -67,7 +77,7 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
@@ -100,6 +110,26 @@ export default defineConfig({
           const files = fs.existsSync(pub)
             ? fs.readdirSync(pub).filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f))
             : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // 捕食アライン一覧（public/bitealign/*.bite.json。bite-editor が保存）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/bitealign/manifest.json')) return next();
+          const dir = path.join(pub, 'bitealign');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.bite.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // 音声一覧（public/audio/ 直下。タイムラインの発射音等）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/audio/manifest.json')) return next();
+          const dir = path.join(pub, 'audio');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /\.(mp3|wav|ogg|m4a|aac)$/i.test(f)) : [];
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
         });

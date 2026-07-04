@@ -1,0 +1,44 @@
+{
+  "format": "bite-align",
+  "version": 1,
+  "target": "ken",
+  "player": {
+    "mouthBone": "head",
+    "mouthOffset": [
+      0,
+      0,
+      -0.075
+    ]
+  },
+  "npc": {
+    "biteBone": "neck",
+    "biteOffset": [
+      0.1,
+      0.09,
+      0.05
+    ]
+  },
+  "align": {
+    "pos": [
+      0.004,
+      -0.004,
+      0.012
+    ],
+    "rotEuler": [
+      0,
+      7,
+      0
+    ],
+    "lock": true,
+    "blendIn": 0.15,
+    "blendOut": 0.2
+  },
+  "anim": {
+    "playerVrma": "feed.vrma",
+    "victimVrma": "attack_drain_victim02.vrma",
+    "fps": 30,
+    "trimIn": 0,
+    "trimOut": 60,
+    "loopVictim": true
+  }
+}
