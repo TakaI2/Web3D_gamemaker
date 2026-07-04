@@ -45,6 +45,12 @@
   // プレイヘッド X 座標
   $: playheadX = HEADER_WIDTH + state.currentFrame * pixelPerFrame;
 
+  // トリム範囲（In/Out）。outFrame<0 は未設定＝末尾(totalFrames)。
+  let inFrame = 0;
+  let outFrame = -1;
+  $: effOut = outFrame < 0 ? totalFrames : Math.max(0, Math.min(outFrame, totalFrames));
+  $: effIn = Math.max(0, Math.min(inFrame, effOut));
+
   // 選択キーフレーム（複数選択）。id = "<kind>|<track>|<frame>"。kind: 'b'=ボーン / 'e'=表情 / 'h'=ルート位置
   type KeyKind = 'b' | 'e' | 'h';
   let selectedKeys = new Set<string>();
@@ -260,13 +266,25 @@
     selectedKeys = next;   // 貼り付けたキーを選択状態に
   }
 
-  // Del=一括削除 / Ctrl(⌘)+C=コピー / Ctrl(⌘)+V=現在フレームへ貼り付け
+  // ── トリム / 範囲操作 ──（詰める真のトリム。範囲は In/Out・全トラック対象）
+  function clearSel(): void { selectedKeys = new Set(); }
+  function doTrimBefore(): void { animEditorStore.trimBefore(state.currentFrame); inFrame = 0; outFrame = -1; clearSel(); }
+  function doTrimAfter(): void { animEditorStore.trimAfter(state.currentFrame); clearSel(); }
+  function setIn(): void { inFrame = state.currentFrame; }
+  function setOut(): void { outFrame = state.currentFrame; }
+  function doCopyRange(): void { animEditorStore.copyRange(effIn, effOut); }
+  function doDeleteRange(): void { animEditorStore.deleteRange(effIn, effOut); inFrame = 0; outFrame = -1; clearSel(); }
+  function doPasteRange(): void { animEditorStore.pasteRange(state.currentFrame); clearSel(); }
+
+  // Del=一括削除 / Ctrl(⌘)+C=コピー / Ctrl(⌘)+V=現在フレームへ貼り付け / I,O=In,Out設定
   function onKeyDown(e: KeyboardEvent): void {
     const tgt = e.target as HTMLElement | null;
     if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return;
     const mod = e.ctrlKey || e.metaKey;
     if (mod && (e.key === 'c' || e.key === 'C')) { copySelected(); return; }
     if (mod && (e.key === 'v' || e.key === 'V')) { e.preventDefault(); pasteAtCurrent(); return; }
+    if (!mod && (e.key === 'i' || e.key === 'I')) { inFrame = state.currentFrame; return; }
+    if (!mod && (e.key === 'o' || e.key === 'O')) { outFrame = state.currentFrame; return; }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       if (selectedKeys.size === 0) return;
       e.preventDefault();
@@ -278,9 +296,24 @@
 
 <svelte:window on:keydown={onKeyDown} />
 
+<div style="display:flex;flex-direction:column;height:100%;">
+<!-- トリム/範囲ツールバー -->
+<div class="trim-bar">
+  <span class="lbl">トリム</span>
+  <button on:click={doTrimBefore} title="現在フレームより前を削除して詰める">⟤前を削除</button>
+  <button on:click={doTrimAfter} title="現在フレームより後を削除">後を削除⟥</button>
+  <span class="sep"></span>
+  <span style="color:#3c9;">範囲 {effIn}–{effOut}</span>
+  <button on:click={setIn} title="現在フレームをInに (I)">In=現在</button>
+  <button on:click={setOut} title="現在フレームをOutに (O)">Out=現在</button>
+  <button on:click={doCopyRange} title="範囲の全トラックをコピー">コピー</button>
+  <button on:click={doDeleteRange} title="範囲を削除して詰める">範囲削除</button>
+  <button on:click={doPasteRange} title="現在フレームへ貼り付け">貼付</button>
+</div>
+
 <div
   bind:this={containerEl}
-  style="overflow-x:auto;overflow-y:auto;background:#1a1a1a;user-select:none;height:100%;"
+  style="flex:1;min-height:0;overflow-x:auto;overflow-y:auto;background:#1a1a1a;user-select:none;"
   on:wheel|nonpassive={onWheel}
   on:pointerdown={onPanDown}
 >
@@ -369,6 +402,14 @@
       />
     {/each}
 
+    <!-- トリム範囲（In/Out）帯 -->
+    {#if effOut > effIn}
+      <rect x={frameToX(effIn)} y={0} width={Math.max(0, frameToX(effOut) - frameToX(effIn))} height={timelineHeight}
+        fill="#33cc88" fill-opacity="0.08" pointer-events="none" />
+      <line x1={frameToX(effIn)} y1={0} x2={frameToX(effIn)} y2={timelineHeight} stroke="#33cc88" stroke-width="1.5" pointer-events="none" />
+      <line x1={frameToX(effOut)} y1={0} x2={frameToX(effOut)} y2={timelineHeight} stroke="#33cc88" stroke-width="1.5" pointer-events="none" />
+    {/if}
+
     <!-- マーキー（ボックス選択）矩形 -->
     {#if marquee}
       <rect
@@ -393,3 +434,12 @@
     />
   </svg>
 </div>
+</div>
+
+<style>
+  .trim-bar { flex-shrink: 0; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 3px 6px; background: #111; border-bottom: 1px solid #333; font-size: 11px; color: #aaa; }
+  .trim-bar .lbl { color: #777; }
+  .trim-bar .sep { width: 1px; height: 14px; background: #333; margin: 0 2px; }
+  .trim-bar button { background: #2a2a2a; color: #ccd; border: 1px solid #444; border-radius: 3px; padding: 2px 7px; font-size: 11px; cursor: pointer; }
+  .trim-bar button:hover { background: #3a3a3a; }
+</style>
