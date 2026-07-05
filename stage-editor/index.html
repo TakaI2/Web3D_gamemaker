@@ -39,19 +39,45 @@
 
   <div id="topbar">
     <a href="../hub/">← 一覧</a>
-    <select id="stage-select" title="public/stages/ から読込" style="width:auto"></select>
-    <button id="btn-new">新規</button>
-    <input id="stage-id" type="text" placeholder="ステージID" style="width:120px;background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.25);color:#fff;padding:6px 8px;border-radius:4px;font-size:12px;">
-    <button id="btn-import">現行stage取込</button>
-    <button id="btn-save" class="prim">保存</button>
+    <button id="btn-mode" title="配置モード / 都市モード">都市モード</button>
+    <span id="prop-topbar" style="display:flex;gap:8px;">
+      <select id="stage-select" title="public/stages/ から読込" style="width:auto"></select>
+      <button id="btn-new">新規</button>
+      <input id="stage-id" type="text" placeholder="ステージID" style="width:110px;background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.25);color:#fff;padding:6px 8px;border-radius:4px;font-size:12px;">
+      <button id="btn-import">現行stage取込</button>
+      <button id="btn-save" class="prim">保存</button>
+    </span>
+    <span id="city-topbar" style="display:none;gap:8px;">
+      <select id="city-select" title="public/cities/ から読込" style="width:auto"></select>
+      <input id="city-id" type="text" placeholder="都市ID" style="width:110px;background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.25);color:#fff;padding:6px 8px;border-radius:4px;font-size:12px;">
+      <button id="btn-city-save" class="prim">都市を保存</button>
+    </span>
   </div>
 
   <div id="left" class="panel">
-    <h3>配置するモデル</h3>
-    <div class="hint">モデルを選び、地面を<b>左クリック</b>で配置。配置済みは左クリックで選択／<b>右クリックで削除</b>。<b>左ドラッグで視点回転</b>・ホイールでズーム。</div>
-    <div id="palette" class="thumbgrid"></div>
-    <h4>配置済み</h4>
-    <div id="item-list"></div>
+    <div id="prop-panel">
+      <h3>配置するモデル</h3>
+      <div class="hint">モデルを選び、地面を<b>左クリック</b>で配置。配置済みは左クリックで選択／<b>右クリックで削除</b>。<b>左ドラッグで視点回転</b>・ホイールでズーム。</div>
+      <div id="palette" class="thumbgrid"></div>
+      <h4>配置済み</h4>
+      <div id="item-list"></div>
+    </div>
+
+    <div id="city-panel" style="display:none">
+      <h3>都市（プロシージャル）</h3>
+      <div class="hint">スプラインで<b>道路/線路</b>を描き、<b>生成</b>で沿道に建物を自動配置。地面を<b>左クリックで制御点追加</b>、点を<b>ドラッグで移動</b>・<b>右クリックで削除</b>。</div>
+      <h4>スプライン</h4>
+      <div class="row"><button id="btn-spline-road" class="w prim">＋ 道路スプライン</button></div>
+      <div class="row"><button id="btn-spline-rail" class="w">＋ 線路スプライン（箱）</button></div>
+      <div class="row"><label>閉じる</label><input type="checkbox" id="spline-closed"></div>
+      <div id="spline-list"></div>
+      <h4>生成パラメータ</h4>
+      <div class="row"><label>シード</label><input type="number" id="city-seed" value="1337" style="width:80px;background:#16162c;color:#ccd;border:1px solid #3a3a60;border-radius:3px;padding:3px 6px;"></div>
+      <div class="row"><label>建物間隔</label><input type="range" id="city-spacing" min="1" max="5" step="1" value="2"><span class="val" id="city-spacing-v">2</span></div>
+      <div class="row"><label>回転向き</label><select id="city-rysign"><option value="-1">-1</option><option value="1">1</option></select></div>
+      <button id="btn-regen" class="w prim">生成 / 再生成</button>
+      <div class="hint" id="city-stats" style="margin-top:8px;color:#9fd0ff;"></div>
+    </div>
   </div>
 
   <div id="right" class="panel">

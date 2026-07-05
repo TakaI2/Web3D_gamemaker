@@ -47,6 +47,11 @@
     #toast.warn { background: #583800; color: #fca; }
     #loading { position: fixed; inset: 0; background: #1a1a2e; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #99a; z-index: 300; transition: opacity .4s; }
     #loading.hidden { opacity: 0; pointer-events: none; }
+
+    #timeline-bar { flex-shrink: 0; height: 150px; background: #0d0f22; border-top: 1px solid #2a2a44; position: relative; }
+    #tl-resize { position: absolute; top: 0; left: 0; right: 0; height: 6px; cursor: ns-resize; background: #1a1a30; z-index: 2; }
+    #tl-resize:hover { background: #2a2a50; }
+    #tl-canvas { position: absolute; top: 6px; left: 0; right: 0; bottom: 0; width: 100%; height: calc(100% - 6px); display: block; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -125,6 +130,11 @@
       <div class="row">
         <label style="min-width:auto;color:#889;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="cb-loop-victim" checked>被食側もループ</label>
       </div>
+      <div class="row">
+        <label>効果音</label>
+        <select id="anim-sound" style="flex:1"><option value="">-- なし --</option></select>
+        <button id="anim-sound-play" style="padding:2px 8px;" title="試聴/停止">▶</button>
+      </div>
     </div>
 
     <!-- 口アンカー -->
@@ -138,6 +148,7 @@
       <div class="row"><label>X</label><input type="range" id="mouth-x" min="-0.3" max="0.3" step="0.005" value="0"><span class="val" id="mouth-x-val">0.000</span></div>
       <div class="row"><label>Y</label><input type="range" id="mouth-y" min="-0.3" max="0.3" step="0.005" value="-0.03"><span class="val" id="mouth-y-val">-0.030</span></div>
       <div class="row"><label>Z</label><input type="range" id="mouth-z" min="-0.3" max="0.3" step="0.005" value="0.09"><span class="val" id="mouth-z-val">0.090</span></div>
+      <div class="row"><label style="min-width:auto;color:#889;">キー</label><button id="key-mouth" title="現フレームにキー">◆</button><button id="unkey-mouth" title="現フレーム付近のキー削除">✕</button><span class="val" id="keys-mouth" style="min-width:auto;color:#3c9;">0キー</span></div>
     </div>
 
     <!-- 噛みつき点 -->
@@ -148,9 +159,11 @@
         <select id="bite-bone" style="flex:1"></select>
         <button id="edit-bite" title="ギズモで噛みつき点を編集">編集</button>
       </div>
+      <div class="row"><label>被食</label><select id="victim-mode" style="flex:1"><option value="anim">アニメ(VRMA)</option><option value="ragdoll">ラグドール(噛点固定)</option></select><button id="btn-ragdoll" title="ラグドール物理プレビュー（被食=ラグドール時）">物理</button></div>
       <div class="row"><label>X</label><input type="range" id="bite-x" min="-0.3" max="0.3" step="0.005" value="-0.03"><span class="val" id="bite-x-val">-0.030</span></div>
       <div class="row"><label>Y</label><input type="range" id="bite-y" min="-0.3" max="0.3" step="0.005" value="0.02"><span class="val" id="bite-y-val">0.020</span></div>
       <div class="row"><label>Z</label><input type="range" id="bite-z" min="-0.3" max="0.3" step="0.005" value="0.03"><span class="val" id="bite-z-val">0.030</span></div>
+      <div class="row"><label style="min-width:auto;color:#889;">キー</label><button id="key-bite" title="現フレームにキー">◆</button><button id="unkey-bite" title="現フレーム付近のキー削除">✕</button><span class="val" id="keys-bite" style="min-width:auto;color:#3c9;">0キー</span></div>
     </div>
 
     <!-- アライン -->
@@ -168,6 +181,31 @@
       <div class="row"><label>Pitch</label><input type="range" id="al-rx" min="-180" max="180" step="1" value="0"><span class="val" id="al-rx-val">0</span></div>
       <div class="row"><label>Yaw</label><input type="range" id="al-ry" min="-180" max="180" step="1" value="180"><span class="val" id="al-ry-val">180</span></div>
       <div class="row"><label>Roll</label><input type="range" id="al-rz" min="-180" max="180" step="1" value="0"><span class="val" id="al-rz-val">0</span></div>
+      <div class="row"><label style="min-width:auto;color:#889;">キー</label><button id="key-align" title="現フレームにアライン(pos+rot)をキー">◆</button><button id="unkey-align" title="現フレーム付近のキー削除">✕</button><span class="val" id="keys-align" style="min-width:auto;color:#3c9;">0キー</span></div>
+    </div>
+
+    <!-- 小突き（ラグドール被食時） -->
+    <div class="sec">
+      <h3>小突き（ラグドール被食時）</h3>
+      <div class="row"><label>ボーン</label><select id="nudge-bone" style="flex:1"></select></div>
+      <div class="row">
+        <label>方向</label>
+        <input type="number" id="nudge-x" value="0" step="0.5" style="width:44px">
+        <input type="number" id="nudge-y" value="1" step="0.5" style="width:44px">
+        <input type="number" id="nudge-z" value="0" step="0.5" style="width:44px">
+        <label style="min-width:auto;">強</label><input type="number" id="nudge-str" value="3" step="0.5" style="width:48px">
+      </div>
+      <div class="row-wrap"><button id="nudge-add">＋現フレームに追加</button><button id="nudge-del">選択削除</button></div>
+      <select id="nudge-list" size="4" style="width:100%;margin-top:4px;background:#16162c;color:#ccd;border:1px solid #3a3a60;border-radius:4px;font-size:11px;"></select>
+      <div style="font-size:10px;color:#667;margin-top:2px;">ラグドール時、噛点(neck)を口へ固定し、指定フレームで小突く。</div>
+    </div>
+
+    <!-- マント（プレビュー物理） -->
+    <div class="sec">
+      <h3>マント（プレビュー物理）</h3>
+      <div class="row"><label>硬さ</label><input type="range" id="cloth-stiff" min="0.05" max="1" step="0.05" value="0.3"><span class="val" id="cloth-stiff-val">0.30</span></div>
+      <div class="row"><label>風</label><input type="range" id="cloth-wind" min="0" max="2" step="0.05" value="0.5"><span class="val" id="cloth-wind-val">0.50</span></div>
+      <div style="font-size:10px;color:#667;margin-top:2px;">マントが顔に被る時は硬さを上げ風を下げる。両キャラのマントに適用。</div>
     </div>
 
     <!-- 保存名 -->
@@ -181,6 +219,11 @@
     </div>
 
   </div>
+</div>
+
+<div id="timeline-bar">
+  <div id="tl-resize" title="ドラッグで高さ変更"></div>
+  <canvas id="tl-canvas"></canvas>
 </div>
 
 <div id="toast"></div>

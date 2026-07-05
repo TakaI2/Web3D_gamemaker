@@ -18,6 +18,7 @@ import { createNpcSpeech } from '../lib/npc-speech.js';
 import { createSpeechUI } from '../lib/speech-ui.js';
 import { defaultSpeechFile, fetchSpeechSet, buildSpeechCharacter, speechFromLegacyCharacter } from '../lib/speech-set.js';
 import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
+import { createDissolve } from '../lib/fx-dissolve.js';
 import { positionWorld, mix, color } from 'https://esm.sh/three@0.184.0/tsl';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 
@@ -1140,6 +1141,69 @@ function updateFx(dt) {
   }
 }
 
+// ── ディソルブ検証ターゲット ─────────────────────────────────────
+// 攻撃(発射体)を当てると液体のように溶けて消え、液だまりを残して数秒後に逆再生で
+// 元の形へ再構成される“的”。lib/fx-dissolve(WebGPU/TSL)の動作確認用。何度でも試せる。
+const DISSOLVE_SPEED   = 0.6;   // 溶解/再構成の進行速度（1/秒 → 片道 約1.7秒）
+const DISSOLVE_HOLD    = 0.8;   // 完全溶解して液だまりを見せる保持時間(秒)
+const DISSOLVE_RESPAWN = 1.5;   // 液だまりのまま待機してから再構成に入るまでの時間(秒)
+const dissolveTargets  = [];    // { mesh, radius, rim, liquid, dis, prog, state:'idle'|'melt'|'hold'|'gone'|'form', timer }
+
+function buildDissolveTargets() {
+  // 床(y=0)の上に、プレイヤー正面(-Z 側)へ並べる。形と色を変えて溶け方を見比べられるように。
+  const defs = [
+    { geo: new THREE.IcosahedronGeometry(0.85, 0),          color: 0x66d0ff, rim: '#8ff0ff', liquid: '#bfeaff', pos: [-6.5, 3.0] },
+    { geo: new THREE.BoxGeometry(1.3, 1.7, 1.3),            color: 0xff8a5c, rim: '#ffb066', liquid: '#ffd9b0', pos: [-3.0, 0.0] },
+    { geo: new THREE.CylinderGeometry(0.55, 0.8, 2.3, 22),  color: 0x9dff8a, rim: '#b6ff9e', liquid: '#d6ffcf', pos: [ 0.0, -2.0] },
+    { geo: new THREE.TorusKnotGeometry(0.55, 0.2, 120, 18), color: 0xff7fd0, rim: '#ff9ee0', liquid: '#ffd0f0', pos: [ 3.0, 0.0] },
+    { geo: new THREE.DodecahedronGeometry(0.9, 0),          color: 0xffe070, rim: '#fff0a0', liquid: '#fff4c0', pos: [ 6.5, 3.0] },
+  ];
+  for (const d of defs) {
+    const geo = d.geo;
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+    const mat = new THREE.MeshStandardNodeMaterial({
+      color: d.color, roughness: 0.35, metalness: 0.1,
+      emissive: new THREE.Color(d.color).multiplyScalar(0.05),
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(d.pos[0], -geo.boundingBox.min.y + 0.01, d.pos[1]);   // 底面を床に接地
+    scene.add(mesh);
+    dissolveTargets.push({
+      mesh, radius: geo.boundingSphere.radius,
+      rim: d.rim, liquid: d.liquid,
+      dis: null, prog: 0, state: 'idle', timer: 0,
+    });
+  }
+}
+
+function startDissolve(t) {
+  t.dis = createDissolve(t.mesh, { rimColor: t.rim, liquidColor: t.liquid, rimIntensity: 2.8 });
+  t.dis.setProgress(0);
+  t.prog = 0; t.state = 'melt'; t.timer = 0;
+}
+
+function updateDissolveTargets(dt) {
+  for (const t of dissolveTargets) {
+    if (t.state === 'idle' || !t.dis) continue;
+    if (t.state === 'melt') {
+      t.prog = Math.min(1, t.prog + dt * DISSOLVE_SPEED);
+      t.dis.setProgress(t.prog); t.dis.update(dt);
+      if (t.prog >= 1) { t.state = 'hold'; t.timer = 0; }
+    } else if (t.state === 'hold') {
+      t.dis.update(dt); t.timer += dt;
+      if (t.timer >= DISSOLVE_HOLD) { t.state = 'gone'; t.timer = 0; }
+    } else if (t.state === 'gone') {
+      t.dis.update(dt); t.timer += dt;
+      if (t.timer >= DISSOLVE_RESPAWN) t.state = 'form';
+    } else if (t.state === 'form') {
+      t.prog = Math.max(0, t.prog - dt * DISSOLVE_SPEED);
+      t.dis.setProgress(t.prog); t.dis.update(dt);
+      if (t.prog <= 0) { t.dis.dispose(); t.dis = null; t.state = 'idle'; }
+    }
+  }
+}
+
 function stepProjectiles(dt) {
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
@@ -1165,6 +1229,20 @@ function stepProjectiles(dt) {
           _hitDir.normalize();
           obj.vel.addScaledVector(_hitDir, params.impulse);
           clampSpeed(obj.vel);
+          spawnSpark(p.pos);
+          dead = true;
+          break;
+        }
+      }
+    }
+
+    // ディソルブ検証ターゲット命中：未溶解(idle)なら溶解開始。発射体は消滅。
+    if (!dead) {
+      for (const t of dissolveTargets) {
+        if (t.state !== 'idle') continue;
+        const rr = p.radius + t.radius;
+        if (p.pos.distanceToSquared(t.mesh.position) <= rr * rr) {
+          startDissolve(t);
           spawnSpark(p.pos);
           dead = true;
           break;
@@ -1481,6 +1559,7 @@ function render() {
   syncObjectMeshes();
   updateMegus(dt);
   updateFx(dt);
+  updateDissolveTargets(dt);
   if (speechUI) speechUI.update(dt, npcScreenPos);
   if (FLOW && battleCfg) {
     if (!battleOver) { battleTime += dt; updateObjectHazards(dt); }
@@ -1541,6 +1620,7 @@ async function init() {
   }
 
   buildArena();
+  buildDissolveTargets();   // ディソルブ検証用の的（攻撃で溶けて再構成）
 
   playerCollider = new Capsule(
     EYE_SPAWN.clone().setY(EYE_SPAWN.y - 0.65),

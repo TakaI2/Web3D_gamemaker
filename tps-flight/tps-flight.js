@@ -17,6 +17,7 @@ import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { createMeshFx } from '../lib/fx-mesh.js';
 import { createTornado } from '../lib/fx-tornado.js';
 import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
+import { createDissolve } from '../lib/fx-dissolve.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 
 // ── アリーナ ───────────────────────────────────────────────────
@@ -105,6 +106,9 @@ const player = {
   wrapping: false,         // 左クリック長押し中（掴む対象なし）。wrap を再生→最後で保持
   afk: null,               // 放置モーション状態（null / 'drain0' / 'drain1'）
   idleT: 0,                // 無操作の経過秒
+  prey: null,              // 右クリックで捕まえた捕食対象(ken)。地面付近で一定時間→捕食開始
+  eating: false,           // 捕食動作中（feed.vrma再生＋bite align 中）。入力ロック
+  eatT: 0,                 // 捕食経過秒
   ready: false,
 };
 const DESCEND_SIN = 0.3;   // 前進方向がこれ以上下を向いていたら「降下」とみなす（約17°）
@@ -120,7 +124,21 @@ const MOB_RUN_SPEED  = 4.4;     // 逃走速度(m/s)
 const MOB_FLEE_RADIUS = 7.5;    // プレイヤーがこの距離内なら逃げる
 const MOB_STEER_TAU  = 0.45;    // 速度の追従時定数
 const DEFAULT_MOB_COUNT = 4;
-const mobAssets = { ready: false, bundle: null, vrmBlobUrl: null, walkAnim: null, faceOff: 0 };
+const mobAssets = { ready: false, bundle: null, vrmBlobUrl: null, walkAnim: null, faceOff: 0, ragOpts: null };
+
+// ken の耐久＆ディソルブ死: 攻撃でダメージを蓄積し、0 でその場で溶けて消える → 少し後に再スポーン
+const MOB_MAX_HP        = 100;    // 通常弾 power=18 で約6発、ラージショットは大ダメージ
+const DISSOLVE_DURATION = 1.8;    // 溶けきるまでの秒数
+const DISSOLVE_LINGER   = 1.4;    // 溶けた後、液だまりを見せてから撤去するまでの秒数
+// groundY:0 でパドルを床面に固定（倒れて床にめり込む対象でも液だまりが地面に出る）
+const MOB_DISSOLVE_OPTS = { rimColor: '#8ff0ff', liquidColor: '#bfeaff', rimIntensity: 2.6, groundY: 0, puddleScale: 1.6, doubleSide: false };
+
+// 捕食（predation）: 左クリックで掴んだ ken を地面に下ろして一定時間保持すると捕食開始（UIで調整可）
+let PREY_GROUND_Y    = 0.25;   // 掴んだ ken の「最下点」がこの高さ以下（＝接地）なら地面扱い
+let PREY_GROUND_TIME = 0.7;    // 接地をこの秒数保つと捕食開始
+const PREY_CARRY_MIN_Y = 0.1;  // 捕食対象を運ぶ間だけプレイヤーはここまで降下可（通常の最低高度は0.6）
+const PREY_FRONT_Y     = 0.25; // 運搬中の前方アンカー高さ（通常1.0より低く＝地面に置ける）
+let PREDATION_EAT_TIME = 4.5;  // 捕食動作の総時間(秒)。feed は 0→ラスト を一巡→尾部[loopStart,loopEnd]をループしこの時間で終了
 
 // カメラ状態（球面 + スプリング現在値）
 let camYaw = Math.PI, camPitch = 0.15;
@@ -376,14 +394,23 @@ function stepProjectiles(dt) {
     // 通常弾は最初の1体で消滅、ラージショットは貫通して複数を巻き込む。
     if (!dead) {
       for (const m of npcs) {
-        if (m.grabbed || m.clothGrabbed) continue;
+        if (m.grabbed || m.clothGrabbed || m.dissolving || m.eating) continue;
         npcCenter(m, _npcC);
         const rr = p.radius + NPC_RADIUS;
         if (p.pos.distanceToSquared(_npcC) > rr * rr) continue;
         _hitDir.copy(p.vel).normalize();
         const imp = RAGDOLL_IMPULSE * (p.big ? 2.2 : 1);
-        if (m.ragdoll.active) applyRagdollImpulse(m.ragdoll, _hitDir.clone().multiplyScalar(imp), 'hips');
-        else hitNpc(m, _hitDir, imp);
+        if (m.kind === 'mob' && m.hp !== undefined) {
+          // ken: ダメージ蓄積 → 0 でディソルブ死。生存中はラグドールで被弾リアクション。
+          m.hp -= (p.power ?? 18);
+          spawnExplosion(p.pos);                              // 被弾フィードバック
+          if (m.hp <= 0) startNpcDissolve(m);
+          else if (m.ragdoll.active) applyRagdollImpulse(m.ragdoll, _hitDir.clone().multiplyScalar(imp), 'hips');
+          else hitNpc(m, _hitDir, imp);
+        } else {
+          if (m.ragdoll.active) applyRagdollImpulse(m.ragdoll, _hitDir.clone().multiplyScalar(imp), 'hips');
+          else hitNpc(m, _hitDir, imp);
+        }
         if (!p.big) { dead = true; break; }
       }
     }
@@ -685,6 +712,7 @@ function hideStateEffects(st) {
 
 function updatePlayerAnim(dt) {
   if (!player.ready) return;
+  if (player.eating) { updatePlayerEating(dt); return; }   // 捕食中は feed のみ駆動
   updateAfk(dt);
   // 一発再生の終了判定
   if (player.oneShot) {
@@ -771,6 +799,11 @@ async function prepareMobAssets() {
         mobAssets.walkAnim = ag.userData.vrmAnimations?.[0] ?? null;
       }
     } catch (e) { console.warn('モブ歩行VRMA失敗:', e); }
+    // ragdoll-editor の調整値(../ragdoll/ken.ragdoll.json)があれば取り込む（暴れ防止・bite-editor と一致）
+    try {
+      const rr = await fetch('../ragdoll/' + MOB_CHAR.replace(/\.npc\.json$/, '') + '.ragdoll.json');
+      if (rr.ok) { const j = await rr.json(); mobAssets.ragOpts = { ...(j.params || {}), boneMaxBend: j.boneMaxBend || {}, boundsMargin: 0.4 }; }
+    } catch { /* 無ければ既定 */ }
     mobAssets.ready = true;
     return true;
   } catch (e) { console.warn('モブ素材準備失敗:', e); return false; }
@@ -794,12 +827,20 @@ async function spawnMob() {
     action.setLoop(THREE.LoopRepeat, Infinity).play();
     action.time = Math.random() * (clip.duration || 1);
   }
-  const ragdoll = createRagdoll(vrm, { gravity: -12, boundsMargin: 0.4 });
+  const ragdoll = createRagdoll(vrm, mobAssets.ragOpts || { gravity: -12, boundsMargin: 0.4 });
+  const hpBar = makeHpBar();
+  scene.add(hpBar.group);
+  // ディソルブを事前生成(prewarm)して未起動で待機。死亡時のシェーダ再コンパイル(カクつき)を回避する。
+  let dis = null;
+  try { dis = createDissolve(vrm.scene, { ...MOB_DISSOLVE_OPTS, armed: false }); dis.setProgress(0); }
+  catch (e) { console.warn('ディソルブ事前生成に失敗（死亡時に生成へフォールバック）:', e); dis = null; }
   npcs.push({
     vrm, ragdoll, mixer, action, cloth: null, pos, kind: 'mob',
     faceOff: mobAssets.faceOff, tlFps: 30,
     vel: new THREE.Vector3(), grabbed: false, clothGrabbed: false, grabBone: 'chest', recoverTimer: 0,
     headLookW: 0, scared: false, wanderTimer: 0, wanderDirX: 0, wanderDirZ: 0,
+    hp: MOB_MAX_HP, maxHp: MOB_MAX_HP, hpBar,
+    dissolving: false, dis, dissT: 0, dead: false, deadTimer: 0, _remove: false, eating: false,
   });
   return true;
 }
@@ -809,7 +850,9 @@ function mobCount() { let n = 0; for (const m of npcs) if (m.kind === 'mob') n++
 function removeMob() {
   for (let i = npcs.length - 1; i >= 0; i--) {
     const m = npcs[i];
-    if (m.kind !== 'mob' || m.grabbed || m.clothGrabbed) continue;   // 掴まれている個体は残す
+    if (m.kind !== 'mob' || m.grabbed || m.clothGrabbed || m.eating || m === player.prey) continue;   // 掴/捕食中は残す
+    if (m.dis) { m.dis.dispose(); m.dis = null; }                    // ディソルブ中なら液だまりごと破棄
+    if (m.hpBar) { scene.remove(m.hpBar.group); m.hpBar = null; }    // 頭上HPバーを撤去
     scene.remove(m.vrm.scene);
     try { disposeRagdoll(m.ragdoll); } catch { /* helper無しなら無視 */ }
     m.vrm.scene.traverse(o => { if (o.isMesh) { o.geometry?.dispose(); const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const mm of ms) mm?.dispose(); } });
@@ -840,6 +883,17 @@ function npcCenter(m, out) {
   if (rd.active && rd.idxOf.hips != null) out.copy(rd.particles[rd.idxOf.hips].pos);
   else { out.copy(m.pos); out.y += NPC_CENTER_Y; }
   return out;
+}
+
+// ラグドール（掴み中など）の最下点ワールドY。接地判定に使う。ラグドール停止時は足元(m.pos.y)。
+function npcLowestY(m) {
+  const rd = m.ragdoll;
+  if (rd.active && rd.particles.length) {
+    let y = Infinity;
+    for (const p of rd.particles) if (p.pos.y < y) y = p.pos.y;
+    return y;
+  }
+  return m.pos.y;
 }
 
 // 照準レイに最も近い NPC 関節（飛行中=ボーン位置 / ラグドール中=粒子位置）。{bone, along}|null
@@ -892,6 +946,7 @@ function releaseNpc(m) {
   if (m.clothGrabbed) { m.cloth.releaseGrab(); m.clothGrabbed = false; }
   m.grabbed = false;
   m.recoverTimer = NPC_RECOVER_DELAY + LOOK_DURATION;
+  if (player.prey === m) player.prey = null;   // 左クリックで放り投げたら捕食対象も解除
   updateCrosshair();
 }
 function hitNpc(m, dir, impulse = RAGDOLL_IMPULSE) {
@@ -899,6 +954,77 @@ function hitNpc(m, dir, impulse = RAGDOLL_IMPULSE) {
   setRagdollActive(m.ragdoll, true);
   applyRagdollImpulse(m.ragdoll, dir.clone().multiplyScalar(impulse), 'chest');
   m.recoverTimer = NPC_RECOVER_DELAY + LOOK_DURATION;
+}
+
+// ── ken(地上モブ)のHP＆ディソルブ死 ─────────────────────────────
+// 頭上HPバー（ビルボード）。無傷時は非表示、被弾で出現し残量に応じて緑→橙→赤。
+function makeHpBar() {
+  const group = new THREE.Group();
+  const bg = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.92, 0.14),
+    new THREE.MeshBasicMaterial({ color: 0x101014, transparent: true, opacity: 0.75, depthTest: false }),
+  );
+  const fill = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.88, 0.10),
+    new THREE.MeshBasicMaterial({ color: 0x35e06a, depthTest: false }),
+  );
+  fill.position.z = 0.002;
+  group.add(bg, fill);
+  group.renderOrder = 999;
+  group.visible = false;
+  return { group, fill, w: 0.88 };
+}
+
+function updateHpBar(m) {
+  const bar = m.hpBar;
+  if (!bar) return;
+  if (m.dissolving || m.dead) { bar.group.visible = false; return; }
+  const frac = Math.max(0, Math.min(1, m.hp / m.maxHp));
+  bar.group.visible = frac < 0.999;                 // 無傷なら隠す
+  npcCenter(m, _npcC);
+  bar.group.position.set(_npcC.x, _npcC.y + NPC_RADIUS + 0.55, _npcC.z);
+  bar.group.quaternion.copy(camera.quaternion);     // カメラへ正対（ビルボード）
+  bar.fill.scale.x = Math.max(0.0001, frac);        // 左詰めで減少
+  bar.fill.position.x = -bar.w * (1 - frac) * 0.5;
+  bar.fill.material.color.set(frac > 0.5 ? 0x35e06a : frac > 0.25 ? 0xffc23a : 0xff4436);
+}
+
+function startNpcDissolve(m) {
+  if (m.dissolving) return;
+  npcCenter(m, _v1);
+  m.dissolving = true; m.dissT = 0; m.dead = false; m.deadTimer = 0;
+  m.grabbed = false; m.clothGrabbed = false;
+  m.vel.set(0, 0, 0);
+  if (m.ragdoll?.active) setRagdollActive(m.ragdoll, false);   // その場で静止して溶ける（ポーズは固定）
+  if (m.hpBar) m.hpBar.group.visible = false;
+  if (m.dis) m.dis.setArmed(true);                             // 事前生成済み→ユニフォーム切替のみ（カクつかない）
+  else m.dis = createDissolve(m.vrm.scene, MOB_DISSOLVE_OPTS); // 事前生成に失敗していた場合のみ生成（この時だけ一瞬重い）
+  m.dis.setProgress(0);
+  m.dis.setPuddleCenter(_v1.x, _v1.z);                         // 倒れた体の実位置(ラグドールhips)へパドルを合わせる
+  spawnExplosion(_v1);                                         // 死亡の瞬間に一発
+}
+
+function updateNpcDissolve(m, dt) {
+  m.vrm.update(dt);
+  if (!m.dead) {
+    m.dissT += dt;
+    const pr = Math.min(1, m.dissT / DISSOLVE_DURATION);
+    m.dis.setProgress(pr);
+    if (pr >= 1) { m.dead = true; m.deadTimer = DISSOLVE_LINGER; }
+  } else {
+    m.deadTimer -= dt;
+  }
+  if (m.dis) m.dis.update(dt);
+  if (m.dead && m.deadTimer <= 0) m._remove = true;             // 撤去は updateNpcs 側でまとめて
+}
+
+// npcs 配列から安全に撤去（イテレーション後に呼ぶ）。倒した分は再スポーンして検証を継続できるように。
+function finalizeRemoveNpc(m) {
+  if (m.dis) { m.dis.dispose(); m.dis = null; }
+  if (m.hpBar) { scene.remove(m.hpBar.group); m.hpBar = null; }
+  try { if (m.ragdoll) disposeRagdoll(m.ragdoll); } catch { /* noop */ }
+  if (m.vrm?.scene) scene.remove(m.vrm.scene);
+  if (m.kind === 'mob') reconcileMobs().catch(() => { /* noop */ });   // スライダー台数へ補充（倒した分を再スポーン）
 }
 function onNpcRecovered(m) {
   if (m.kind === 'mob') {
@@ -1015,9 +1141,16 @@ function faceNpcMove(m, dt) {
 
 function updateNpcs(dt) {
   for (const m of npcs) updateOneNpc(m, dt);
+  // ディソルブ完了個体をイテレーション後にまとめて撤去（for-of 中の splice を避ける）
+  for (let i = npcs.length - 1; i >= 0; i--) {
+    if (npcs[i]._remove) { const m = npcs[i]; npcs.splice(i, 1); finalizeRemoveNpc(m); }
+  }
 }
 
 function updateOneNpc(m, dt) {
+  if (m.kind === 'mob') updateHpBar(m);
+  if (m.eating) { updateEatingVictim(m, dt); return; }      // 捕食中は victim アニメ＋口へ固定
+  if (m.dissolving) { updateNpcDissolve(m, dt); return; }   // 溶解中は静止して溶けるだけ
   const rd = m.ragdoll;
   const held = m.grabbed || m.clothGrabbed;
 
@@ -1079,6 +1212,7 @@ function camForwardRight() {
 
 function updateFlight(dt) {
   if (!player.ready) return;
+  if (player.eating) { player.vel.set(0, 0, 0); return; }   // 捕食中はその場で静止
   camForwardRight();
   player.fwdY = _fwd.y;   // 前進方向の上下（降下判定用）
   _move.set(0, 0, 0);
@@ -1109,7 +1243,8 @@ function updateFlight(dt) {
   player.pos.addScaledVector(player.vel, dt);
   // アリーナ内に収める（壁で停止）
   const m = 0.6;
-  for (const [k, lo, hi] of [['x', -ROOM.x / 2 + m, ROOM.x / 2 - m], ['y', m, ROOM.y - m], ['z', -ROOM.z / 2 + m, ROOM.z / 2 - m]]) {
+  const yLo = (player.prey && !player.eating) ? PREY_CARRY_MIN_Y : m;   // 捕食対象を運ぶ間は地面近くまで降下可
+  for (const [k, lo, hi] of [['x', -ROOM.x / 2 + m, ROOM.x / 2 - m], ['y', yLo, ROOM.y - m], ['z', -ROOM.z / 2 + m, ROOM.z / 2 - m]]) {
     if (player.pos[k] < lo) { player.pos[k] = lo; if (player.vel[k] < 0) player.vel[k] = 0; }
     else if (player.pos[k] > hi) { player.pos[k] = hi; if (player.vel[k] > 0) player.vel[k] = 0; }
   }
@@ -1125,7 +1260,7 @@ function updateFlight(dt) {
   } else {
     frontAnchor.set(Math.sin(player.yaw), 0, Math.cos(player.yaw)).multiplyScalar(reach).add(player.pos);
   }
-  frontAnchor.y += GRAB_FRONT_Y;
+  frontAnchor.y += (player.prey && !player.eating) ? PREY_FRONT_Y : GRAB_FRONT_Y;   // 運搬中はアンカーを下げて地面に置ける
 }
 
 // ============================================================
@@ -1168,7 +1303,10 @@ function tryGrab() {
     if (cl && cl.along < dist) { kind = 'cloth'; dist = cl.along; clothIdx = cl.index; targetNpc = m; }
   }
   if (kind === 'cloth')      grabNpcCloth(targetNpc, clothIdx);
-  else if (kind === 'body')  grabNpcBody(targetNpc, grabBone);
+  else if (kind === 'body') {
+    grabNpcBody(targetNpc, grabBone);
+    if (targetNpc.kind === 'mob' && bite.ready) { player.prey = targetNpc; targetNpc.preyGroundT = 0; }   // 掴んだ ken は捕食候補（地面付近で一定時間→捕食）
+  }
   else if (kind === 'obj' && obj) { obj.grabbed = true; grabbed = obj; updateCrosshair(); }
   if (kind) triggerOneShot('grab');
   return !!kind;
@@ -1232,6 +1370,241 @@ function fireLargeShot() {
 }
 
 // ============================================================
+// 捕食（predation）— bite アラインで ken を口に固定して feed → ディソルブ消滅
+// ============================================================
+const bite = { cfg: null, victimAnim: null, feedAction: null, feedIn: 0, feedIntroOut: 2.5, feedLoopEnd: 4, feedClipDur: 4, loopStartFrame: 75, sound: null, ready: false };
+// bite align 用テンポラリ
+const _baPos = new THREE.Vector3(), _baQuat = new THREE.Quaternion(), _baOff = new THREE.Vector3();
+const _mouthPos = new THREE.Vector3(), _baE = new THREE.Euler(), _baTmpQ = new THREE.Quaternion();
+const _desiredQ = new THREE.Quaternion(), _desiredP = new THREE.Vector3();
+const _savePos = new THREE.Vector3(), _saveQ = new THREE.Quaternion();
+const _biteCur = new THREE.Vector3(), _biteQ = new THREE.Quaternion(), _baDelta = new THREE.Vector3(), _targetP = new THREE.Vector3();
+
+async function loadVrmAnimations(name) {
+  const res = await fetch('../vrma/' + encodeURIComponent(name));
+  if (!res.ok) throw new Error('VRMA取得失敗: ' + name);
+  const al = new GLTFLoader();
+  al.register(p => new VRMAnimationLoaderPlugin(p));
+  const ag = await al.loadAsync(URL.createObjectURL(await res.blob()));
+  return ag.userData.vrmAnimations || null;
+}
+
+async function prepareBiteAssets() {
+  try { bite.cfg = await (await fetch('../bitealign/ken.bite.json')).json(); }
+  catch (e) { console.warn('bite設定の読込失敗:', e); return; }
+  const a = bite.cfg.anim || {};
+  const fps = a.fps || 30;
+  bite.feedIn = (a.trimIn || 0) / fps;
+  // 被食側 VRMA（生アニメを保持し、ken 毎に clip 化）
+  try { bite.victimAnim = (await loadVrmAnimations(a.victimVrma || 'attack_drain_victim02.vrma'))?.[0] ?? null; }
+  catch (e) { console.warn('victim VRMA 読込失敗:', e); }
+  // プレイヤー feed VRMA（player.vrm 必須）
+  try {
+    if (player.vrm && player.mixer) {
+      const anims = await loadVrmAnimations(a.playerVrma || 'feed.vrma');
+      if (anims?.[0]) {
+        const clip = createVRMAnimationClip(anims[0], player.vrm);
+        stripRootMotion(clip);
+        bite.feedAction = player.mixer.clipAction(clip);
+        bite.feedAction.setLoop(THREE.LoopRepeat, Infinity);
+        bite.feedAction.clampWhenFinished = false;
+        bite.feedClipDur = clip.duration;
+        // 一巡目 0→loopEnd を再生後、尾部 [loopStart(既定75f), loopEnd(既定ラスト)] をループ
+        bite.feedIntroOut = Math.min(clip.duration - 1e-3, (a.loopStart ?? 75) / fps);
+        bite.loopStartFrame = a.loopStart ?? 75;
+        bite.feedLoopEnd  = Math.min(clip.duration - 1e-3, a.loopEnd != null ? a.loopEnd / fps : clip.duration - 1e-3);
+        if (bite.feedLoopEnd <= bite.feedIntroOut) bite.feedLoopEnd = clip.duration - 1e-3;
+      }
+    }
+  } catch (e) { console.warn('feed VRMA 読込失敗:', e); }
+  // 捕食中の効果音（bite-editor で選択。public/audio 直下）。ループ再生。
+  if (bite.cfg.anim?.sound) {
+    try { bite.sound = new Audio('../audio/' + encodeURIComponent(bite.cfg.anim.sound)); bite.sound.loop = true; bite.sound.load(); }
+    catch (e) { console.warn('効果音の準備失敗:', e); bite.sound = null; }
+  }
+  bite.ready = !!(bite.cfg && bite.victimAnim && bite.feedAction);
+}
+
+// 左クリックで掴んだ ken が地面付近に一定時間いたら捕食開始（掴みは tryGrab で player.prey に設定）
+function updatePredation(dt) {
+  const m = player.prey;
+  if (!m || player.eating) return;
+  if (!m.grabbed || m.dissolving || m._remove) { player.prey = null; return; }   // 投げ/解放されたら候補解除
+  if (npcLowestY(m) < PREY_GROUND_Y) m.preyGroundT = (m.preyGroundT || 0) + dt;   // 体の最下点が接地
+  else m.preyGroundT = 0;
+  if (m.preyGroundT >= PREY_GROUND_TIME) startEating(m);
+}
+
+function startVictimAnim(m) {
+  if (!bite.victimAnim || !m.mixer) return;
+  try {
+    const clip = createVRMAnimationClip(bite.victimAnim, m.vrm);
+    stripRootMotion(clip);
+    const act = m.mixer.clipAction(clip);
+    act.setLoop(bite.cfg.anim.loopVictim ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+    act.clampWhenFinished = !bite.cfg.anim.loopVictim;
+    act.reset(); act.setEffectiveWeight(1); act.enabled = true; act.play();
+    if (m.action) m.action.crossFadeTo(act, 0.12, false);
+    m.victimAction = act;
+  } catch (e) { console.warn('victim anim 生成失敗:', e); }
+}
+
+function startEating(m) {
+  player.eating = true; player.eatT = 0;
+  player.vel.set(0, 0, 0);
+  m.eating = true; m.eatBlend = 0;
+  m.grabbed = false;                                     // frontAnchor ピン解除
+  m.eatMode = (bite.cfg.npc && bite.cfg.npc.mode === 'ragdoll') ? 'ragdoll' : 'anim';
+  if (m.eatMode === 'ragdoll') {
+    if (!m.ragdoll.active) setRagdollActive(m.ragdoll, true);   // 噛点固定で垂れる。VRMAは使わない
+    m.eatNudgeIdx = 0; m.eatLastFrame = -1;
+  } else {
+    if (m.ragdoll?.active) setRagdollActive(m.ragdoll, false);   // 以後 bite align で駆動
+    startVictimAnim(m);
+  }
+  // プレイヤー: 現在ステート→feed へクロスフェード。以後 updatePlayerEating が feed のみ駆動
+  if (bite.feedAction) {
+    const cur = (player.current && player.states[player.current]) ? player.states[player.current].action : null;
+    bite.feedAction.reset();
+    bite.feedAction.time = bite.feedIn;
+    bite.feedAction.setEffectiveWeight(1);
+    bite.feedAction.setEffectiveTimeScale(1);
+    bite.feedAction.enabled = true;
+    bite.feedAction.play();
+    if (cur && cur !== bite.feedAction) cur.crossFadeTo(bite.feedAction, bite.cfg.align.blendIn ?? 0.15, false);
+  }
+  if (bite.sound) { try { bite.sound.currentTime = 0; bite.sound.play().catch(() => { /* 自動再生制限 */ }); } catch { /* noop */ } }
+  player.current = null;
+  updateCrosshair();
+}
+
+// bite.cfg.tracks[name] を現在の feed フレームで線形補間。無ければ null（＝静的値を使う）
+function biteSample(name) {
+  const tr = bite.cfg && bite.cfg.tracks && bite.cfg.tracks[name];
+  if (!tr || !tr.length) return null;
+  const fps = (bite.cfg.anim && bite.cfg.anim.fps) || 30;
+  const f = (bite.feedAction ? bite.feedAction.time : 0) * fps;
+  if (f <= tr[0].f) return tr[0].v;
+  const last = tr[tr.length - 1];
+  if (f >= last.f) return last.v;
+  for (let i = 0; i < tr.length - 1; i++) {
+    const a = tr[i], b = tr[i + 1];
+    if (f >= a.f && f <= b.f) { const t = (f - a.f) / Math.max(1, b.f - a.f); return [a.v[0] + (b.v[0] - a.v[0]) * t, a.v[1] + (b.v[1] - a.v[1]) * t, a.v[2] + (b.v[2] - a.v[2]) * t]; }
+  }
+  return last.v;
+}
+
+// 口(head+offset)に ken の噛点(neck+offset)を合わせるよう ken ルートを配置（blend=0..1）
+function applyBiteAlign(m, blend) {
+  const cfg = bite.cfg;
+  const head = player.vrm.humanoid?.getNormalizedBoneNode(cfg.player.mouthBone);
+  const neck = m.vrm.humanoid?.getNormalizedBoneNode(cfg.npc.biteBone);
+  if (!head || !neck) return;
+  const mOff = biteSample('mouthOffset') || cfg.player.mouthOffset;   // キーフレームがあれば補間値
+  const bOff = biteSample('biteOffset') || cfg.npc.biteOffset;
+  const aPos = biteSample('alignPos') || cfg.align.pos;
+  const aRot = biteSample('alignRot') || cfg.align.rotEuler;
+  head.updateWorldMatrix(true, false);
+  head.getWorldPosition(_baPos); head.getWorldQuaternion(_baQuat);
+  _mouthPos.copy(_baOff.fromArray(mOff).applyQuaternion(_baQuat)).add(_baPos);
+  _baE.set(D2R(aRot[0]), D2R(aRot[1]), D2R(aRot[2]), 'YXZ');
+  _desiredQ.copy(_baQuat).multiply(_baTmpQ.setFromEuler(_baE));
+  _desiredP.copy(_baOff.fromArray(aPos).applyQuaternion(_baQuat)).add(_mouthPos);
+  // 現在値を退避 → 目標向きで噛点を測り、ルート平行移動量 delta を得る
+  _savePos.copy(m.vrm.scene.position); _saveQ.copy(m.vrm.scene.quaternion);
+  m.vrm.scene.quaternion.copy(_desiredQ); m.vrm.scene.updateMatrixWorld(true);
+  neck.updateWorldMatrix(true, false);
+  neck.getWorldPosition(_biteCur); neck.getWorldQuaternion(_biteQ);
+  _biteCur.add(_baOff.fromArray(bOff).applyQuaternion(_biteQ));
+  _baDelta.copy(_desiredP).sub(_biteCur);
+  _targetP.copy(m.vrm.scene.position).add(_baDelta);
+  // 退避値→目標へ blend（blendIn の間 0→1 でスナップ、以後は 1 で密着追従）
+  m.vrm.scene.quaternion.copy(_saveQ).slerp(_desiredQ, blend);
+  m.vrm.scene.position.copy(_savePos).lerp(_targetP, blend);
+  m.vrm.scene.updateMatrixWorld(true);
+}
+
+// 捕食中の ken 更新（updateOneNpc から分岐）：anim=VRMA＋bite align / ragdoll=噛点固定＋小突き
+function updateEatingVictim(m, dt) {
+  if (m.eatMode === 'ragdoll') { updateEatingRagdoll(m, dt); return; }
+  if (m.mixer) m.mixer.update(dt);
+  m.vrm.update(dt);
+  m.eatBlend = Math.min(1, (m.eatBlend || 0) + dt / Math.max(0.03, bite.cfg.align.blendIn ?? 0.15));
+  applyBiteAlign(m, m.eatBlend);
+}
+
+// 口アンカーのワールド位置（head + mouthOffset。キーフレーム対応）
+function biteMouthAnchor(out) {
+  const cfg = bite.cfg;
+  const head = player.vrm.humanoid?.getNormalizedBoneNode(cfg.player.mouthBone);
+  if (!head) return false;
+  const mOff = biteSample('mouthOffset') || cfg.player.mouthOffset;
+  head.updateWorldMatrix(true, false);
+  head.getWorldPosition(_baPos); head.getWorldQuaternion(_baQuat);
+  out.copy(_baOff.fromArray(mOff).applyQuaternion(_baQuat)).add(_baPos);
+  return true;
+}
+
+function fireNudge(m, n) {
+  const bone = (n.bone && m.ragdoll.idxOf[n.bone] != null) ? n.bone : 'chest';
+  _v2.set((n.dir && n.dir[0]) || 0, (n.dir && n.dir[1]) || 0, (n.dir && n.dir[2]) || 0).multiplyScalar(n.strength || 1);
+  applyRagdollImpulse(m.ragdoll, _v2, bone);
+}
+
+// ラグドール被食: 噛点(neck)を口へ固定して垂らし、タイムラインの nudge で小突く
+function updateEatingRagdoll(m, dt) {
+  const env = { floorY: 0, bounds: ARENA_BOUNDS };
+  if (biteMouthAnchor(_v1)) { env.pinBone = bite.cfg.npc.biteBone || 'neck'; env.pinPos = _v1; }
+  updateRagdoll(m.ragdoll, dt, env);
+  m.vrm.update(dt);
+  const nudges = bite.cfg.nudges || [];
+  if (nudges.length) {
+    const fps = (bite.cfg.anim && bite.cfg.anim.fps) || 30;
+    const cf = (bite.feedAction ? bite.feedAction.time : 0) * fps;
+    if (cf < (m.eatLastFrame ?? -1)) {   // ループ折返し: ループ域先頭の nudge へ巻き戻す
+      m.eatNudgeIdx = 0;
+      while (m.eatNudgeIdx < nudges.length && nudges[m.eatNudgeIdx].f < bite.loopStartFrame) m.eatNudgeIdx++;
+    }
+    while (m.eatNudgeIdx < nudges.length && nudges[m.eatNudgeIdx].f <= cf) { fireNudge(m, nudges[m.eatNudgeIdx]); m.eatNudgeIdx++; }
+    m.eatLastFrame = cf;
+  }
+}
+
+// 捕食中のプレイヤー更新（updatePlayerAnim から分岐）：feed のみ再生し、尺で終了
+function updatePlayerEating(dt) {
+  player.mixer.update(dt);
+  const a = bite.feedAction;
+  if (a) {
+    const s = bite.feedIntroOut, e = bite.feedLoopEnd, span = Math.max(1e-3, e - s);
+    if (a.time >= e) { a.time = s + ((a.time - s) % span); player.mixer.update(0); }   // 尾部[loopStart,loopEnd]をループ
+  }
+  player.vrm.update(dt);
+  if (player.cloth) player.cloth.update(dt, 0);
+  player.eatT += dt;
+  if (player.eatT >= PREDATION_EAT_TIME) finishEating();
+}
+
+function finishEating() {
+  const m = player.prey;
+  player.eating = false; player.eatT = 0; player.prey = null;
+  if (bite.sound) { try { bite.sound.pause(); } catch { /* noop */ } }
+  if (m) {
+    m.eating = false;
+    m.pos.copy(m.vrm.scene.position);   // 口元付近の現在位置をディソルブ基準に
+    startNpcDissolve(m);                // 溶けて消える → finalizeRemoveNpc で再スポーン
+  }
+  // feed → idle へ戻す
+  const idle = player.states.idle;
+  if (idle) {
+    idle.action.reset(); idle.action.setEffectiveWeight(1); idle.action.enabled = true; idle.action.play();
+    if (bite.feedAction) bite.feedAction.crossFadeTo(idle.action, bite.cfg.align.blendOut ?? 0.2, false);
+    player.current = 'idle';
+    if (player.cloth) player.cloth.setTimeline(idle.timeline);
+  }
+  updateCrosshair();
+}
+
+// ============================================================
 // 入力（ポインタロック）
 // ============================================================
 function setupControls() {
@@ -1258,13 +1631,13 @@ function setupControls() {
   });
 
   canvas.addEventListener('mousedown', (e) => {
-    if (!isLocked) return;
+    if (!isLocked || player.eating) return;   // 捕食中は入力ロック
     resetIdle();
     if (e.button === 0) { if (!tryGrab()) startWrap(); }   // 掴む対象なし→wrap
     else if (e.button === 2) startCharge();   // 右クリック長押し＝チャージ
   });
   window.addEventListener('mouseup', (e) => {
-    if (e.button === 0) { release(); endWrap(); }
+    if (e.button === 0) { if (player.eating) return; release(); endWrap(); }   // 捕食中は解放を無視（ロック）
     else if (e.button === 2) fireLargeShot();  // 右クリック解放＝ラージショット
   });
 
@@ -1301,6 +1674,9 @@ function setupUI() {
   bind('fly-speed',  v => v.toFixed(0), v => { flight.maxSpeed = v; flight.accel = v * 3.5; });   // スライダー値＝最大m/s（永続化しない＝既定はNPC同等）
   bind('obj-count',  v => v.toFixed(0), v => { setObjectCount(v | 0); });
   bind('mob-count',  v => v.toFixed(0), v => { setMobCount(v | 0); });   // 一般人モブの台数
+  bind('prey-ground-y',    v => v.toFixed(2), v => { PREY_GROUND_Y = v; });      // 捕食: 地面付近とみなす高さ
+  bind('prey-ground-time', v => v.toFixed(1), v => { PREY_GROUND_TIME = v; });   // 捕食: 地面保持の待ち時間
+  bind('eat-time',         v => v.toFixed(1), v => { PREDATION_EAT_TIME = v; });  // 捕食動作の総時間
 
   // localStorage 値をスライダーへ反映
   const set = (id, v) => { const sl = document.getElementById(id); if (sl) { sl.value = v; sl.dispatchEvent(new Event('input')); } };
@@ -1343,6 +1719,7 @@ function render() {
   if (isLocked) updateFlight(dt);
   updatePlayerAnim(dt);
   updateNpcs(dt);
+  updatePredation(dt);
   updateExplosions(dt);
   updateCamera(dt);
 
@@ -1406,6 +1783,9 @@ async function init() {
   // プレイヤー
   try { await loadPlayer(); }
   catch (e) { console.error('プレイヤー読み込み失敗:', e); }
+
+  // 捕食（bite アライン）資産のプリロード（player.vrm/mixer 必須なので loadPlayer の後）
+  try { await prepareBiteAssets(); } catch (e) { console.warn('bite資産準備失敗:', e); }
 
   // NPC（サイキッカー1体）
   loadNpc().catch(e => console.warn('NPC 読み込み失敗:', e));

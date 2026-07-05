@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>PLATEAU Fly — 八王子を飛ぶ</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1220; color: #e6ecf5; font-family: system-ui, sans-serif; }
+    #app { position: fixed; inset: 0; }
+    #app canvas { display: block; }
+    #topbar { position: fixed; top: 8px; left: 8px; z-index: 20; display: flex; gap: 8px; align-items: center; }
+    #topbar a { background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
+    #status { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20; background: rgba(0,0,0,0.55); color: #cfe; padding: 6px 12px; border-radius: 4px; font-size: 12px; max-width: 60vw; text-align: center; }
+    #hint { position: fixed; bottom: 8px; left: 8px; z-index: 20; background: rgba(0,0,0,0.5); color: #9ab; padding: 6px 10px; border-radius: 4px; font-size: 11px; line-height: 1.5; }
+    #attrib { position: fixed; bottom: 8px; right: 8px; z-index: 20; background: rgba(0,0,0,0.5); color: #9ab; padding: 6px 10px; border-radius: 4px; font-size: 10px; max-width: 46vw; text-align: right; }
+    #attrib a { color: #bcd; }
+    #crosshair { position: fixed; top: 50%; left: 50%; width: 16px; height: 16px; transform: translate(-50%,-50%); z-index: 18; pointer-events: none; opacity: 0.8; }
+    #crosshair::before, #crosshair::after { content: ''; position: absolute; background: #fff; box-shadow: 0 0 2px rgba(0,0,0,0.9); }
+    #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+    #crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
+    #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #9ab; z-index: 15; pointer-events: none; }
+    #err { position: fixed; top: 44px; left: 50%; transform: translateX(-50%); z-index: 30; display: none; background: #4a1414; border: 1px solid #a04040; color: #fbb; padding: 8px 14px; border-radius: 6px; font-size: 12px; max-width: 70vw; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="topbar"><a href="../hub/">← 一覧</a></div>
+  <div id="status">読み込み中…</div>
+  <div id="crosshair"></div>
+  <div id="hint">クリックで視点ロック / <b>WASD・矢印</b>移動 / <b>Space</b>上昇・<b>Shift</b>下降 / <b>ホイール</b>速度 / <b>左クリック</b>射撃(建物破壊) / <b>右クリック</b>車を掴む→離して投擲</div>
+  <div id="attrib">建物: 3D都市モデル(PLATEAU)/国土交通省/Pacific Spatial Solutions（CC BY 4.0）｜ 地面: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル(航空写真)/国土地理院</a></div>
+  <div id="loading">八王子 PLATEAU を読み込み中…</div>
+  <div id="err"></div>
+  <script type="module" src="./plateau-fly.js"></script>
+</body>
+</html>

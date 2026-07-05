@@ -17,6 +17,7 @@
     "build:character-editor": "node scripts/build-character-editor.mjs",
     "build:model-editor": "node scripts/build-model-editor.mjs",
     "build:stage-editor": "node scripts/build-stage-editor.mjs",
+    "build:plateau-fly": "node scripts/build-plateau-fly.mjs",
     "build:hub": "node scripts/build-hub.mjs",
     "preview": "node node_modules/vite/bin/vite.js preview",
     "test": "vitest run",

@@ -1,0 +1,7213 @@
+{
+  "version": 3,
+  "kind": "city",
+  "seed": 20260705,
+  "world": {
+    "cell": 1,
+    "chunkCells": 16,
+    "grid": {
+      "cols": 64,
+      "rows": 64
+    },
+    "origin": [
+      -32,
+      0,
+      -32
+    ],
+    "bounds": [
+      -32,
+      -32,
+      32,
+      32
+    ]
+  },
+  "kits": {
+    "roads": "kenney_city-kit-roads/Models/GLB format",
+    "suburban": "kenney_city-kit-suburban_20/Models/GLB format",
+    "downtown": "city_GLB format"
+  },
+  "authored": {
+    "splines": [
+      {
+        "id": "h0",
+        "kind": "road",
+        "points": [
+          [
+            -30,
+            -8
+          ],
+          [
+            30,
+            -8
+          ]
+        ]
+      },
+      {
+        "id": "h1",
+        "kind": "road",
+        "points": [
+          [
+            -30,
+            4
+          ],
+          [
+            30,
+            4
+          ]
+        ]
+      },
+      {
+        "id": "v0",
+        "kind": "road",
+        "points": [
+          [
+            -12,
+            -24
+          ],
+          [
+            -12,
+            20
+          ]
+        ]
+      },
+      {
+        "id": "v1",
+        "kind": "road",
+        "points": [
+          [
+            0,
+            -24
+          ],
+          [
+            0,
+            20
+          ]
+        ]
+      },
+      {
+        "id": "v2",
+        "kind": "road",
+        "points": [
+          [
+            12,
+            -24
+          ],
+          [
+            12,
+            20
+          ]
+        ]
+      },
+      {
+        "id": "wN",
+        "kind": "road",
+        "points": [
+          [
+            -27,
+            -19
+          ],
+          [
+            -17,
+            -19
+          ]
+        ]
+      },
+      {
+        "id": "wS",
+        "kind": "road",
+        "points": [
+          [
+            -27,
+            -11
+          ],
+          [
+            -17,
+            -11
+          ]
+        ]
+      },
+      {
+        "id": "wW",
+        "kind": "road",
+        "points": [
+          [
+            -27,
+            -19
+          ],
+          [
+            -27,
+            -11
+          ]
+        ]
+      },
+      {
+        "id": "wE",
+        "kind": "road",
+        "points": [
+          [
+            -17,
+            -19
+          ],
+          [
+            -17,
+            -11
+          ]
+        ]
+      },
+      {
+        "id": "rail1",
+        "kind": "rail",
+        "points": [
+          [
+            -30,
+            22
+          ],
+          [
+            -10,
+            25
+          ],
+          [
+            12,
+            23
+          ],
+          [
+            30,
+            26
+          ]
+        ]
+      }
+    ],
+    "params": {
+      "suburbSpacing": 2,
+      "suburbSetback": 0.15,
+      "rySign": -1
+    }
+  },
+  "chunks": [
+    {
+      "id": "0_1",
+      "cell": [
+        0,
+        1
+      ],
+      "bounds": [
+        -32,
+        -16,
+        -16,
+        0
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": -29.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -4.71238898038469,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -28.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -27.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -25.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -24.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -23.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -22.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -21.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -20.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -19.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -18.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -17.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-bend.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -25.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -24.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -23.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -22.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -21.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -20.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -19.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -18.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -17.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-bend.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": -4.71238898038469,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -15.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -14.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -13.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -12.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -11.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -15.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -14.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -13.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -12.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -11.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": -28.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": -28.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-f.glb",
+          "x": -24.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": -24.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": -22.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": -22.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -20.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": -18.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": -18.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": -25.5,
+          "y": 0,
+          "z": -11.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": -25.5,
+          "y": 0,
+          "z": -9.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": -23.5,
+          "y": 0,
+          "z": -9.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -21.5,
+          "y": 0,
+          "z": -11.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": -21.5,
+          "y": 0,
+          "z": -9.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": -19.5,
+          "y": 0,
+          "z": -11.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": -19.5,
+          "y": 0,
+          "z": -9.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": -17.5,
+          "y": 0,
+          "z": -11.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-b.glb",
+          "x": -17.5,
+          "y": 0,
+          "z": -9.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": -25.85,
+          "y": 0,
+          "z": -15.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": -27.15,
+          "y": 0,
+          "z": -15.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": -27.15,
+          "y": 0,
+          "z": -13.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": -27.15,
+          "y": 0,
+          "z": -11.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-q.glb",
+          "x": -17.15,
+          "y": 0,
+          "z": -13.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "1_1",
+      "cell": [
+        1,
+        1
+      ],
+      "bounds": [
+        -16,
+        -16,
+        0,
+        0
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -15.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -14.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -13.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -12.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-crossroad.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -10.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -9.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -8.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -7.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -6.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -5.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -4.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -3.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -2.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -1.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -0.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -15.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -14.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -13.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -12.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -11.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -9.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -8.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -6.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -5.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -4.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -3.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -2.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -1.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -0.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": -14.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -14.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": -12.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": -10.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": -10.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": -8.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": -8.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": -6.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": -6.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": -4.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-f.glb",
+          "x": -4.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -2.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-q.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -14.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -12.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-f.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": -12.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-o.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": -10.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": -4.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -2.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": -2.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -0.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": -0.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-m.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": -14.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": -12.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": -10.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-q.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": -2.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-k.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": -0.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": -15.85,
+          "y": 0,
+          "z": -15.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": -15.85,
+          "y": 0,
+          "z": -13.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": -15.85,
+          "y": 0,
+          "z": -11.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "2_1",
+      "cell": [
+        2,
+        1
+      ],
+      "bounds": [
+        0,
+        -16,
+        16,
+        0
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-crossroad.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 1.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 2.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 3.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 4.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 5.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 6.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 7.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 8.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 9.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 10.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 11.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-crossroad.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 13.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 14.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 15.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -15.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -14.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -13.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -12.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -11.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -9.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -8.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -6.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -5.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -4.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -3.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -2.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -1.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -0.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -15.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -14.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -13.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -12.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -11.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -10.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -9.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -8.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -6.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -5.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -4.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -3.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -2.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -1.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -0.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": 1.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-l.glb",
+          "x": 1.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": 3.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": 3.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": 5.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-k.glb",
+          "x": 7.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": 7.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-o.glb",
+          "x": 9.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": 9.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": 11.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": 11.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": 13.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-o.glb",
+          "x": 13.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": 15.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-l.glb",
+          "x": 15.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": -12.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": -4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": -2.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": -0.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-m.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": -14.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -14.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": -12.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -12.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": -10.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -10.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-o.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": -4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -4.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": -2.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -2.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": -0.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -0.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "3_1",
+      "cell": [
+        3,
+        1
+      ],
+      "bounds": [
+        16,
+        -16,
+        32,
+        0
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 16.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 17.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 18.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 19.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 20.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 21.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 22.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 23.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 24.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 25.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 26.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 27.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 28.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 29.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": 30.5,
+          "y": 0,
+          "z": -7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-b.glb",
+          "x": 17.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": 17.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": 19.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": 19.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": 21.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-o.glb",
+          "x": 21.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": 23.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": 23.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": 25.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-q.glb",
+          "x": 25.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": 27.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-q.glb",
+          "x": 27.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": 29.5,
+          "y": 0,
+          "z": -8.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": 29.5,
+          "y": 0,
+          "z": -6.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "0_2",
+      "cell": [
+        0,
+        2
+      ],
+      "bounds": [
+        -32,
+        0,
+        -16,
+        16
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": -29.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -4.71238898038469,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -28.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -27.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -25.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -24.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -23.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -22.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -21.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -20.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -19.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -18.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -17.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": -28.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-f.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": -24.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-m.glb",
+          "x": -24.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": -22.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": -22.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": -20.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-m.glb",
+          "x": -20.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -18.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "1_2",
+      "cell": [
+        1,
+        2
+      ],
+      "bounds": [
+        -16,
+        0,
+        0,
+        16
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -15.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -14.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -13.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -12.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-crossroad.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -10.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -9.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -8.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -7.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -6.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -5.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -4.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -3.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -2.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -1.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -0.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 0.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 1.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 2.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 3.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 5.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 6.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 7.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 8.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 9.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 10.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 11.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 12.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 13.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 14.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 15.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": -14.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": -14.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-l.glb",
+          "x": -12.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": -12.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-m.glb",
+          "x": -10.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": -10.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": -8.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": -6.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-m.glb",
+          "x": -6.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": -2.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": -0.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": 1.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": 7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": 7.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": 9.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": 9.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": 11.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": 11.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": 13.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": 15.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": 15.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": 7.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-f.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": 9.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": 11.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": 13.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": 15.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "2_2",
+      "cell": [
+        2,
+        2
+      ],
+      "bounds": [
+        0,
+        0,
+        16,
+        16
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-crossroad.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 1.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 2.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 3.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 4.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 5.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 6.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 7.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 8.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 9.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 10.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 11.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-crossroad.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 13.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 14.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 15.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 0.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 1.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 2.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 3.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 5.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 6.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 7.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 8.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 9.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 10.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 11.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 12.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 13.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 14.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 15.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 0.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 1.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 2.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 3.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 5.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 6.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 7.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 8.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 9.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 10.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 11.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 12.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 13.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 14.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 15.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": 1.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": 1.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": 3.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": 3.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": 5.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 7.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": 7.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": 9.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": 11.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": 11.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-m.glb",
+          "x": 13.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": 13.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": 15.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": 15.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": 7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": 9.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": 11.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": 13.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-k.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": 1.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": 7.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-f.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": 7.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": 9.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": 9.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": 11.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": 11.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": 13.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": 13.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": 15.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": 15.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "3_2",
+      "cell": [
+        3,
+        2
+      ],
+      "bounds": [
+        16,
+        0,
+        32,
+        16
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 16.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 17.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 18.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 19.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 20.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 21.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 22.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 23.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 24.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 25.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 26.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 27.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 28.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 29.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": 30.5,
+          "y": 0,
+          "z": 4.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": 17.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": 17.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": 19.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": 19.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": 21.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-b.glb",
+          "x": 23.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 23.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": 25.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-l.glb",
+          "x": 27.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": 29.5,
+          "y": 0,
+          "z": 3.85,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": 29.5,
+          "y": 0,
+          "z": 5.15,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "1_0",
+      "cell": [
+        1,
+        0
+      ],
+      "bounds": [
+        -16,
+        -32,
+        0,
+        -16
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -23.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -22.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -21.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -20.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -19.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -17.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": -16.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-m.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -22.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": -22.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -20.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": -20.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-b.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": -18.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": -16.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": -16.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": -22.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-e.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": -20.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": -18.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": -16.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-q.glb",
+          "x": -15.85,
+          "y": 0,
+          "z": -17.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "1_3",
+      "cell": [
+        1,
+        3
+      ],
+      "bounds": [
+        -16,
+        16,
+        0,
+        32
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 16.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 17.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 18.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 19.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": -11.5,
+          "y": 0,
+          "z": 20.5,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": 17.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": 17.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": -10.85,
+          "y": 0,
+          "z": 19.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": -12.15,
+          "y": 0,
+          "z": 19.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": 17.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": -0.15000000000000002,
+          "y": 0,
+          "z": 19.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "2_0",
+      "cell": [
+        2,
+        0
+      ],
+      "bounds": [
+        0,
+        -32,
+        16,
+        -16
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -23.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -22.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -21.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -20.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -19.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -17.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": -16.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -23.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -22.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -21.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -20.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -19.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -17.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": -16.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-l.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": -22.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-q.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": -20.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-h.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-n.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": -16.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-k.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": -22.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-i.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -22.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": -20.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-o.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -20.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-d.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -18.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": -16.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "2_3",
+      "cell": [
+        2,
+        3
+      ],
+      "bounds": [
+        0,
+        16,
+        16,
+        32
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 16.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 17.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 18.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 19.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": 0.5,
+          "y": 0,
+          "z": 20.5,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 16.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 17.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 18.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 19.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-end.glb",
+          "x": 12.5,
+          "y": 0,
+          "z": 20.5,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": 17.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-j.glb",
+          "x": 1.15,
+          "y": 0,
+          "z": 19.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-m.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": 17.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": 13.15,
+          "y": 0,
+          "z": 19.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-u.glb",
+          "x": 11.85,
+          "y": 0,
+          "z": 19.5,
+          "ry": 1.5707963267948966,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "0_0",
+      "cell": [
+        0,
+        0
+      ],
+      "bounds": [
+        -32,
+        -32,
+        -16,
+        -16
+      ],
+      "items": [
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-bend.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -25.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -24.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -23.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -22.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -21.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -20.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -19.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -18.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -17.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -1.5707963267948966,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-bend.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -18.5,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -17.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -26.5,
+          "y": 0,
+          "z": -16.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -17.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-roads/Models/GLB format/road-straight.glb",
+          "x": -16.5,
+          "y": 0,
+          "z": -16.5,
+          "ry": 0,
+          "scale": 1,
+          "kind": "road"
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-s.glb",
+          "x": -25.5,
+          "y": 0,
+          "z": -17.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-r.glb",
+          "x": -23.5,
+          "y": 0,
+          "z": -19.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-g.glb",
+          "x": -23.5,
+          "y": 0,
+          "z": -17.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-c.glb",
+          "x": -21.5,
+          "y": 0,
+          "z": -17.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-a.glb",
+          "x": -19.5,
+          "y": 0,
+          "z": -19.15,
+          "ry": 0,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-t.glb",
+          "x": -19.5,
+          "y": 0,
+          "z": -17.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        },
+        {
+          "model": "kenney_city-kit-suburban_20/Models/GLB format/building-type-p.glb",
+          "x": -17.5,
+          "y": 0,
+          "z": -17.85,
+          "ry": -3.141592653589793,
+          "scale": 1,
+          "kind": "building",
+          "col": {
+            "hx": 0.6,
+            "hy": 0.7,
+            "hz": 0.55,
+            "walkTop": true
+          }
+        }
+      ]
+    }
+  ],
+  "rails": [
+    {
+      "x": -29.506998889265624,
+      "y": 0,
+      "z": 22.08329147741255,
+      "ry": 1.4034289446186854,
+      "len": 1.0199751304805378,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099875652402689,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -28.522434826678897,
+      "y": 0,
+      "z": 22.258032952357098,
+      "ry": 1.3868598994908965,
+      "len": 1.0199944753495447,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099972376747723,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -27.539968880720167,
+      "y": 0,
+      "z": 22.44442609165774,
+      "ry": 1.3797499858897704,
+      "len": 1.0199998995829995,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999497914998,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -26.558432454802972,
+      "y": 0,
+      "z": 22.635695946178007,
+      "ry": 1.3769308129549636,
+      "len": 1.0200000000000007,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000003,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -25.577093972228308,
+      "y": 0,
+      "z": 22.827983596182193,
+      "ry": 1.3776762551278106,
+      "len": 1.0199998966470594,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999483235297,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -24.59553533265489,
+      "y": 0,
+      "z": 23.019138336995766,
+      "ry": 1.3792390196285798,
+      "len": 1.0199982117657163,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099991058828581,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -23.61356432650435,
+      "y": 0,
+      "z": 23.208160080874936,
+      "ry": 1.3820212430571504,
+      "len": 1.0200000000000016,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000008,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -22.63082957586267,
+      "y": 0,
+      "z": 23.393150731661308,
+      "ry": 1.3874446762524355,
+      "len": 1.0199964843570644,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099982421785322,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -21.64729314001929,
+      "y": 0,
+      "z": 23.57382254506912,
+      "ry": 1.390806528298716,
+      "len": 1.0199925658832258,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099962829416129,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -20.66281967122751,
+      "y": 0,
+      "z": 23.749297898880364,
+      "ry": 1.3980052779668093,
+      "len": 1.0199999999999982,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999999999991,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -19.677133124005785,
+      "y": 0,
+      "z": 23.917799265084824,
+      "ry": 1.4049642273478131,
+      "len": 1.0199827861994404,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099913930997202,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -18.690457980590416,
+      "y": 0,
+      "z": 24.08043022439984,
+      "ry": 1.4099114810778826,
+      "len": 1.02,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.51,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -17.702337968268118,
+      "y": 0,
+      "z": 24.23393687871941,
+      "ry": 1.4234407223771117,
+      "len": 1.0199912106452327,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099956053226163,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -16.71280195258843,
+      "y": 0,
+      "z": 24.37806573794971,
+      "ry": 1.4288802146970145,
+      "len": 1.019970840105225,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099854200526125,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -15.721922548884608,
+      "y": 0,
+      "z": 24.5125248196978,
+      "ry": 1.4429664115582301,
+      "len": 1.0200000000000005,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000002,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -14.729367753038307,
+      "y": 0,
+      "z": 24.633914987832632,
+      "ry": 1.4552338872334594,
+      "len": 1.0199382146664748,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099691073332374,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -13.735512814767048,
+      "y": 0,
+      "z": 24.74421100808829,
+      "ry": 1.4653070182698067,
+      "len": 1.020000000000001,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000005,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -12.739940388607678,
+      "y": 0,
+      "z": 24.837208226274967,
+      "ry": 1.49000500785907,
+      "len": 1.0199654226684718,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099827113342359,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -11.742802913892767,
+      "y": 0,
+      "z": 24.91150466517462,
+      "ry": 1.5028436070205888,
+      "len": 1.0198788760101063,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099394380050531,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -10.744497282186398,
+      "y": 0,
+      "z": 24.96735435003449,
+      "ry": 1.526975144859635,
+      "len": 1.0200000000000011,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000006,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -9.745095024186668,
+      "y": 0,
+      "z": 24.994447917053893,
+      "ry": 1.5604142791777433,
+      "len": 1.0198183935400016,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099091967700008,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -8.745319964607877,
+      "y": 0,
+      "z": 24.99443259383319,
+      "ry": 1.5812088050353856,
+      "len": 1.019839809480498,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.509919904740249,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -7.7458822100062985,
+      "y": 0,
+      "z": 24.967900240555117,
+      "ry": 1.6134633557468179,
+      "len": 1.0200000000000007,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000003,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -6.747474294623728,
+      "y": 0,
+      "z": 24.913800987204205,
+      "ry": 1.6363958809122565,
+      "len": 1.019876544086488,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.509938272043244,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -5.750178674210657,
+      "y": 0,
+      "z": 24.84165447619037,
+      "ry": 1.64962884492848,
+      "len": 1.0199708941580656,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099854470790328,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -4.754367088361947,
+      "y": 0,
+      "z": 24.75115093441744,
+      "ry": 1.6732338705035334,
+      "len": 1.0199999999999996,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999999999998,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -3.760125931350606,
+      "y": 0,
+      "z": 24.644298118583755,
+      "ry": 1.6824805947266814,
+      "len": 1.019954376376152,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.509977188188076,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -2.7669529060422944,
+      "y": 0,
+      "z": 24.527947893082157,
+      "ry": 1.6923487314208907,
+      "len": 1.02,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.51,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -1.7750204175546527,
+      "y": 0,
+      "z": 24.401335041391754,
+      "ry": 1.703156169925149,
+      "len": 1.0199900755135847,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099950377567923,
+        "walkTop": true
+      }
+    },
+    {
+      "x": -0.7839895388741998,
+      "y": 0,
+      "z": 24.26776211736973,
+      "ry": 1.7063853246081666,
+      "len": 1.01999645979366,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.50999822989683,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 0.20648054848186478,
+      "y": 0,
+      "z": 24.130070421994056,
+      "ry": 1.7114697758226722,
+      "len": 1.0199999999999998,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999999999999,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 1.196584791600086,
+      "y": 0,
+      "z": 23.98973671691506,
+      "ry": 1.711719777310467,
+      "len": 1.0199999766470886,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999883235443,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 2.186658363975336,
+      "y": 0,
+      "z": 23.849186764209392,
+      "ry": 1.7119065995000384,
+      "len": 1.0199999999999998,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999999999999,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 3.177083002571369,
+      "y": 0,
+      "z": 23.711161116317967,
+      "ry": 1.7066225692073604,
+      "len": 1.019999024434674,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.509999512217337,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 4.168137012021786,
+      "y": 0,
+      "z": 23.577776463524767,
+      "ry": 1.7025395548774418,
+      "len": 1.0199846584249839,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099923292124919,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 5.159989548911657,
+      "y": 0,
+      "z": 23.450512412481384,
+      "ry": 1.6942775406293704,
+      "len": 1.0200000000000002,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000001,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 6.15312856173688,
+      "y": 0,
+      "z": 23.333915676671353,
+      "ry": 1.6810493769873556,
+      "len": 1.019963641116415,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099818205582075,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 7.147490441857025,
+      "y": 0,
+      "z": 23.228325144862445,
+      "ry": 1.6721288313527538,
+      "len": 1.0199611589192739,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099805794596369,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 8.143360935393519,
+      "y": 0,
+      "z": 23.138467446741707,
+      "ry": 1.6494375104555716,
+      "len": 1.02,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.51,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 9.140894137943445,
+      "y": 0,
+      "z": 23.070045863683603,
+      "ry": 1.6291207300876374,
+      "len": 1.019857172721115,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099285863605575,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 10.139527991543229,
+      "y": 0,
+      "z": 23.020793516371327,
+      "ry": 1.611032080512936,
+      "len": 1.0199199614844503,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099599807422251,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 11.139083267396348,
+      "y": 0,
+      "z": 23.000431861917534,
+      "ry": 1.5712979570512933,
+      "len": 1.0200000000000002,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000001,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 12.138739055200375,
+      "y": 0,
+      "z": 23.01491641564118,
+      "ry": 1.5413138356752918,
+      "len": 1.0197461682764843,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5098730841382422,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 13.13762985786567,
+      "y": 0,
+      "z": 23.05632429163972,
+      "ry": 1.5174203116368432,
+      "len": 1.0198939141521044,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099469570760522,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 14.135108093804657,
+      "y": 0,
+      "z": 23.124873164003294,
+      "ry": 1.4869453718176695,
+      "len": 1.02,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.51,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 15.130530775192813,
+      "y": 0,
+      "z": 23.219302085161637,
+      "ry": 1.465485973197643,
+      "len": 1.0198982434994202,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099491217497101,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 16.124131885769735,
+      "y": 0,
+      "z": 23.331365801489454,
+      "ry": 1.4514854499554268,
+      "len": 1.0199521898982948,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099760949491474,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 17.115628032676405,
+      "y": 0,
+      "z": 23.460886283137434,
+      "ry": 1.4303160840884874,
+      "len": 1.019999999999998,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.509999999999999,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 18.104736599219493,
+      "y": 0,
+      "z": 23.607735373742685,
+      "ry": 1.4164972839054228,
+      "len": 1.0199481477229029,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099740738614514,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 19.092052288843284,
+      "y": 0,
+      "z": 23.76621340740475,
+      "ry": 1.4067826699386146,
+      "len": 1.0199830008438417,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099915004219209,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 20.077309535110615,
+      "y": 0,
+      "z": 23.93707006101305,
+      "ry": 1.3913988233228403,
+      "len": 1.0199999999999998,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999999999999,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 21.060433593854455,
+      "y": 0,
+      "z": 24.119890337492052,
+      "ry": 1.382476945104114,
+      "len": 1.0199760675991145,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099880337995573,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 22.042054224671467,
+      "y": 0,
+      "z": 24.310614391278897,
+      "ry": 1.3753075934645929,
+      "len": 1.0199915091056124,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099957545528062,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 23.022067181950163,
+      "y": 0,
+      "z": 24.50947105154338,
+      "ry": 1.3658965979001116,
+      "len": 1.0200000000000014,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000007,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 24.000510286277944,
+      "y": 0,
+      "z": 24.7159495281932,
+      "ry": 1.3597437073009364,
+      "len": 1.0199937341429104,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099968670714552,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 24.977884204740313,
+      "y": 0,
+      "z": 24.927436576158954,
+      "ry": 1.355653697743098,
+      "len": 1.0199969957833164,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099984978916582,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 25.95449236315848,
+      "y": 0,
+      "z": 25.14245040943566,
+      "ry": 1.3525257482733135,
+      "len": 1.0199998938108925,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999469054463,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 26.93065655681577,
+      "y": 0,
+      "z": 25.359482723148517,
+      "ry": 1.3515202318297823,
+      "len": 1.019999917129001,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099999585645005,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 27.90708889676611,
+      "y": 0,
+      "z": 25.57529919088975,
+      "ry": 1.3550158766426879,
+      "len": 1.0200000000000005,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5100000000000002,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 28.885191584608634,
+      "y": 0,
+      "z": 25.78327307837984,
+      "ry": 1.367557543413684,
+      "len": 1.0199773276583755,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.5099886638291877,
+        "walkTop": true
+      }
+    },
+    {
+      "x": 29.687444738812697,
+      "y": 0,
+      "z": 25.94209602177903,
+      "ry": 1.3876132055666677,
+      "len": 0.6557473145509224,
+      "width": 0.7,
+      "height": 0.35,
+      "col": {
+        "hx": 0.35,
+        "hy": 0.175,
+        "hz": 0.3278736572754612,
+        "walkTop": true
+      }
+    }
+  ]
+}

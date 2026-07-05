@@ -13,6 +13,8 @@ import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixi
 import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip }
   from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
+import { createRagdoll, updateRagdoll, setRagdollActive, applyRagdollImpulse, disposeRagdoll } from '../lib/vrm-ragdoll.js';
+import { createVRMCloth } from '../lib/vrm-cloth.js';
 
 // ── シーン ───────────────────────────────────────────────────────
 let renderer, scene, camera, controls;
@@ -28,18 +30,215 @@ const HUMANOID_BONES = [
 // ── キャラ（プレイヤー / NPC）────────────────────────────────────
 function makeChar(slot, spawnX) {
   return { slot, vrm: null, mixer: null, action: null, clip: null, dur: 0, name: '',
+    cloth: null, ragdoll: null, gripMarkers: null,
     spawn: new THREE.Vector3(spawnX, 0, 0), baseQuat: new THREE.Quaternion() };
 }
+// ラグドール物理プレビュー（被食モード=ragdoll のとき）
+const RAGDOLL_BOUNDS = { min: new THREE.Vector3(-4, 0, -4), max: new THREE.Vector3(4, 8, 4) };
+const _nudgeV = new THREE.Vector3();
+let ragdollOn = false, ragLastFrame = -1;
 const player = makeChar('player', -0.45);
 const npc = makeChar('npc', 0.45);
 
 // ── 設定（bite-align）────────────────────────────────────────────
 const cfg = {
   player: { mouthBone: 'head', mouthOffset: [0, -0.03, 0.09] },
-  npc:    { biteBone: 'neck',  biteOffset: [-0.03, 0.02, 0.03] },
+  npc:    { biteBone: 'neck',  biteOffset: [-0.03, 0.02, 0.03], mode: 'anim' },   // mode: 'anim'|'ragdoll'
   align:  { pos: [0, 0, 0.02], rotDeg: [0, 180, 0], lock: true, blendIn: 0.15, blendOut: 0.2 },
-  anim:   { playerVrma: '', victimVrma: '', fps: FPS, trimIn: 0, trimOut: 0, loopVictim: true },
+  anim:   { playerVrma: '', victimVrma: '', fps: FPS, trimIn: 0, trimOut: 0, loopVictim: true, sound: '' },
 };
+
+// ── キーフレーム（口/噛点/アラインをタイムラインで変化。cloth-preview 風。線形補間）──
+const tracks = { mouthOffset: [], biteOffset: [], alignPos: [], alignRot: [] };  // 各: [{f:frame, v:[x,y,z]}] 昇順
+const KEY_GROUPS = { mouth: ['mouthOffset'], bite: ['biteOffset'], align: ['alignPos', 'alignRot'] };
+let lastKeyFrame = -1;
+
+function curFrame() { return Math.round(playTime * FPS); }
+function trackTarget(name) {
+  if (name === 'mouthOffset') return { arr: cfg.player.mouthOffset, sync: () => syncOffsetSliders('mouth') };
+  if (name === 'biteOffset')  return { arr: cfg.npc.biteOffset,     sync: () => syncOffsetSliders('bite') };
+  if (name === 'alignPos')    return { arr: cfg.align.pos,          sync: syncAlignSliders };
+  return { arr: cfg.align.rotDeg, sync: syncAlignSliders };   // alignRot（度）
+}
+function sampleTrack(track, frame) {
+  if (!track.length) return null;
+  if (frame <= track[0].f) return track[0].v.slice();
+  const last = track[track.length - 1];
+  if (frame >= last.f) return last.v.slice();
+  for (let i = 0; i < track.length - 1; i++) {
+    const a = track[i], b = track[i + 1];
+    if (frame >= a.f && frame <= b.f) { const t = (frame - a.f) / Math.max(1, b.f - a.f); return [0, 1, 2].map(k => a.v[k] + (b.v[k] - a.v[k]) * t); }
+  }
+  return last.v.slice();
+}
+function upsertKey(track, f, v) {
+  const idx = track.findIndex(k => k.f === f);
+  if (idx >= 0) track[idx].v = v; else { track.push({ f, v }); track.sort((a, b) => a.f - b.f); }
+}
+function removeNearestKey(track, f) {
+  if (!track.length) return;
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < track.length; i++) { const d = Math.abs(track[i].f - f); if (d < bd) { bd = d; bi = i; } }
+  track.splice(bi, 1);
+}
+// スライダー/ギズモ編集を、そのトラックに既にキーがあれば現フレームへ反映（オートキー）
+function autoKey(name) { if (tracks[name].length) upsertKey(tracks[name], curFrame(), trackTarget(name).arr.slice()); }
+// 現フレームのキー値を cfg（＋スライダー）へ反映。キー無しトラックは触らない（＝静的値のまま編集可）
+function applyTracksAt(frame) {
+  for (const name of Object.keys(tracks)) {
+    const v = sampleTrack(tracks[name], frame);
+    if (!v) continue;
+    const t = trackTarget(name);
+    for (let i = 0; i < 3; i++) t.arr[i] = v[i];
+    t.sync();
+  }
+}
+function setKeyGroup(g) { const f = curFrame(); for (const n of KEY_GROUPS[g]) upsertKey(tracks[n], f, trackTarget(n).arr.slice()); lastKeyFrame = -1; refreshKeyLabels(); showToast(`キー: ${g} @${f}`); }
+function delKeyGroup(g) { const f = curFrame(); for (const n of KEY_GROUPS[g]) removeNearestKey(tracks[n], f); lastKeyFrame = -1; refreshKeyLabels(); }
+function refreshKeyLabels() {
+  const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = `${tracks[n].length}キー`; };
+  set('keys-mouth', 'mouthOffset'); set('keys-bite', 'biteOffset'); set('keys-align', 'alignPos');
+}
+function serializeTracks() {
+  const out = {};
+  for (const [n, tr] of Object.entries(tracks)) if (tr.length) out[n] = tr.map(k => ({ f: k.f, v: k.v.slice() }));
+  return Object.keys(out).length ? out : null;
+}
+function loadTracks(src) {
+  for (const n of Object.keys(tracks)) tracks[n] = [];
+  if (src && typeof src === 'object') {
+    for (const n of Object.keys(tracks)) {
+      const tr = src[n];
+      if (Array.isArray(tr)) tracks[n] = tr.filter(k => k && Number.isFinite(k.f) && Array.isArray(k.v)).map(k => ({ f: Math.round(k.f), v: k.v.slice(0, 3) })).sort((a, b) => a.f - b.f);
+    }
+  }
+  lastKeyFrame = -1;
+  refreshKeyLabels();
+}
+
+// ── 小突き（ラグドール被食時。指定フレームでボーンにインパルス。ragdoll-editor 相当）──
+const NUDGE_BONES = ['chest', 'hips', 'head', 'neck', 'leftHand', 'rightHand', 'leftUpperArm', 'rightUpperArm', 'leftLowerLeg', 'rightLowerLeg'];
+let biteNudges = [];   // [{f, bone, dir:[x,y,z], strength}]
+function refreshNudgeList() {
+  const sel = document.getElementById('nudge-list'); if (!sel) return;
+  biteNudges.sort((a, b) => a.f - b.f);
+  sel.innerHTML = '';
+  for (const [i, n] of biteNudges.entries()) {
+    const o = document.createElement('option'); o.value = String(i);
+    o.textContent = `f${n.f}  ${n.bone}  (${n.dir.map(x => x.toFixed(1)).join(',')})×${n.strength}`;
+    sel.appendChild(o);
+  }
+}
+function addNudge() {
+  const bone = document.getElementById('nudge-bone').value || 'chest';
+  const dir = ['x', 'y', 'z'].map(a => parseFloat(document.getElementById('nudge-' + a).value) || 0);
+  const strength = parseFloat(document.getElementById('nudge-str').value) || 1;
+  biteNudges.push({ f: curFrame(), bone, dir, strength });
+  refreshNudgeList(); showToast(`小突き ${bone} @${curFrame()}`);
+}
+function delNudge() {
+  const i = parseInt(document.getElementById('nudge-list').value);
+  if (Number.isFinite(i)) { biteNudges.splice(i, 1); refreshNudgeList(); }
+}
+function loadNudges(src) {
+  biteNudges = Array.isArray(src) ? src.map(n => ({ f: Math.round(n.f) || 0, bone: n.bone || 'chest', dir: Array.isArray(n.dir) ? n.dir.slice(0, 3) : [0, 0, 0], strength: n.strength || 1 })) : [];
+  refreshNudgeList();
+}
+
+// ── タイムライン canvas（cloth-preview 風。キー/nudge を可視化・クリックでシーク・ドラッグで移動）──
+const TL_ROWS = [['mouthOffset', '口'], ['biteOffset', '噛点'], ['alignPos', 'align位'], ['alignRot', 'align角'], ['nudge', '小突き']];
+const TL_HEADER = 56, TL_RULER = 18, TL_ROWH = 22;
+let _tlDrag = null, tlPxF = 8, tlScroll = 0, tlUserZoom = false;
+function tlKeysOf(key) { return key === 'nudge' ? biteNudges : tracks[key]; }
+function tlFit(cssW) { return Math.max(2, (cssW - TL_HEADER) / Math.max(1, totalFrames())); }
+function tlClampScroll(cssW) { const tf = totalFrames(), vis = (cssW - TL_HEADER) / tlPxF; tlScroll = Math.max(0, Math.min(Math.max(0, tf - vis), tlScroll)); }
+function tlF2X(f) { return TL_HEADER + (f - tlScroll) * tlPxF; }
+function tlX2F(x) { return tlScroll + (x - TL_HEADER) / tlPxF; }
+function drawTimeline() {
+  const cv = document.getElementById('tl-canvas'); if (!cv) return;
+  const cssW = cv.clientWidth || 320, cssH = cv.clientHeight || 120;
+  if (cv.width !== cssW || cv.height !== cssH) { cv.width = cssW; cv.height = cssH; }
+  if (!tlUserZoom) { tlPxF = tlFit(cssW); tlScroll = 0; }
+  const ctx = cv.getContext('2d'); const tf = totalFrames();
+  ctx.clearRect(0, 0, cssW, cssH);
+  ctx.fillStyle = '#0d0f22'; ctx.fillRect(0, 0, cssW, cssH);
+  ctx.fillStyle = 'rgba(60,200,150,0.08)'; ctx.fillRect(tlF2X(cfg.anim.trimIn), 0, Math.max(0, cfg.anim.trimOut - cfg.anim.trimIn) * tlPxF, cssH);
+  ctx.font = '10px system-ui'; ctx.textBaseline = 'middle';
+  const step = Math.max(1, Math.round(55 / tlPxF / 5) * 5);   // 目盛りは約55px間隔（5の倍数）
+  for (let f = 0; f <= tf; f += step) { const x = tlF2X(f); if (x < TL_HEADER - 1 || x > cssW) continue; ctx.strokeStyle = '#20203a'; ctx.beginPath(); ctx.moveTo(x, TL_RULER); ctx.lineTo(x, cssH); ctx.stroke(); }
+  for (const [i, [key, label]] of TL_ROWS.entries()) {
+    const y0 = TL_RULER + i * TL_ROWH, yc = y0 + TL_ROWH / 2;
+    if (y0 > cssH) break;
+    ctx.strokeStyle = '#20203a'; ctx.beginPath(); ctx.moveTo(TL_HEADER, y0); ctx.lineTo(cssW, y0); ctx.stroke();
+    ctx.fillStyle = key === 'nudge' ? '#ffb066' : '#5fd0ff';
+    for (const k of tlKeysOf(key)) { const x = tlF2X(k.f); if (x < TL_HEADER - 5 || x > cssW + 5) continue; ctx.beginPath(); ctx.moveTo(x, yc - 5); ctx.lineTo(x + 5, yc); ctx.lineTo(x, yc + 5); ctx.lineTo(x - 5, yc); ctx.closePath(); ctx.fill(); }
+  }
+  // ヘッダ列（ラベル）を目盛りの上に描く
+  ctx.fillStyle = '#12142a'; ctx.fillRect(0, 0, TL_HEADER, cssH);
+  ctx.fillStyle = '#99a'; ctx.font = '11px system-ui';
+  for (const [i, [, label]] of TL_ROWS.entries()) { const yc = TL_RULER + i * TL_ROWH + TL_ROWH / 2; if (yc < cssH) ctx.fillText(label, 6, yc); }
+  // ルーラー（フレーム番号）
+  ctx.fillStyle = '#1b1b30'; ctx.fillRect(TL_HEADER, 0, cssW - TL_HEADER, TL_RULER);
+  ctx.fillStyle = '#7a7aa0';
+  for (let f = 0; f <= tf; f += step) { const x = tlF2X(f); if (x < TL_HEADER || x > cssW - 6) continue; ctx.fillText(String(f), x + 2, TL_RULER / 2); }
+  ctx.strokeStyle = '#2a2a44'; ctx.beginPath(); ctx.moveTo(TL_HEADER, 0); ctx.lineTo(TL_HEADER, cssH); ctx.stroke();
+  const px = tlF2X(curFrame());
+  if (px >= TL_HEADER) { ctx.strokeStyle = '#e5484d'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, cssH); ctx.stroke(); ctx.lineWidth = 1; }
+}
+function tlHit(x, y) {
+  const ri = Math.floor((y - TL_RULER) / TL_ROWH); if (ri < 0 || ri >= TL_ROWS.length) return null;
+  const key = TL_ROWS[ri][0], yc = TL_RULER + ri * TL_ROWH + TL_ROWH / 2;
+  for (const k of tlKeysOf(key)) { if (Math.abs(x - tlF2X(k.f)) <= 6 && Math.abs(y - yc) <= 8) return { key, entry: k }; }
+  return null;
+}
+function tlSeekX(x) {
+  const tf = totalFrames();
+  let f = Math.max(0, Math.min(tf, Math.round(tlX2F(x))));
+  playing = false; playTime = f / FPS; lastKeyFrame = -1; updateFrameLabel(); updatePlayButtons();
+  const sc = document.getElementById('scrub'); if (sc) sc.value = String(f);
+  return f;
+}
+function setupTimelineCanvas() {
+  const cv = document.getElementById('tl-canvas'); if (!cv) return;
+  cv.addEventListener('contextmenu', e => e.preventDefault());
+  cv.addEventListener('pointerdown', e => {
+    const rect = cv.getBoundingClientRect(); const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const hit = tlHit(x, y);
+    if (e.button === 2) {   // 右クリック=キー削除
+      if (hit) { const arr = tlKeysOf(hit.key); const i = arr.indexOf(hit.entry); if (i >= 0) arr.splice(i, 1); if (hit.key === 'nudge') refreshNudgeList(); else { lastKeyFrame = -1; refreshKeyLabels(); } }
+      return;
+    }
+    if (hit) { _tlDrag = { kind: 'key', hit }; tlSeekX(tlF2X(hit.entry.f)); }
+    else { _tlDrag = { kind: 'scrub' }; tlSeekX(x); }
+    cv.setPointerCapture?.(e.pointerId);
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!_tlDrag) return;
+    const x = e.clientX - cv.getBoundingClientRect().left;
+    if (_tlDrag.kind === 'scrub') tlSeekX(x);
+    else { const f = tlSeekX(x); _tlDrag.hit.entry.f = f; if (_tlDrag.hit.key === 'nudge') refreshNudgeList(); else { lastKeyFrame = -1; refreshKeyLabels(); } }
+  });
+  const end = () => { if (_tlDrag && _tlDrag.kind === 'key' && _tlDrag.hit.key !== 'nudge') tracks[_tlDrag.hit.key].sort((a, b) => a.f - b.f); _tlDrag = null; };
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  cv.addEventListener('dblclick', () => { tlUserZoom = false; });   // ダブルクリックで全体フィット
+  cv.addEventListener('wheel', e => {   // ホイール=拡大縮小 / Shift(または横)=移動
+    e.preventDefault();
+    const x = e.clientX - cv.getBoundingClientRect().left;
+    tlUserZoom = true;
+    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) { tlScroll += (e.deltaX || e.deltaY) / tlPxF; }
+    else { const fAt = tlX2F(x); tlPxF = Math.max(1, Math.min(80, tlPxF * (e.deltaY < 0 ? 1.15 : 1 / 1.15))); tlScroll = fAt - (x - TL_HEADER) / tlPxF; }
+    tlClampScroll(cv.clientWidth);
+  }, { passive: false });
+  // 高さリサイズ（上端ハンドルをドラッグ）
+  const bar = document.getElementById('timeline-bar'), handle = document.getElementById('tl-resize');
+  if (bar && handle) {
+    let sy = 0, sh = 0, drag = false;
+    handle.addEventListener('pointerdown', e => { drag = true; sy = e.clientY; sh = bar.offsetHeight; handle.setPointerCapture?.(e.pointerId); e.preventDefault(); });
+    handle.addEventListener('pointermove', e => { if (!drag) return; bar.style.height = Math.max(70, Math.min(460, sh + (sy - e.clientY))) + 'px'; });
+    handle.addEventListener('pointerup', () => { drag = false; });
+  }
+}
 
 // ── 再生（マスタークロック）──────────────────────────────────────
 let playing = false, speed = 1, loop = true, playTime = 0;   // playTime[秒]
@@ -94,6 +293,9 @@ function unloadChar(char) {
       if (o.isMesh) { o.geometry?.dispose(); const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) m?.dispose(); }
     });
   }
+  if (char.cloth) { try { char.cloth.dispose(); } catch { /* noop */ } char.cloth = null; }
+  if (char.ragdoll) { try { disposeRagdoll(char.ragdoll); } catch { /* noop */ } char.ragdoll = null; }
+  if (char.gripMarkers) { for (const m of char.gripMarkers) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } char.gripMarkers = null; }
   char.vrm = null; char.mixer = null; char.action = null; char.clip = null; char.dur = 0;
 }
 
@@ -113,17 +315,50 @@ async function loadVRMInto(char, file, name) {
     vrm.scene.quaternion.copy(char.baseQuat);
     scene.add(vrm.scene);
     vrm.scene.updateMatrixWorld(true);
+    if (char === npc) {
+      // ragdoll-editor の調整値(../ragdoll/<name>.ragdoll.json)があれば取り込む（暴れ防止）
+      let ragOpts = { boundsMargin: 0.4, rigidBones: ['leftShoulder', 'rightShoulder', 'leftUpperLeg', 'rightUpperLeg'] };
+      try {
+        const rr = await fetch('../ragdoll/' + encodeURIComponent(name || '') + '.ragdoll.json');
+        if (rr.ok) { const j = await rr.json(); ragOpts = { ...(j.params || {}), boneMaxBend: j.boneMaxBend || {}, boundsMargin: 0.4 }; showToast(`ラグドール設定: ${name}`); }
+      } catch { /* 無ければ既定 */ }
+      try { char.ragdoll = createRagdoll(vrm, ragOpts); } catch (e) { console.warn('ragdoll生成失敗:', e); char.ragdoll = null; }
+    }
     populateBoneSelects();
     if (char === npc && !document.getElementById('ba-name').value) document.getElementById('ba-name').value = char.name;
     showToast(`${char.slot === 'player' ? 'プレイヤー' : 'NPC'} 読み込み: ${char.name}`);
   } finally { URL.revokeObjectURL(url); }
 }
 
-async function importBundleInto(char, bundle, name) {
+async function importBundleInto(char, bundle, name, opts = {}) {
   if (!bundle || !bundle.vrm) { showToast('VRMを含まないファイルです', 'error'); return; }
   await loadVRMInto(char, new File([dataURIToBlob(bundle.vrm)], `${name}.vrm`), name);
-  // bundle に biteAlign が埋め込まれていれば読む（互換）
-  if (char === npc && bundle.biteAlign) applyConfig(bundle.biteAlign);
+  // マント（cloth）があれば装着。ゲームと同じ lib/vrm-cloth。
+  if (bundle.cloth && char.vrm) {
+    try { char.cloth = createVRMCloth({ renderer, scene, vrm: char.vrm, cloth: bundle.cloth, basePos: char.spawn, floorY: 0, timeline: bundle.timeline }); applyClothSettings(); }
+    catch (e) { console.warn('マント生成失敗:', e); char.cloth = null; }
+  }
+  // bundle に biteAlign が埋め込まれていれば読む（互換）。BiteAlign復元中は上書きしない。
+  if (!opts.skipBiteAlign && char === npc && bundle.biteAlign) applyConfig(bundle.biteAlign);
+}
+
+// キャラ名(npc.json のベース名)から復元。BiteAlign 読込で両キャラを揃えるのに使う。
+async function loadCharByName(char, name) {
+  if (!name) return;
+  try {
+    const r = await fetch('../npc/' + encodeURIComponent(name) + '.npc.json');
+    if (!r.ok) throw new Error('npc.json取得失敗');
+    await importBundleInto(char, await r.json(), name, { skipBiteAlign: true });
+    const sel = document.getElementById(char === player ? 'player-npc' : 'npc-npc');
+    if (sel) sel.value = name + '.npc.json';
+  } catch (e) { console.warn('キャラ復元失敗:', name, e); }
+}
+
+// BiteAlign(bite.json) を読み込む: 両キャラ本体→アライン設定→VRMA の順で復元。
+async function loadBiteAlign(c) {
+  if (c && c.player && c.player.target && player.name !== c.player.target) await loadCharByName(player, c.player.target);
+  if (c && c.target && npc.name !== c.target) await loadCharByName(npc, c.target);
+  applyConfig(c);
 }
 
 // ============================================================
@@ -232,6 +467,59 @@ function restNpc() {
   npc.vrm.scene.updateMatrixWorld(true);
 }
 
+// ── ラグドール物理プレビュー（被食モード=ragdoll。噛点を口へ固定して垂らし、nudge を小突く）──
+function frameCrossed(f, prev, cur) {
+  if (prev <= cur) return f > prev && f <= cur;
+  return f > prev || f <= cur;   // ループ折返し
+}
+function updateVictimRagdoll(dt) {
+  if (!npc.ragdoll) return;
+  const env = { floorY: 0, bounds: RAGDOLL_BOUNDS };
+  if (mouthAnchorWorld(_mPos, _mQuat)) { env.pinBone = cfg.npc.biteBone || 'neck'; env.pinPos = _mPos; }
+  updateRagdoll(npc.ragdoll, dt, env);
+  npc.vrm.update(dt);
+  const cf = curFrame();
+  for (const n of biteNudges) {
+    if (!frameCrossed(n.f, ragLastFrame, cf)) continue;
+    const bone = (npc.ragdoll.idxOf[n.bone] != null) ? n.bone : 'chest';
+    _nudgeV.set(n.dir[0] || 0, n.dir[1] || 0, n.dir[2] || 0).multiplyScalar(n.strength || 1);
+    applyRagdollImpulse(npc.ragdoll, _nudgeV, bone);
+  }
+  ragLastFrame = cf;
+}
+function setRagdollPreview(on) {
+  ragdollOn = !!on && cfg.npc.mode === 'ragdoll' && !!npc.ragdoll;
+  const btn = document.getElementById('btn-ragdoll');
+  if (btn) { btn.classList.toggle('toggle-on', ragdollOn); btn.textContent = ragdollOn ? '物理 ON' : '物理'; }
+  if (npc.ragdoll) setRagdollActive(npc.ragdoll, ragdollOn);
+  if (ragdollOn) ragLastFrame = curFrame();
+  else if (npc.vrm) restNpc();
+}
+
+// マントのグラブ点（グリップ）をシーンに可視化。緑=非アクティブ, 黄=アクティブ。
+function updateGripMarkers() {
+  for (const c of [player, npc]) {
+    const pts = (c.cloth && c.cloth.gripPoints) ? c.cloth.gripPoints() : [];
+    if (!c.gripMarkers) c.gripMarkers = [];
+    while (c.gripMarkers.length < pts.length) {
+      const mk = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 8), new THREE.MeshBasicMaterial({ color: 0x44ffaa, transparent: true, opacity: 0.9, depthTest: false }));
+      mk.renderOrder = 20; scene.add(mk); c.gripMarkers.push(mk);
+    }
+    for (let i = 0; i < c.gripMarkers.length; i++) {
+      const mk = c.gripMarkers[i];
+      if (i < pts.length) { mk.visible = true; mk.position.copy(pts[i].pos); mk.material.color.setHex(pts[i].active ? 0xffdd44 : 0x44ffaa); }
+      else mk.visible = false;
+    }
+  }
+}
+
+// マントの硬さ/風をスライダー値で両キャラへ適用（顔に被る時は硬く・風を弱く）
+function applyClothSettings() {
+  const stEl = document.getElementById('cloth-stiff'), wdEl = document.getElementById('cloth-wind');
+  const st = stEl ? parseFloat(stEl.value) : 0.3, wd = wdEl ? parseFloat(wdEl.value) : 0.5;
+  for (const c of [player, npc]) if (c.cloth) { try { c.cloth.setStiffness(st); c.cloth.setWind(wd); } catch { /* noop */ } }
+}
+
 // gap（口と噛みつき点の距離）表示
 function updateGap() {
   const el = document.getElementById('gap');
@@ -269,12 +557,14 @@ function onGizmoChange() {
     _sp.copy(handleMouth.position).sub(_bonePos).applyQuaternion(_boneInv);
     cfg.player.mouthOffset = [_sp.x, _sp.y, _sp.z];
     syncOffsetSliders('mouth');
+    autoKey('mouthOffset');
   } else if (editTarget === 'bite' && npc.vrm) {
     const node = boneNode(npc, 'bite'); if (!node) return;
     node.getWorldPosition(_bonePos); node.getWorldQuaternion(_boneQuat); _boneInv.copy(_boneQuat).invert();
     _sp.copy(handleBite.position).sub(_bonePos).applyQuaternion(_boneInv);
     cfg.npc.biteOffset = [_sp.x, _sp.y, _sp.z];
     syncOffsetSliders('bite');
+    autoKey('biteOffset');
   }
 }
 
@@ -340,7 +630,7 @@ function fillBoneSelect(id, char, current) {
 
 function applyConfig(c) {
   if (c.player) { cfg.player.mouthBone = c.player.mouthBone || cfg.player.mouthBone; if (Array.isArray(c.player.mouthOffset)) cfg.player.mouthOffset = c.player.mouthOffset.slice(); }
-  if (c.npc) { cfg.npc.biteBone = c.npc.biteBone || cfg.npc.biteBone; if (Array.isArray(c.npc.biteOffset)) cfg.npc.biteOffset = c.npc.biteOffset.slice(); }
+  if (c.npc) { cfg.npc.biteBone = c.npc.biteBone || cfg.npc.biteBone; if (Array.isArray(c.npc.biteOffset)) cfg.npc.biteOffset = c.npc.biteOffset.slice(); cfg.npc.mode = c.npc.mode || 'anim'; }
   if (c.align) {
     if (Array.isArray(c.align.pos)) cfg.align.pos = c.align.pos.slice();
     if (Array.isArray(c.align.rotEuler)) cfg.align.rotDeg = c.align.rotEuler.slice();   // 保存は度
@@ -352,25 +642,34 @@ function applyConfig(c) {
     Object.assign(cfg.anim, { fps: c.anim.fps ?? FPS, trimIn: c.anim.trimIn ?? 0, trimOut: c.anim.trimOut ?? 0, loopVictim: c.anim.loopVictim ?? true });
     cfg.anim.playerVrma = c.anim.playerVrma || '';
     cfg.anim.victimVrma = c.anim.victimVrma || '';
+    cfg.anim.sound = c.anim.sound || '';
   }
   // UI 反映
   populateBoneSelects();
   syncOffsetSliders('mouth'); syncOffsetSliders('bite'); syncAlignSliders();
   document.getElementById('cb-loop-victim').checked = cfg.anim.loopVictim;
+  { const s = document.getElementById('anim-sound'); if (s) s.value = cfg.anim.sound || ''; }
+  loadTracks(c.tracks);   // キーフレーム（あれば）
+  loadNudges(c.nudges);   // 小突き（あれば）
+  { const s = document.getElementById('victim-mode'); if (s) s.value = cfg.npc.mode || 'anim'; }
   // アニメも読み込む
   if (cfg.anim.playerVrma) { document.getElementById('anim-player').value = cfg.anim.playerVrma; loadVrmaInto(player, cfg.anim.playerVrma).catch(e => console.warn(e)); }
   if (cfg.anim.victimVrma) { document.getElementById('anim-victim').value = cfg.anim.victimVrma; loadVrmaInto(npc, cfg.anim.victimVrma).catch(e => console.warn(e)); }
 }
 
 function buildConfigJson() {
-  return {
+  const out = {
     format: 'bite-align', version: 1,
     target: npc.name || '',
-    player: { mouthBone: cfg.player.mouthBone, mouthOffset: cfg.player.mouthOffset.slice() },
-    npc: { biteBone: cfg.npc.biteBone, biteOffset: cfg.npc.biteOffset.slice() },
+    player: { target: player.name || '', mouthBone: cfg.player.mouthBone, mouthOffset: cfg.player.mouthOffset.slice() },
+    npc: { biteBone: cfg.npc.biteBone, biteOffset: cfg.npc.biteOffset.slice(), mode: cfg.npc.mode },
     align: { pos: cfg.align.pos.slice(), rotEuler: cfg.align.rotDeg.slice(), lock: cfg.align.lock, blendIn: cfg.align.blendIn, blendOut: cfg.align.blendOut },
-    anim: { playerVrma: cfg.anim.playerVrma, victimVrma: cfg.anim.victimVrma, fps: FPS, trimIn: cfg.anim.trimIn, trimOut: cfg.anim.trimOut, loopVictim: cfg.anim.loopVictim },
+    anim: { playerVrma: cfg.anim.playerVrma, victimVrma: cfg.anim.victimVrma, fps: FPS, trimIn: cfg.anim.trimIn, trimOut: cfg.anim.trimOut, loopVictim: cfg.anim.loopVictim, sound: cfg.anim.sound },
   };
+  const tr = serializeTracks();
+  if (tr) out.tracks = tr;   // 口/噛点/アラインのキーフレーム
+  if (biteNudges.length) out.nudges = biteNudges.map(n => ({ f: n.f, bone: n.bone, dir: n.dir.slice(), strength: n.strength }));
+  return out;
 }
 
 // ============================================================
@@ -426,10 +725,21 @@ function setupUI() {
   fillManifest('/vrma/manifest.json', 'anim-player', f => f.replace(/\.vrma$/, ''));
   fillManifest('/vrma/manifest.json', 'anim-victim', f => f.replace(/\.vrma$/, ''));
   fillManifest('/bitealign/manifest.json', 'ba-select', f => f.replace(/\.bite\.json$/, ''));
+  fillManifest('/audio/manifest.json', 'anim-sound', f => f);
 
   document.getElementById('anim-player').addEventListener('change', e => { if (e.target.value) loadVrmaInto(player, e.target.value).catch(err => showToast(err.message, 'error')); });
   document.getElementById('anim-victim').addEventListener('change', e => { if (e.target.value) loadVrmaInto(npc, e.target.value).catch(err => showToast(err.message, 'error')); });
   document.getElementById('cb-loop-victim').addEventListener('change', e => { cfg.anim.loopVictim = e.target.checked; });
+  // 効果音: 選択で保存対象に、▶で試聴/停止
+  let _sndPreview = null;
+  document.getElementById('anim-sound').addEventListener('change', e => { cfg.anim.sound = e.target.value; if (_sndPreview) { _sndPreview.pause(); _sndPreview = null; } });
+  document.getElementById('anim-sound-play').addEventListener('click', () => {
+    if (_sndPreview) { _sndPreview.pause(); _sndPreview = null; return; }
+    if (!cfg.anim.sound) { showToast('効果音を選択してください', 'warn'); return; }
+    _sndPreview = new Audio('/audio/' + encodeURIComponent(cfg.anim.sound));
+    _sndPreview.play().catch(() => showToast('再生失敗', 'error'));
+    _sndPreview.onended = () => { _sndPreview = null; };
+  });
 
   // 再生
   document.getElementById('btn-play').addEventListener('click', play);
@@ -438,6 +748,7 @@ function setupUI() {
   const spd = document.getElementById('speed'), spdV = document.getElementById('speed-val');
   spd.addEventListener('input', () => { speed = parseFloat(spd.value); spdV.textContent = `${speed.toFixed(2)}×`; });
   document.getElementById('scrub').addEventListener('input', e => { playing = false; playTime = (parseInt(e.target.value) || 0) / FPS; updatePlayButtons(); updateFrameLabel(); });
+  setupTimelineCanvas();
   document.getElementById('btn-in').addEventListener('click', () => { cfg.anim.trimIn = Math.min(Math.round(playTime * FPS), cfg.anim.trimOut - 1); updateTrimLabel(); });
   document.getElementById('btn-out').addEventListener('click', () => { cfg.anim.trimOut = Math.max(Math.round(playTime * FPS), cfg.anim.trimIn + 1); updateTrimLabel(); });
   document.getElementById('btn-trim-reset').addEventListener('click', () => { cfg.anim.trimIn = 0; cfg.anim.trimOut = totalFrames(); updateTrimLabel(); });
@@ -448,20 +759,33 @@ function setupUI() {
   document.getElementById('edit-mouth').addEventListener('click', () => { editTarget = 'mouth'; attachGizmo(); });
   document.getElementById('edit-bite').addEventListener('click', () => { editTarget = 'bite'; attachGizmo(); });
   for (const [i, ax] of ['x', 'y', 'z'].entries()) {
-    bindSlider(`mouth-${ax}`, v => { cfg.player.mouthOffset[i] = v; }, v => v.toFixed(3));
-    bindSlider(`bite-${ax}`, v => { cfg.npc.biteOffset[i] = v; }, v => v.toFixed(3));
+    bindSlider(`mouth-${ax}`, v => { cfg.player.mouthOffset[i] = v; autoKey('mouthOffset'); }, v => v.toFixed(3));
+    bindSlider(`bite-${ax}`, v => { cfg.npc.biteOffset[i] = v; autoKey('biteOffset'); }, v => v.toFixed(3));
   }
+  for (const g of ['mouth', 'bite', 'align']) {
+    document.getElementById('key-' + g)?.addEventListener('click', () => setKeyGroup(g));
+    document.getElementById('unkey-' + g)?.addEventListener('click', () => delKeyGroup(g));
+  }
+  // 被食モード / 小突き（ラグドール時）
+  document.getElementById('victim-mode')?.addEventListener('change', e => { cfg.npc.mode = e.target.value; if (cfg.npc.mode !== 'ragdoll') setRagdollPreview(false); });
+  document.getElementById('btn-ragdoll')?.addEventListener('click', () => setRagdollPreview(!ragdollOn));
+  { const sel = document.getElementById('nudge-bone'); if (sel) for (const b of NUDGE_BONES) { const o = document.createElement('option'); o.value = b; o.textContent = b; sel.appendChild(o); } }
+  document.getElementById('nudge-add')?.addEventListener('click', addNudge);
+  document.getElementById('nudge-del')?.addEventListener('click', delNudge);
+  // マント物理（プレビュー）
+  bindSlider('cloth-stiff', () => applyClothSettings(), v => v.toFixed(2));
+  bindSlider('cloth-wind', () => applyClothSettings(), v => v.toFixed(2));
 
   // アライン
   const snapBtn = document.getElementById('btn-snap');
   snapBtn.addEventListener('click', () => { snap = !snap; snapBtn.classList.toggle('snap-on', snap); snapBtn.textContent = snap ? '● Snap ON' : '○ Snap OFF'; if (!snap) restNpc(); });
-  for (const [i, ax] of ['x', 'y', 'z'].entries()) bindSlider(`al-${ax}`, v => { cfg.align.pos[i] = v; }, v => v.toFixed(3));
-  for (const [i, ax] of ['rx', 'ry', 'rz'].entries()) bindSlider(`al-${ax}`, v => { cfg.align.rotDeg[i] = v; }, v => String(Math.round(v)));
+  for (const [i, ax] of ['x', 'y', 'z'].entries()) bindSlider(`al-${ax}`, v => { cfg.align.pos[i] = v; autoKey('alignPos'); }, v => v.toFixed(3));
+  for (const [i, ax] of ['rx', 'ry', 'rz'].entries()) bindSlider(`al-${ax}`, v => { cfg.align.rotDeg[i] = v; autoKey('alignRot'); }, v => String(Math.round(v)));
 
   // BiteAlign 読込 / 保存
   document.getElementById('ba-select').addEventListener('change', async e => {
     if (!e.target.value) return;
-    try { const r = await fetch('/bitealign/' + e.target.value); if (!r.ok) throw new Error('取得失敗'); applyConfig(await r.json()); showToast(`読込: ${e.target.value}`); }
+    try { const r = await fetch('/bitealign/' + e.target.value); if (!r.ok) throw new Error('取得失敗'); await loadBiteAlign(await r.json()); showToast(`読込: ${e.target.value}`); }
     catch (err) { showToast(`読込失敗: ${err.message}`, 'error'); }
   });
   document.getElementById('ba-save').addEventListener('click', saveConfig);
@@ -523,15 +847,29 @@ function render() {
   }
 
   // ポーズ適用（両者を共通クロックで）
+  const ragPreview = ragdollOn && cfg.npc.mode === 'ragdoll' && npc.vrm && npc.ragdoll;
+
   applyPoseAt(playTime);
   if (player.vrm) player.vrm.update(dt);
-  if (npc.vrm) npc.vrm.update(dt);
+  if (!ragPreview && npc.vrm) npc.vrm.update(dt);   // ラグドール中は VRMA で上書きしない
 
-  // アライン
-  if (snap) applySnap(); else restNpc();
+  // キーフレーム値を cfg へ反映（フレーム変化時のみ＝編集中の上書きを防ぐ）
+  const kf = curFrame();
+  if (kf !== lastKeyFrame) { applyTracksAt(kf); lastKeyFrame = kf; }
+
+  // アライン / ラグドール物理
+  if (ragPreview) updateVictimRagdoll(dt);
+  else if (snap) applySnap(); else restNpc();
+
+  // マント（クロス）
+  const cf = curFrame();
+  if (player.cloth) player.cloth.update(dt, cf);
+  if (npc.cloth) npc.cloth.update(dt, cf);
+  updateGripMarkers();
 
   anchorFollow();
   updateGap();
+  drawTimeline();
   controls.update();
   renderer.render(scene, camera);
 }

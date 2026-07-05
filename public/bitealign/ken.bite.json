@@ -3,30 +3,32 @@
   "version": 1,
   "target": "ken",
   "player": {
+    "target": "Joy_reborn",
     "mouthBone": "head",
     "mouthOffset": [
       0,
-      0,
-      -0.075
+      -0.005,
+      -0.095
     ]
   },
   "npc": {
-    "biteBone": "neck",
+    "biteBone": "head",
     "biteOffset": [
-      0.1,
-      0.09,
-      0.05
-    ]
+      -0.03,
+      -0.01,
+      0.095
+    ],
+    "mode": "ragdoll"
   },
   "align": {
     "pos": [
-      0.004,
-      -0.004,
-      0.012
+      0,
+      0,
+      -0.008
     ],
     "rotEuler": [
       0,
-      7,
+      2,
       0
     ],
     "lock": true,
@@ -35,10 +37,23 @@
   },
   "anim": {
     "playerVrma": "feed.vrma",
-    "victimVrma": "attack_drain_victim02.vrma",
+    "victimVrma": "attack_drain_victim01.vrma",
     "fps": 30,
     "trimIn": 0,
-    "trimOut": 60,
-    "loopVictim": true
+    "trimOut": 104,
+    "loopVictim": true,
+    "sound": ""
+  },
+  "tracks": {
+    "biteOffset": [
+      {
+        "f": 83,
+        "v": [
+          -0.03,
+          -0.01,
+          0.095
+        ]
+      }
+    ]
   }
 }
