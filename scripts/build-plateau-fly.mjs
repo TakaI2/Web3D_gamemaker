@@ -31,35 +31,84 @@ const jsSrc = fs.readFileSync(path.join(src, 'plateau-fly.js'), 'utf8')
 fs.writeFileSync(path.join(dest, 'plateau-fly.js'), jsSrc);
 console.log('copied: plateau-fly.js (paths rewritten)');
 
-// 共有 lib（vrm-cloth は CDN 依存のみ。kenney-buildings は純関数。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'kenney-buildings.js']) {
+// 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
+for (const f of ['vrm-cloth.js', 'kenney-buildings.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js']) {
   const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8').replace(/\.\.\/lib\//g, './');
   fs.writeFileSync(path.join(dest, f), libSrc);
   console.log(`copied: ${f}`);
 }
 
-// Joy_reborn バンドル（VRM＋マント埋め込み・約27MB）
+// NPCバンドル（Joy=プレイヤー / ken=地上NPC・捕食対象）
 const npcDest = path.join(dest, 'npc');
 fs.mkdirSync(npcDest, { recursive: true });
-fs.copyFileSync(path.join(pub, 'npc', 'Joy_reborn.npc.json'), path.join(npcDest, 'Joy_reborn.npc.json'));
-console.log('copied: npc/Joy_reborn.npc.json');
+for (const n of ['Joy_reborn.npc.json', 'ken.npc.json']) {
+  fs.copyFileSync(path.join(pub, 'npc', n), path.join(npcDest, n));
+  console.log(`copied: npc/${n}`);
+}
 
-// 飛行アニメの timeline + それが参照する vrma
-const timelines = ['Joy_reborn_Fly_idle', 'Joy_reborn_Fly_f', 'Joy_reborn_front_down', 'Joy_reborn_Fly_back', 'Joy_reborn_Fly_L', 'Joy_reborn_Fly_R'];
+// timeline（飛行＋攻撃＋トーテム）+ それが参照する vrma
+const timelines = [
+  'Joy_reborn_Fly_idle', 'Joy_reborn_Fly_f', 'Joy_reborn_front_down', 'Joy_reborn_Fly_back', 'Joy_reborn_Fly_L', 'Joy_reborn_Fly_R',
+  'Joy_reborn_Fly_f2', 'Joy_reborn_capcher1', 'Joy_reborn_throw', 'Joy_reborn_cas1_L1', 'Joy_reborn_large_shot_load', 'Joy_reborn_large_beam', 'Joy_reborn_lightning', 'Joy_reborn_totem',
+];
 const tlDest = path.join(dest, 'timeline'); fs.mkdirSync(tlDest, { recursive: true });
 const vrmaDest = path.join(dest, 'vrma'); fs.mkdirSync(vrmaDest, { recursive: true });
-const vrmaSet = new Set();
+const vrmaSet = new Set(['Catwalk_Walk_Forward.vrma']);   // ken 歩行
+// timeline/fx が参照する public 直下のテクスチャpng（例 ../electric.png）を集めて同梱し、パスを ./ へ書き換え
+const texPngs = new Set();
+const rewriteTexPaths = (text) => text.replace(/\.\.\/([\w\-. %@]+\.png)/g, (_, name) => { texPngs.add(name); return './' + name; });
 for (const t of timelines) {
   const file = path.join(pub, 'timeline', t + '.timeline.json');
-  fs.copyFileSync(file, path.join(tlDest, t + '.timeline.json'));
-  const v = JSON.parse(fs.readFileSync(file)).vrma;
+  const text = rewriteTexPaths(fs.readFileSync(file, 'utf8'));
+  fs.writeFileSync(path.join(tlDest, t + '.timeline.json'), text);
+  const v = JSON.parse(text).vrma;
   if (v) vrmaSet.add(v);
   console.log(`copied: timeline/${t}.timeline.json`);
 }
+// 捕食（bite align）設定＋参照 vrma＋効果音
+const biteSrc = path.join(pub, 'bitealign', 'ken.bite.json');
+if (fs.existsSync(biteSrc)) {
+  const baDest = path.join(dest, 'bitealign'); fs.mkdirSync(baDest, { recursive: true });
+  fs.copyFileSync(biteSrc, path.join(baDest, 'ken.bite.json'));
+  const cfg = JSON.parse(fs.readFileSync(biteSrc));
+  vrmaSet.add(cfg.anim?.playerVrma || 'feed.vrma');
+  vrmaSet.add(cfg.anim?.victimVrma || 'attack_drain_victim02.vrma');
+  if (cfg.anim?.sound) {
+    const aDest = path.join(dest, 'audio'); fs.mkdirSync(aDest, { recursive: true });
+    const aSrc = path.join(pub, 'audio', cfg.anim.sound);
+    if (fs.existsSync(aSrc)) { fs.copyFileSync(aSrc, path.join(aDest, cfg.anim.sound)); console.log(`copied: audio/${cfg.anim.sound}`); }
+  }
+  console.log('copied: bitealign/ken.bite.json');
+}
 for (const v of vrmaSet) {
-  fs.copyFileSync(path.join(pub, 'vrma', v), path.join(vrmaDest, v));
+  const src = path.join(pub, 'vrma', v);
+  if (!fs.existsSync(src)) { console.warn(`skip missing vrma: ${v}`); continue; }
+  fs.copyFileSync(src, path.join(vrmaDest, v));
   console.log(`copied: vrma/${v}`);
 }
+// ラグドール調整値（ken）
+const ragSrc = path.join(pub, 'ragdoll', 'ken.ragdoll.json');
+if (fs.existsSync(ragSrc)) {
+  const rDest = path.join(dest, 'ragdoll'); fs.mkdirSync(rDest, { recursive: true });
+  fs.copyFileSync(ragSrc, path.join(rDest, 'ken.ragdoll.json'));
+  console.log('copied: ragdoll/ken.ragdoll.json');
+}
+// FXプリセット（timeline 埋め込み custom:* ＋着弾 explosion ＋トーテム）。テクスチャ参照も ./ へ
+const fxSrcDir = path.join(pub, 'fx');
+if (fs.existsSync(fxSrcDir)) {
+  const fxDest = path.join(dest, 'fx'); fs.mkdirSync(fxDest, { recursive: true });
+  for (const f of fs.readdirSync(fxSrcDir).filter((f) => f.endsWith('.fx.json'))) {
+    fs.writeFileSync(path.join(fxDest, f), rewriteTexPaths(fs.readFileSync(path.join(fxSrcDir, f), 'utf8')));
+  }
+  console.log('copied: fx/*.fx.json');
+}
+// 参照テクスチャpng を dist 直下へ
+for (const name of texPngs) {
+  const src = path.join(pub, name);
+  if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(dest, name)); console.log(`copied: ${name}`); }
+  else console.warn(`skip missing texture: ${name}`);
+}
+// 追加 lib（fx-mesh/fx-tornado/fx-particles/fx-dissolve/vrm-ragdoll）
 
 // 車モデル（CAR_KIT）＋ 共有 colormap テクスチャ
 const CAR_KIT = ['sedan', 'sedan-sports', 'suv', 'suv-luxury', 'taxi', 'police', 'van', 'delivery', 'truck', 'hatchback-sports'];
