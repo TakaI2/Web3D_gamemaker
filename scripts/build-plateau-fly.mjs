@@ -134,6 +134,19 @@ for (const kit of BLD) {
   console.log(`copied: ${kit.models.length} building models from ${kit.dir}`);
 }
 
+// hk ビル（Building Generator 書き出し。public/models/hk_GLB format/）があれば同梱＋静的 models manifest
+const hkSrc = path.join(pub, 'models', 'hk_GLB format');
+const hkFiles = fs.existsSync(hkSrc) ? fs.readdirSync(hkSrc).filter((f) => f.toLowerCase().endsWith('.glb')) : [];
+if (hkFiles.length) {
+  const hkDest = path.join(dest, 'models', 'hk_GLB format'); fs.mkdirSync(hkDest, { recursive: true });
+  for (const f of hkFiles) fs.copyFileSync(path.join(hkSrc, f), path.join(hkDest, f));
+  console.log(`copied: ${hkFiles.length} hk buildings`);
+}
+// plateau-fly は ../models/manifest.json から hk ビルを検出する（本番用に静的生成。hk のみで十分）
+const modelsDest = path.join(dest, 'models'); fs.mkdirSync(modelsDest, { recursive: true });
+fs.writeFileSync(path.join(modelsDest, 'manifest.json'), JSON.stringify(hkFiles.map((f) => 'hk_GLB format/' + f)));
+console.log('written: models/manifest.json (hk entries)');
+
 // 道路グラフ + 静的 manifest（本番は vite ミドルウェアが無いので静的ファイルが必須）
 const roadSrc = path.join(pub, 'roads');
 const roadDest = path.join(dest, 'roads'); fs.mkdirSync(roadDest, { recursive: true });

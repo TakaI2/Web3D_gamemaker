@@ -855,6 +855,16 @@ async function buildKenneyCity() {
     bldModels.push(md);
   }
   partitionBuildings();   // 初期の近/遠振り分け（compile で両パイプラインを事前生成させる）
+  // カーブ（欠損）材質のパイプラインを事前コンパイル（初弾のヒッチ軽減）
+  const _dummyGeo = new THREE.BoxGeometry(1, 1, 1);
+  for (const mkey of Object.keys(kitMat)) {
+    try {
+      const cm = makeCarveMaterial(kitMat[mkey], 0, 1);
+      const dm = new THREE.Mesh(_dummyGeo, cm.mat);
+      dm.position.set(0, -500, 0);
+      scene.add(dm);
+    } catch (e) { console.warn('carve prewarm失敗', e); }
+  }
   // WebGPUパイプラインを事前コンパイル（初回描画のハングをローディング中へ前倒し）
   try { setStatus('都市を最適化中…'); if (renderer.compileAsync) await renderer.compileAsync(scene, camera); } catch (e) { console.warn('compileAsync', e); }
   console.log('city models', bldModels.length, 'buildings', gen.instances.length, 'near/far', _lodNearCount, _lodFarCount);
@@ -886,17 +896,25 @@ function partitionBuildings() {
 function bakeModel(root) {
   root.updateMatrixWorld(true);
   const geoms = [];
-  let material = null;
+  let material = null, bestCnt = -1;
   root.traverse((o) => {
     if (!o.isMesh || !o.geometry) return;
-    const g0 = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    const g0 = o.geometry;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', g0.getAttribute('position').clone());
     if (g0.getAttribute('normal')) g.setAttribute('normal', g0.getAttribute('normal').clone());
     if (g0.getAttribute('uv')) g.setAttribute('uv', g0.getAttribute('uv').clone());
+    if (g0.index) g.setIndex(g0.index.clone());   // インデックス保持（非インデックス化は頂点3倍＝hk高ポリで致命的）
+    else {
+      const n = g.getAttribute('position').count;
+      const idx = new Uint32Array(n);
+      for (let i = 0; i < n; i++) idx[i] = i;
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+    }
     g.applyMatrix4(o.matrixWorld);
     geoms.push(g);
-    if (!material) material = Array.isArray(o.material) ? o.material[0] : o.material;
+    const cnt = g.getAttribute('position').count;   // 最も頂点数の多いメッシュの材質を採用（複数材質GLBで主要アトラスを拾う）
+    if (cnt > bestCnt) { bestCnt = cnt; material = Array.isArray(o.material) ? o.material[0] : o.material; }
   });
   if (!geoms.length) return null;
   for (const g of geoms) {   // merge 要件: 全ジオメトリの属性を揃える
@@ -1026,7 +1044,7 @@ function makeCarveMaterial(srcMat, baseY, height) {
   nm.alphaTest = 0.5;
   nm.side = THREE.DoubleSide;
   nm.needsUpdate = true;
-  return { mat: nm, uCenters, uRadii, uKill, uKillOn, uBaseY };
+  return { mat: nm, uCenters, uRadii, uKill, uKillOn, uBaseY, uHeight };
 }
 
 function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT) {

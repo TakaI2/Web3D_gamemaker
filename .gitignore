@@ -31,3 +31,5 @@ public/ドライツェーン_ver1.01/
 # OS
 .DS_Store
 Thumbs.db
+# Building Generator ベイク生成物（building-gen-ref の tools/bake-run.mjs で再生成可能）
+public/models/hk_GLB format/
