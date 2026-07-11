@@ -32,7 +32,7 @@ fs.writeFileSync(path.join(dest, 'plateau-fly.js'), jsSrc);
 console.log('copied: plateau-fly.js (paths rewritten)');
 
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'kenney-buildings.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js']) {
+for (const f of ['vrm-cloth.js', 'kenney-buildings.js', 'room-gen.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js']) {
   const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8').replace(/\.\.\/lib\//g, './');
   fs.writeFileSync(path.join(dest, f), libSrc);
   console.log(`copied: ${f}`);
@@ -146,6 +146,18 @@ if (hkFiles.length) {
 const modelsDest = path.join(dest, 'models'); fs.mkdirSync(modelsDest, { recursive: true });
 fs.writeFileSync(path.join(modelsDest, 'manifest.json'), JSON.stringify(hkFiles.map((f) => 'hk_GLB format/' + f)));
 console.log('written: models/manifest.json (hk entries)');
+
+// 家具キット（建物内装の生成用）＋進入マーカー
+const furnSrc = path.join(pub, 'models', 'kenney_furniture-kit', 'Models', 'GLTF format');
+if (fs.existsSync(furnSrc)) {
+  const furnDest = path.join(dest, 'models', 'kenney_furniture-kit', 'Models', 'GLTF format');
+  fs.mkdirSync(furnDest, { recursive: true });
+  let n = 0;
+  for (const f of fs.readdirSync(furnSrc).filter((f) => f.endsWith('.glb'))) { fs.copyFileSync(path.join(furnSrc, f), path.join(furnDest, f)); n++; }
+  console.log(`copied: ${n} furniture models`);
+}
+const entriesSrc = path.join(pub, 'models', 'building-entries.json');
+if (fs.existsSync(entriesSrc)) { fs.copyFileSync(entriesSrc, path.join(dest, 'models', 'building-entries.json')); console.log('copied: building-entries.json'); }
 
 // 道路グラフ + 静的 manifest（本番は vite ミドルウェアが無いので静的ファイルが必須）
 const roadSrc = path.join(pub, 'roads');

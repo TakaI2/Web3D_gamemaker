@@ -1,3 +1,4 @@
+7/9
 #操作感をTPS-Flightと同じに
 
 カメラ
@@ -65,4 +66,20 @@ https://github.com/achrefelouafi/BuildingGeneratorThreeJS
 
 上記変更を最低限の負荷で実現するように。　Ｗｅｂ上でプレイするからね。
 
+7/10
 
+攻撃で傾くのが急すぎて不自然、もっと連続的に。
+
+空
+
+
+plateauからの脱却
+
+
+地面や街路を整備する
+
+
+
+
+
+部屋用

@@ -77,7 +77,7 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
@@ -194,6 +194,16 @@ export default defineConfig({
           res.end(JSON.stringify(files));
         });
 
+        // 部屋一覧（public/rooms/*.room.json。room-editor が保存）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/rooms/manifest.json')) return next();
+          const dir = path.join(pub, 'rooms');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.room.json') || f.endsWith('.unit.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
         // 道路グラフ一覧（public/roads/*.json。参照プロジェクトのOSM道路。plateau-fly の車走行用）
         server.middlewares.use((req, res, next) => {
           const url = (req.url || '').split('?')[0];
@@ -232,7 +242,7 @@ export default defineConfig({
           const all = findFilesRecursive(dir, '.glb', dir, 0, ['node_modules', '.git', 'gltf']);
           // 自前 colormap を持つキットのみ採用: トップ階層「*_GLB format」＋ Kenney の入れ子「*/Models/GLB format」。
           // （無印 GLB format / kenney_car-kit 等の重複・無テクスチャを除外。都市エディタが road/suburban キットを使う）
-          const kits = all.filter((f) => f.split('/')[0].endsWith('_GLB format') || f.includes('/Models/GLB format/'));
+          const kits = all.filter((f) => f.split('/')[0].endsWith('_GLB format') || f.includes('/Models/GLB format/') || f.includes('/Models/GLTF format/'));
           const files = kits.length ? kits : all;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));

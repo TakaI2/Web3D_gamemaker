@@ -22,6 +22,7 @@ import { TilesRenderer } from 'https://esm.sh/3d-tiles-renderer@0.4.28?deps=thre
 import { GLTFExtensionsPlugin, ImplicitTilingPlugin } from 'https://esm.sh/3d-tiles-renderer@0.4.28/plugins?deps=three@0.184.0';
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
 import { generateBuildings } from '../lib/kenney-buildings.js';
+import { generateHouse } from '../lib/room-gen.js';
 import { uniform, color, float, positionWorld, mx_noise_float, clamp, texture, uv, mix, frontFacing } from 'https://esm.sh/three@0.184.0/tsl';
 
 // 八王子(13201) 2025 LOD2 テクスチャ付き tileset（reearth CMS 配信）
@@ -363,8 +364,11 @@ function updateFlight(dt) {
   clampSpeed(player.vel, flight.maxSpeed);
   player.pos.addScaledVector(player.vel, dt);
   player.grounded = false;
-  if (KENNEY_CITY) collidePlayer();   // 建物と衝突→押し出し・屋上着地
-  groundCollide();                    // 地面(地形)に着地
+  if (interior.active) interiorClamp();   // 内装内は部屋境界と床でクランプ
+  else {
+    if (KENNEY_CITY) collidePlayer();   // 建物と衝突→押し出し・屋上着地
+    groundCollide();                    // 地面(地形)に着地
+  }
   player.vrm.scene.position.copy(player.pos);
   player.vrm.scene.rotation.y = player.yaw + FACE_OFFSET;
   // 前方アンカー（掴んだ物の吸着点）。掴み中はカメラ3D前方＝上下にも振り回せる
@@ -449,14 +453,30 @@ function updatePlayerAnim(dt) {
   if (totemCast && player.current === 'totem' && !totemCast.placed && curFrame >= TOTEM_CAST_FRAME) { totemCast.placed = true; placeTotem(); }
   if (totemCast && player.current !== 'totem') totemCast = null;   // アニメが終わった/中断された
 }
+const _camRayC = new THREE.Raycaster(), _camDirC = new THREE.Vector3();
 function updateCamera(dt) {
   if (!player.ready) return;
   camForwardRight();
   _desiredTarget.copy(player.pos); _desiredTarget.y += cam.height;
   _desiredTarget.addScaledVector(_right, cam.side);   // 注視点を右へ→プレイヤーは画面左に寄る（肩越し）
   _desiredPos.copy(_desiredTarget).addScaledVector(_fwd, -cam.dist);
+  let blocked = false;
+  if (interior.active && interior.group) {   // 屋内: 注視点→カメラ間に壁があれば手前へ詰める（めり込み防止）
+    _camDirC.copy(_desiredPos).sub(_desiredTarget);
+    const want = _camDirC.length();
+    _camDirC.normalize();
+    _camRayC.set(_desiredTarget, _camDirC);
+    _camRayC.far = want + 0.3;
+    const hit = _camRayC.intersectObject(interior.group, true)[0];
+    if (hit && hit.distance < want) {
+      _desiredPos.copy(_desiredTarget).addScaledVector(_camDirC, Math.max(0.35, hit.distance - 0.25));
+      blocked = true;
+    }
+  }
   const k = 1 - Math.exp(-cam.follow * dt);
-  camPosCur.lerp(_desiredPos, k); camTargetCur.lerp(_desiredTarget, k);
+  if (blocked) camPosCur.copy(_desiredPos);   // 遮蔽時はスナップ（補間中の壁抜けを防ぐ）
+  else camPosCur.lerp(_desiredPos, k);
+  camTargetCur.lerp(_desiredTarget, k);
   camera.position.copy(camPosCur); camera.lookAt(camTargetCur);
 }
 
@@ -768,7 +788,7 @@ function setupControls() {
     camYaw -= e.movementX * 0.0024; camPitch -= e.movementY * 0.0024;
     camPitch = Math.max(-1.25, Math.min(1.35, camPitch));
   });
-  window.addEventListener('keydown', (e) => { keysDown[e.code] = true; });
+  window.addEventListener('keydown', (e) => { keysDown[e.code] = true; if (e.code === 'KeyE' && locked) onInteract(); });
   window.addEventListener('keyup', (e) => { keysDown[e.code] = false; });
   window.addEventListener('wheel', (e) => { flight.maxSpeed = Math.max(4, Math.min(2000, flight.maxSpeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15))); });   // 基準8まで戻せるよう下限4
 }
@@ -793,13 +813,19 @@ async function buildKenneyCity() {
   cityInfo = { count: gen.instances.length, zones: gen.zones };
   console.log('city buildings', gen.instances.length, gen.zones);
 
+  // 進入マーカー（entry-editor 製）: モデル相対パス -> [{kind:'door'|'window', pos:[x,y,z]}]
+  try { bldEntries = await (await fetch('../models/building-entries.json')).json(); } catch { bldEntries = {}; }
+
   // 使用モデルの GLB を「1マージ済みジオメトリ＋共有マテリアル」に（InstancedMesh 用）
   const used = new Set(gen.instances.map((i) => i.kit + '|' + i.model));
   const templates = new Map();
+  const relByKey = new Map();
   const loader = new GLTFLoader();
   await Promise.all([...used].map(async (key) => {
     const [kit, model] = key.split('|');
-    const rel = (BLD_KIT_DIR[kit] + model + '.glb').split('/').map(encodeURIComponent).join('/');
+    const relPath = BLD_KIT_DIR[kit] + model + '.glb';
+    relByKey.set(key, relPath);
+    const rel = relPath.split('/').map(encodeURIComponent).join('/');
     try {
       const gltf = await loader.loadAsync(new URL('../models/' + rel, location.href).href);
       const baked = bakeModel(gltf.scene);
@@ -840,7 +866,7 @@ async function buildKenneyCity() {
     near.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 200, 0), 6000);
     far.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 200, 0), 6000);
     near.userData.slots = []; far.userData.slots = [];   // slot -> 建物レコード（射撃レイキャストの逆引き）
-    const md = { tpl, near, far, recs: [] };
+    const md = { tpl, near, far, recs: [], rel: relByKey.get(k), entries: bldEntries[relByKey.get(k)] || null };
     near.userData.md = md; far.userData.md = md;
     for (let i = 0; i < insts.length; i++) {
       const it = insts[i];
@@ -1992,6 +2018,137 @@ function updateTotem(dt) {
   }
 }
 
+// ── 建物内装: 番地シードでその場生成（保存データゼロ）。玄関/窓マーカー（entry-editor）からEキーで出入り ──
+let bldEntries = {};   // モデル相対パス -> マーカー配列（buildKenneyCity で読込）
+const INTERIOR_ORIGIN = new THREE.Vector3(0, -320, 0);   // 内装ポケット（地形の遥か下＝街と干渉しない）
+const ENTRY_RANGE = 6, PROMPT_SCAN_R = 40;
+const FURN_DIR = '../models/kenney_furniture-kit/Models/GLTF format/';
+const INTERIOR_SCALE = 1.5;   // 家具キットはVRM比で小さめ→内装全体を拡大
+const furnCache = new Map();   // name -> {tpl,size}
+let TILE_I = 1, FLOORT_I = 0, FLOORH_I = 2.6;
+const interior = { active: false, group: null, ret: null, w: 0, d: 0, cz: 0, doorPos: new THREE.Vector3() };
+let entryCandidate = null, entryPrompt = '', _entryT = 0;
+const _emk = new THREE.Vector3();
+const furnLoader = new GLTFLoader();
+
+async function loadFurn(name) {
+  if (furnCache.has(name)) return furnCache.get(name);
+  const gltf = await furnLoader.loadAsync(new URL(FURN_DIR + encodeURIComponent(name) + '.glb', location.href).href);
+  const obj = gltf.scene;
+  const box = new THREE.Box3().setFromObject(obj);
+  const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+  obj.position.set(-c.x, -box.min.y, -c.z);
+  const tpl = new THREE.Group(); tpl.add(obj);
+  const e = { tpl, size };
+  furnCache.set(name, e);
+  return e;
+}
+
+// 建物の進入マーカー（無ければテンプレ正面中央の玄関を仮定）
+function mdMarkers(md) {
+  if (md.entries && md.entries.length) return md.entries;
+  const bb = md.tpl.geometry.boundingBox;
+  return [{ kind: 'door', pos: [(bb.min.x + bb.max.x) / 2, bb.min.y + 0.02, bb.max.z] }];
+}
+
+// 近傍の建物マーカーを走査してEキー候補を更新（0.25s毎）
+function updateEntryPrompt(dt) {
+  _entryT -= dt;
+  if (_entryT > 0) return;
+  _entryT = 0.25;
+  if (interior.active) {
+    entryPrompt = player.pos.distanceTo(interior.doorPos) < 3 ? '【E】外に出る' : '';
+    return;
+  }
+  entryCandidate = null;
+  let best = ENTRY_RANGE;
+  for (const md of bldModels) {
+    const markers = mdMarkers(md);
+    for (const rec of md.recs) {
+      if (rec.dead) continue;
+      if (Math.abs(rec.x - player.pos.x) > PROMPT_SCAN_R || Math.abs(rec.z - player.pos.z) > PROMPT_SCAN_R) continue;
+      for (const mk of markers) {
+        _emk.fromArray(mk.pos).applyMatrix4(rec.m);
+        const dist = _emk.distanceTo(player.pos);
+        if (dist < best) { best = dist; entryCandidate = { md, rec, kind: mk.kind }; }
+      }
+    }
+  }
+  entryPrompt = entryCandidate ? `【E】${entryCandidate.kind === 'door' ? '玄関から入る' : '窓から入る'}` : '';
+}
+
+function onInteract() {
+  if (interior.active) { if (player.pos.distanceTo(interior.doorPos) < 3) exitInterior(); return; }
+  if (entryCandidate) enterBuilding(entryCandidate).catch((e) => showError('入室失敗: ' + (e?.message || e)));
+}
+
+async function enterBuilding(cand) {
+  const t0 = performance.now();
+  const rec = cand.rec;
+  // 番地シード＝建物のワールド格子座標ハッシュ（保存データゼロで毎回同じ間取り）
+  const seed = ((Math.round(rec.x) * 73856093) ^ (Math.round(rec.z) * 19349663) ^ 0x5bd1e995) >>> 0;
+  const tier = rec.tier || 'house';
+  const P = tier === 'tower' ? { w: 13, d: 10, floors: 2 } : tier === 'mid' ? { w: 11, d: 9, floors: 2 } : { w: 9, d: 8, floors: 1 };
+  const layout = generateHouse({ ...P, seed, windowRate: 0.4 });
+  const t1 = performance.now();
+  // 基準寸法（床タイル・壁高）を実測してから一括スポーン
+  const S = INTERIOR_SCALE;
+  const floorE = await loadFurn('floorFull');
+  TILE_I = (Math.max(floorE.size.x, floorE.size.z) || 1) * S;
+  FLOORT_I = (floorE.size.y || 0) * S;
+  FLOORH_I = (await loadFurn('wall')).size.y * S + FLOORT_I;
+  const all = [...layout.shell, ...layout.items.filter((i) => !i.unit)];
+  await Promise.all([...new Set(all.map((i) => i.model))].map((n) => loadFurn(n).catch(() => null)));   // モデル先読み
+  const g = new THREE.Group();
+  for (const it of all) {
+    const e = furnCache.get(it.model);
+    if (!e) continue;
+    const m = e.tpl.clone(true);
+    m.scale.setScalar(S);
+    const isFloor = it.model.startsWith('floor');
+    let y = (it.level || 0) * FLOORH_I + (isFloor ? 0 : FLOORT_I);
+    if (it.stackOn && furnCache.has(it.stackOn)) y += furnCache.get(it.stackOn).size.y * S;
+    m.position.set(it.x * TILE_I, y, it.z * TILE_I);
+    m.rotation.y = it.ry || 0;
+    g.add(m);
+  }
+  g.position.copy(INTERIOR_ORIGIN);
+  scene.add(g);
+  // 入場: 玄関（西端の廊下）へテレポ
+  const cz = Math.max(3, Math.min(layout.d - 4, (layout.d / 2) | 0));
+  interior.active = true; interior.group = g; interior.w = layout.w; interior.d = layout.d; interior.cz = cz;
+  interior.floors = layout.floors || 1;
+  interior.doorPos.set(INTERIOR_ORIGIN.x + 0.6 * TILE_I, INTERIOR_ORIGIN.y + FLOORT_I, INTERIOR_ORIGIN.z + cz * TILE_I);
+  interior.ret = { pos: player.pos.clone(), vel: player.vel.clone(), yaw: player.yaw, camYaw, camPitch };
+  player.pos.copy(interior.doorPos); player.pos.y += 0.05;
+  player.vel.set(0, 0, 0);
+  player.yaw = Math.PI / 2; camYaw = Math.PI / 2; camPitch = 0.1;   // 廊下の東（部屋側）を向く
+  const t2 = performance.now();
+  console.log(`interior: layout ${(t1 - t0).toFixed(1)}ms / spawn ${(t2 - t1).toFixed(1)}ms / seed ${seed}`);
+  setStatus(`入室（生成 ${(t1 - t0).toFixed(1)}ms＋構築 ${(t2 - t1).toFixed(0)}ms）/ 玄関付近で【E】退出`);
+}
+
+function exitInterior() {
+  if (interior.group) { scene.remove(interior.group); interior.group = null; }   // ジオメトリ/材質はキャッシュ共有なのでdisposeしない
+  interior.active = false;
+  const r = interior.ret;
+  if (r) { player.pos.copy(r.pos); player.vel.copy(r.vel); player.yaw = r.yaw; camYaw = r.camYaw; camPitch = r.camPitch; }
+  setStatus('外に出ました');
+}
+
+// 内装内の移動制限（部屋の中に収める・床で止める）
+function interiorClamp() {
+  const x0 = INTERIOR_ORIGIN.x - 0.4 * TILE_I, x1 = INTERIOR_ORIGIN.x + (interior.w - 0.6) * TILE_I;
+  const z0 = INTERIOR_ORIGIN.z - 0.4 * TILE_I, z1 = INTERIOR_ORIGIN.z + (interior.d - 0.6) * TILE_I;
+  const yLo = INTERIOR_ORIGIN.y + FLOORT_I, yHi = INTERIOR_ORIGIN.y + interior.floors * FLOORH_I - 0.3;
+  if (player.pos.x < x0) { player.pos.x = x0; if (player.vel.x < 0) player.vel.x = 0; }
+  if (player.pos.x > x1) { player.pos.x = x1; if (player.vel.x > 0) player.vel.x = 0; }
+  if (player.pos.z < z0) { player.pos.z = z0; if (player.vel.z < 0) player.vel.z = 0; }
+  if (player.pos.z > z1) { player.pos.z = z1; if (player.vel.z > 0) player.vel.z = 0; }
+  if (player.pos.y < yLo) { player.pos.y = yLo; if (player.vel.y < 0) player.vel.y = 0; player.grounded = true; }
+  if (player.pos.y > yHi) { player.pos.y = yHi; if (player.vel.y > 0) player.vel.y = 0; }
+}
+
 function tick() {
   const dt = Math.min(_clock.getDelta(), 1 / 30);
   updateFlight(dt);
@@ -2003,6 +2160,7 @@ function tick() {
   updatePredation(dt);    // 掴んだ ken の接地判定→捕食
   updateTotem(dt);        // トーテム（旋回・溶解・成長）
   updateImpactFx(dt);     // 着弾の炎＋煙
+  updateEntryPrompt(dt);  // 建物進入のEキー候補
   if (KENNEY_CITY) updateDamage(dt);
   if (KENNEY_CITY && bldModels.length) { _lodT -= dt; if (_lodT <= 0) { _lodT = LOD_INTERVAL; partitionBuildings(); } }   // 建物LODの定期再振り分け
   updateCamera(dt);
@@ -2014,7 +2172,7 @@ function tick() {
     const info = KENNEY_CITY
       ? `建物 ${cityInfo ? cityInfo.count : 0} (近${_lodNearCount}/遠${_lodFarCount})`
       : `タイル ${tiles && tiles.group ? tiles.group.children.length : -1}`;
-    setStatus(`高度 ${Math.round(player.pos.y)}m / 速度上限 ${Math.round(flight.maxSpeed)} / ${info}`);
+    setStatus(`高度 ${Math.round(player.pos.y)}m / 速度上限 ${Math.round(flight.maxSpeed)} / ${info}${entryPrompt ? ' / ' + entryPrompt : ''}`);
   }
   renderer.render(scene, camera);
 }

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>プロシージャル配置の理論 — Room Editor / 都市生成</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { margin:0; background:#10141f; color:#dfe7f2; font-family:system-ui,sans-serif; line-height:1.85; }
+  main { max-width: 880px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size:26px; border-bottom:2px solid #3b5480; padding-bottom:10px; }
+  h2 { font-size:19px; color:#9fd0ff; margin-top:44px; border-left:4px solid #3b5480; padding-left:10px; }
+  h3 { font-size:15px; color:#ffd9a0; margin-top:26px; }
+  p, li { font-size:14px; color:#c9d4e3; }
+  code { background:#1c2436; color:#a8e0ff; padding:1px 6px; border-radius:4px; font-size:13px; }
+  pre { background:#151b2b; border:1px solid #263452; border-radius:8px; padding:14px 16px; overflow-x:auto; font-size:12.5px; line-height:1.6; color:#cfe2ff; }
+  .formula { background:#1a2133; border-left:4px solid #7fb3ff; padding:10px 16px; margin:14px 0; border-radius:0 8px 8px 0; font-family:Consolas,monospace; font-size:13.5px; color:#bfe0ff; }
+  .note { background:#242b1c; border-left:4px solid #b5cc6a; padding:8px 14px; font-size:13px; border-radius:0 8px 8px 0; }
+  table { border-collapse:collapse; margin:14px 0; font-size:13px; }
+  th,td { border:1px solid #2c3a58; padding:6px 12px; }
+  th { background:#1b2338; color:#9fd0ff; }
+  svg text { font-family:system-ui; }
+  .toc { background:#151b2b; border:1px solid #263452; border-radius:8px; padding:12px 24px; font-size:13px; }
+  .toc a { color:#8fc6ff; text-decoration:none; }
+</style>
+</head>
+<body>
+<main>
+<h1>プロシージャル配置の理論 — Room Editor と都市生成の仕組み</h1>
+<p>本資料は <code>lib/room-gen.js</code>（部屋＋家具）と、同じ設計思想の <code>lib/kenney-buildings.js</code>（都市の建物）が「どういう理論・式で物を配置しているか」をまとめたもの。</p>
+
+<div class="toc">
+<b>目次</b><br>
+<a href="#s1">1. 全体像：決定的プロシージャル生成</a><br>
+<a href="#s2">2. 乱数の理論：シード付きPRNG（mulberry32）</a><br>
+<a href="#s3">3. 座標系：セルグリッドと実寸変換</a><br>
+<a href="#s4">4. 外殻の生成：外周走査・ドア・窓（ベルヌーイ試行）</a><br>
+<a href="#s5">5. 占有グリッドと衝突判定（矩形AABB）</a><br>
+<a href="#s6">6. 家具配置：ルール表と貪欲法（greedy packing）</a><br>
+<a href="#s7">7. 向きと付属配置の式（前方ベクトル・スタック）</a><br>
+<a href="#s8">8. 応用：都市の建物配置（道路沿いオフセット・ゾーニング）</a><br>
+<a href="#s9">9. 用語集</a>
+</div>
+
+<h2 id="s1">1. 全体像：決定的プロシージャル生成</h2>
+<p>生成は「<b>シード → 乱数列 → ルール適用 → 配置リスト</b>」の一方向パイプライン。<b>同じ入力（type, w, d, seed, windowRate）なら必ず同じ部屋</b>が出る（＝決定的）。これにより：</p>
+<ul>
+  <li>保存が軽い：家具の全座標ではなく<b>パラメータだけ</b>保存しても再現できる</li>
+  <li>「🎲でガチャ → 気に入ったシードを保存」というワークフローが成立する</li>
+  <li>ネットワーク同期や検証（node でのテスト）が容易</li>
+</ul>
+<div class="formula">Room = G(type, w, d, seed, windowRate)　… G は純関数（副作用なし・three.js 非依存）</div>
+<p>生成順は「<b>動かせない物 → 大きい物 → 小さい物</b>」：外殻（床・壁）→ 壁付け大型家具 → 中央 → コーナー → ラグ小物。これは後述の貪欲法で衝突を避けるための定石（大物ほど置ける場所が少ないので先に確保する）。</p>
+
+<h2 id="s2">2. 乱数の理論：シード付きPRNG（mulberry32）</h2>
+<p><code>Math.random()</code> はシードを与えられないため使わない。代わりに <b>mulberry32</b>（32bit整数ハッシュを反復する擬似乱数生成器）を使う：</p>
+<pre>function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;              // 黄金比由来の増分（Weyl列）
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);       // xorshift + 乗算で撹拌
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;   // [0,1) へ正規化（÷2^32）
+  };
+}</pre>
+<p>状態は32bit整数1個。呼ぶたびに内部状態が進み、一様分布 [0,1) の値を返す。シードは事前に<b>Knuthの乗法ハッシュ</b>で撹拌して、連番シード（1,2,3…）でも似た部屋にならないようにする：</p>
+<div class="formula">rng = mulberry32( (seed × 2654435761) mod 2³² )　… 2654435761 ≈ 2³² / φ（黄金比）</div>
+<p>派生する基本ツール：</p>
+<div class="formula">
+一様整数：irange(a,b) = a + ⌊rng() × (b−a+1)⌋<br>
+一様選択：pick(arr) = arr[⌊rng() × len⌋]<br>
+確率イベント：rng() &lt; p なら発生（ベルヌーイ試行）
+</div>
+
+<h2 id="s3">3. 座標系：セルグリッドと実寸変換</h2>
+<p>部屋は <b>w × d のセル格子</b>で表す（1セル＝床タイル1枚）。ジェネレータはセル座標のみを扱い、<b>実寸（メートル）を知らない</b>。実寸換算はエディタ側が床タイルの実物を測って行う：</p>
+<div class="formula">
+TILE = max(bboxₓ, bbox_z) of floorFull.glb　（実測）<br>
+ワールド座標 = セル座標 × TILE
+</div>
+<p>この分離により、キットの縮尺が変わってもジェネレータは無修正で済む（<b>解像度非依存</b>）。同じ発想は都市生成（1セル=道路タイル1枚）や、plateau-fly の建物正規化（フットプリント実寸→スケール逆算）でも使っている。</p>
+
+<h2 id="s4">4. 外殻の生成：外周走査・ドア・窓</h2>
+<p>床は全セルに <code>floorFull</code> を敷く（二重ループ）。壁は<b>外周セルを4辺に分けて走査</b>し、辺ごとの向きベクトル表 <code>SIDE</code> に従って「セル中心から外側へ半セル」ずらした位置に置く：</p>
+<div class="formula">
+壁位置 = (x + dx·0.5, z + dz·0.5)、 (dx,dz) は辺の外向き法線<br>
+北: (0,−1) ry=0　東: (1,0) ry=−π/2　南: (0,1) ry=π　西: (−1,0) ry=π/2
+</div>
+<svg viewBox="0 0 360 200" width="360" style="background:#151b2b;border-radius:8px;display:block;margin:10px 0">
+  <g>
+    <!-- grid 4x3 -->
+    <g stroke="#2c3a58" fill="none">
+      <rect x="80" y="50" width="200" height="120"/>
+      <line x1="130" y1="50" x2="130" y2="170"/><line x1="180" y1="50" x2="180" y2="170"/><line x1="230" y1="50" x2="230" y2="170"/>
+      <line x1="80" y1="90" x2="280" y2="90"/><line x1="80" y1="130" x2="280" y2="130"/>
+    </g>
+    <!-- walls -->
+    <g stroke="#7fb3ff" stroke-width="4">
+      <line x1="80" y1="48" x2="280" y2="48"/><line x1="80" y1="172" x2="230" y2="172"/>
+      <line x1="78" y1="50" x2="78" y2="170"/><line x1="282" y1="50" x2="282" y2="170"/>
+    </g>
+    <line x1="230" y1="172" x2="280" y2="172" stroke="#ffd9a0" stroke-width="4"/>
+    <text x="236" y="188" fill="#ffd9a0" font-size="10">ドア（南面から一様選択）</text>
+    <text x="90" y="40" fill="#7fb3ff" font-size="10">壁＝セル中心から外へ 0.5 セル</text>
+    <circle cx="105" cy="150" r="3" fill="#b5cc6a"/><text x="90" y="145" fill="#b5cc6a" font-size="9">ドア前は予約(2)</text>
+  </g>
+</svg>
+<ul>
+  <li><b>ドア</b>：南面（手前）の辺セルから一様に1つ選び <code>wallDoorway(Wide)</code> に差し替える。ドアセルとその内側1セルを占有グリッドで「予約」し、家具で塞がないようにする（<b>クリアランス</b>）。</li>
+  <li><b>窓</b>：残りの各壁スロットで <code>rng() &lt; windowRate</code> の<b>ベルヌーイ試行</b>。成功なら窓壁に差し替え。期待窓数 ＝ 壁数 × windowRate。</li>
+  <li><b>四隅</b>：<code>wallCorner</code> を (−0.5,−0.5) など角の外側点に、90°ずつ回して置く。</li>
+</ul>
+
+<h2 id="s5">5. 占有グリッドと衝突判定（矩形AABB）</h2>
+<p>重なり防止は <b>w×d の Uint8Array</b>（0=空き / 1=占有 / 2=ドア前予約）で管理する。家具はフットプリント <code>fp=[fw,fd]</code>（セル数）の矩形として扱い、置けるかは全被覆セルの空き判定：</p>
+<pre>canPlace(x, z, fw, fd) =
+  0 ≤ x, z  かつ  x+fw ≤ w, z+fd ≤ d          … 部屋内
+  かつ ∀(i,j)∈[0..fw)×[0..fd): occ[z+j][x+i] == 0   … 全セル空き</pre>
+<p>置いたら <code>mark()</code> で全セルを1にする。これは<b>離散化した AABB（軸平行境界箱）判定</b>で、O(fw×fd) と高速。連続座標の当たり判定より粗いが、「家具は概ねセル単位」という前提では十分で、確実に非重複を保証できる。</p>
+<p>ラグ・ドアマットは <code>occupy:false</code> でグリッドに書き込まない＝<b>重なり許可レイヤー</b>（上にテーブルを置ける）。</p>
+
+<h2 id="s6">6. 家具配置：ルール表と貪欲法（greedy packing）</h2>
+<p>部屋タイプごとの配置は<b>宣言的なルール表</b>（データ）で持つ。1ルール＝「候補モデル群・置き方・個数範囲・フットプリント」：</p>
+<pre>{ models:['loungeSofa','loungeSofaLong'], place:'wall', count:[1,1], fp:[2,1] }
+{ models:['tableCoffee', …],              place:'center', count:[1,1] }
+{ models:['pottedPlant', …],              place:'corner', count:[0,2] }</pre>
+<p>コード（アルゴリズム）とデータ（部屋らしさ）が分離されているので、部屋タイプの追加・調整はルール表の編集だけで済む。配置は<b>貪欲法</b>：ルールを上から順に処理し、それぞれ候補位置を試して<b>最初に置けた場所で確定</b>（後戻りしない）。</p>
+<h3>place の種類と候補列挙</h3>
+<table>
+<tr><th>place</th><th>候補の作り方</th><th>向き ry</th></tr>
+<tr><td><b>wall</b></td><td>外周に接する内側セルを全列挙 → Fisher–Yates でシャッフル → 順に canPlace</td><td>壁の内向き法線（部屋の中心を向く）</td></tr>
+<tr><td><b>corner</b></td><td>四隅 (0,0)(w−1,0)(0,d−1)(w−1,d−1) をシャッフル</td><td>ランダム</td></tr>
+<tr><td><b>center</b></td><td>((w−fw)/2, (d−fd)/2) を最初に試行</td><td>0</td></tr>
+<tr><td><b>free</b></td><td>一様乱数の位置を最大14回試す（<b>棄却サンプリング</b>）</td><td>0</td></tr>
+</table>
+<p>壁付けでは、フットプリントを<b>壁に沿って回転</b>させる必要がある。北南の壁なら fp=[fw,fd] のまま、東西なら入れ替え：</p>
+<div class="formula">壁沿い footprint = alongX ? [fw, fd] : [fd, fw]　（90°回転で幅と奥行が入れ替わる）</div>
+<p>シャッフルは <b>Fisher–Yates</b>（一様なランダム順列。i を後ろから回し j∈[0..i] と交換）。これにより「壁のどこに置かれるか」がシードごとに変わり、かつ全位置が等確率で試される。</p>
+<div class="note"><b>なぜ貪欲法で十分か</b>：部屋の家具数（5〜12個）に対しセル数（20〜200）が十分多く、最適詰め込み（NP困難なパッキング問題）を解く必要がない。「置けなければそのルールを打ち切る」ことで、狭い部屋では自然に家具が減る＝破綻しない。</div>
+
+<h2 id="s7">7. 向きと付属配置の式</h2>
+<h3>前方1セル（デスクの椅子・テーブルの椅子）</h3>
+<p>親の向き ry から<b>前方ベクトル</b>を求め、1セル先に子を置き、子は親を向く（ry+π）：</p>
+<div class="formula">
+front = (sin ry, cos ry)　… y軸回転 ry の +Z 方向<br>
+子の位置 = 親 + front、子の向き = ry + π
+</div>
+<h3>台の上に載せる（stackOn）</h3>
+<p>TV・PC画面など。「載せる」は<b>y座標＝台の高さ</b>で表現し、高さはランタイムが台モデルの bbox から実測：</p>
+<div class="formula">y_子 = bboxHeight(stackOn モデル)　（例: televisionModern の y = cabinetTelevision の高さ）</div>
+<h3>テーブルの椅子（周回配置）</h3>
+<p>テーブル矩形の4辺中点の外側1セルを候補にし、シャッフル後に各候補を確率0.7で採用 → 椅子はテーブル中心を向く。個数・配置がシードごとに揺らぎ「生活感」が出る。</p>
+<h3>キッチンのカウンター列（系列生成）</h3>
+<p>単品配置ではなく<b>決まった系列</b>（冷蔵庫→カウンター→シンク→引き出し→コンロ→…）を北壁沿いに左から詰める。現実のキッチンは「並び」に意味があるため、乱数ではなく<b>文法（シーケンス）</b>で表現する方が自然になる。</p>
+
+<h2 id="s8">8. 応用：都市の建物配置（kenney-buildings.js）</h2>
+<p>同じ理論を街スケールに適用したのが plateau-fly の建物配置。違いは「壁沿い」が「<b>道路沿い</b>」になる点：</p>
+<h3>道路に沿った等間隔サンプリング</h3>
+<div class="formula">
+道路エッジ (A→B) を長さ L とすると、配置点数 n = ⌊L / spacing⌋<br>
+t = i/n (i=1..n−1) で線分を内分 → P(t) = A + (B−A)·t　（端点＝交差点は避ける）
+</div>
+<h3>道路からの後退（setback）と建物の向き</h3>
+<div class="formula">
+垂直ベクトル perp = (−dz, dx)　… 道路方向 (dx,dz) を90°回転<br>
+建物中心 = P(t) ± perp × setback<br>
+setback = 道路半幅 + フットプリント/2 × maxScale + 余白　… 車道を絶対に塞がない<br>
+建物の向き ry = atan2(−perp·side) … 正面が道路を向く
+</div>
+<h3>占有グリッド（部屋と同じ）</h3>
+<p>6mセルの疎な占有集合（Set&lt;"gx_gz"&gt;）に<b>フットプリント半径ぶんをマーク</b>し、建物同士の重なりを防ぐ。部屋の Uint8Array と同じ理論の、無限平面向け実装（ハッシュセット化）。</p>
+<h3>ゾーニング（中心距離による分類）</h3>
+<div class="formula">dist = √(x² + z²)　→　dist &lt; 500m: 高層 ／ &lt; 1100m: 中層 ／ それ以遠: 住宅</div>
+<p>さらにセル座標のハッシュでシードを作る <code>hash3(seed, gx, gz)</code> により、<b>建物1軒ごとに独立した決定的乱数</b>を持たせている（どの順で生成しても同じ結果になる＝順序非依存）。</p>
+
+<h2 id="s9">9. 用語集</h2>
+<table>
+<tr><th>用語</th><th>意味</th></tr>
+<tr><td>決定的生成</td><td>同じシードから常に同じ結果が出ること。保存・再現・テストの基盤</td></tr>
+<tr><td>PRNG</td><td>擬似乱数生成器。mulberry32 は32bit状態の軽量版</td></tr>
+<tr><td>ベルヌーイ試行</td><td>確率 p で成功するコイン投げ。窓の有無・椅子の間引きに使用</td></tr>
+<tr><td>棄却サンプリング</td><td>ランダム候補を出し、条件を満たすまで捨てて引き直す（上限つき）</td></tr>
+<tr><td>Fisher–Yates</td><td>一様なランダム順列を O(n) で作るシャッフル</td></tr>
+<tr><td>貪欲法</td><td>局所的に最初に成立した解を採用し後戻りしない。高速で破綻しにくい</td></tr>
+<tr><td>AABB</td><td>軸平行の矩形（箱）。占有判定を単純な範囲比較にできる</td></tr>
+<tr><td>フットプリント</td><td>物が占める床面のセル矩形 [幅, 奥行]</td></tr>
+<tr><td>クリアランス</td><td>ドア前など「機能のために空けておく」予約領域</td></tr>
+<tr><td>ゾーニング</td><td>位置（中心距離など）で配置ルールを切り替える区画化</td></tr>
+</table>
+
+<p style="margin-top:40px;color:#7d8ba1;font-size:12px">対象コード: lib/room-gen.js / lib/kenney-buildings.js / lib/city-gen.js ・ アセット: Kenney Furniture Kit (CC0)</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Room Editor — 部屋の手続き生成</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #101522; color: #e6ecf5; font-family: system-ui, sans-serif; }
+    #app { position: fixed; inset: 0; }
+    #app canvas { display: block; }
+    #topbar { position: fixed; top: 8px; left: 8px; z-index: 20; display: flex; gap: 8px; align-items: center; }
+    #topbar a { background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
+    #panel {
+      position: fixed; top: 8px; right: 8px; z-index: 20; width: 250px;
+      background: rgba(12,16,28,0.92); border: 1px solid #2a3756; border-radius: 8px;
+      padding: 12px; font-size: 12px; display: flex; flex-direction: column; gap: 8px;
+    }
+    #panel h3 { margin: 0 0 2px; font-size: 13px; color: #9fd0ff; }
+    #panel label { display: flex; justify-content: space-between; align-items: center; gap: 6px; color: #aabbd0; }
+    #panel input[type=range] { flex: 1; }
+    #panel select, #panel input[type=text], #panel input[type=number] {
+      background: #1a2438; color: #e6ecf5; border: 1px solid #2a3756; border-radius: 4px; padding: 4px 6px; font-size: 12px; width: 100%;
+    }
+    #panel button {
+      background: #2b4a80; color: #fff; border: none; border-radius: 4px; padding: 7px 10px; font-size: 12px; cursor: pointer;
+    }
+    #panel button:hover { background: #3a5fa0; }
+    #panel button.sub { background: #24314f; }
+    .row { display: flex; gap: 6px; }
+    .row > * { flex: 1; }
+    .val { color: #e6ecf5; min-width: 30px; text-align: right; }
+    #hint { position: fixed; bottom: 8px; left: 8px; z-index: 20; background: rgba(0,0,0,0.5); color: #9ab; padding: 6px 10px; border-radius: 4px; font-size: 11px; line-height: 1.6; }
+    #thumbs { max-height: 210px; overflow-y: auto; background: #12182a; border: 1px solid #263452; border-radius: 6px; padding: 4px; display: flex; flex-wrap: wrap; gap: 3px; align-content: flex-start; }
+    #thumbs .cat { width: 100%; font-size: 10px; color: #8fa9cc; margin: 4px 2px 1px; }
+    #thumbs img { width: 44px; height: 44px; border-radius: 4px; background: #1c2436; cursor: pointer; border: 1px solid transparent; }
+    #thumbs img:hover { border-color: #5580cc; background: #24304a; }
+    #status { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20; background: rgba(0,0,0,0.55); color: #cfe; padding: 6px 12px; border-radius: 4px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="topbar"><a href="../hub/">← 一覧</a></div>
+  <div id="status">読み込み中…</div>
+  <div id="panel">
+    <h3>部屋の生成</h3>
+    <label>タイプ<select id="room-type"></select></label>
+    <label>幅 <input type="range" id="room-w" min="3" max="20" value="7"><span class="val" id="room-w-val">7</span></label>
+    <label>奥行 <input type="range" id="room-d" min="3" max="20" value="6"><span class="val" id="room-d-val">6</span></label>
+    <label>窓率 <input type="range" id="room-win" min="0" max="100" value="35"><span class="val" id="room-win-val">0.35</span></label>
+    <label>シード <input type="number" id="room-seed" value="1" style="width:90px"></label>
+    <label>階数(house) <select id="room-floors"><option value="1">1階</option><option value="2">2階建て</option></select></label>
+    <div class="row"><button id="btn-gen">生成</button><button id="btn-dice" class="sub">🎲 ランダム</button></div>
+    <h3>手動配置（クリックで追加）</h3>
+    <div id="thumbs"></div>
+    <div class="row"><button id="btn-move" class="sub">移動 (G)</button><button id="btn-rot" class="sub">回転 (R)</button><button id="btn-del" class="sub">削除</button></div>
+    <h3>ユニット（複合パーツ）</h3>
+    <select id="unit-list"></select>
+    <div class="row"><button id="btn-unit-place">配置</button><button id="btn-unit-edit" class="sub">編集</button></div>
+    <div class="row"><button id="btn-unit-new" class="sub">新規作成</button><button id="btn-unit-save" class="sub">ユニット保存</button></div>
+    <div id="unit-tags" style="display:none">
+      <input type="text" id="unit-name" placeholder="ユニット名 (例: deskset)">
+      <label>出現部屋（複数可）
+        <select id="unit-rooms" multiple size="4" style="width:130px"></select>
+      </label>
+      <label>出現位置
+        <select id="unit-place">
+          <option value="">自動配置しない</option>
+          <option value="wall">壁ぎわ</option>
+          <option value="corner">コーナー</option>
+          <option value="center">中央</option>
+          <option value="free">どこでも</option>
+        </select>
+      </label>
+    </div>
+    <button id="btn-unit-exit" class="sub" style="display:none">← 部屋に戻る</button>
+    <h3>保存 / 読込</h3>
+    <input type="text" id="save-name" placeholder="room名 (例: myroom)">
+    <div class="row"><button id="btn-save">保存</button><select id="load-list"></select></div>
+    <button id="btn-load" class="sub">読み込み</button>
+  </div>
+  <div id="hint"><b>クリック</b>家具を選択 / <b>G</b>移動・<b>R</b>回転 切替 / <b>Delete</b>削除 / ドラッグで視点</div>
+  <script type="module" src="./room-editor.js"></script>
+</body>
+</html>

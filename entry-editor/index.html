@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Entry Editor — 建物の玄関・窓マーカー</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #101522; color: #e6ecf5; font-family: system-ui, sans-serif; }
+    #app { position: fixed; inset: 0; }
+    #topbar { position: fixed; top: 8px; left: 8px; z-index: 20; }
+    #topbar a { background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
+    #panel { position: fixed; top: 8px; right: 8px; z-index: 20; width: 240px; background: rgba(12,16,28,0.92); border: 1px solid #2a3756; border-radius: 8px; padding: 12px; font-size: 12px; display: flex; flex-direction: column; gap: 8px; }
+    #panel h3 { margin: 0; font-size: 13px; color: #9fd0ff; }
+    select, button { background: #1a2438; color: #e6ecf5; border: 1px solid #2a3756; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
+    button { background: #2b4a80; border: none; cursor: pointer; }
+    button.sub { background: #24314f; }
+    .row { display: flex; gap: 6px; } .row > * { flex: 1; }
+    #status { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20; background: rgba(0,0,0,0.55); color: #cfe; padding: 6px 12px; border-radius: 4px; font-size: 12px; }
+    #hint { position: fixed; bottom: 8px; left: 8px; z-index: 20; background: rgba(0,0,0,0.5); color: #9ab; padding: 6px 10px; border-radius: 4px; font-size: 11px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="topbar"><a href="../hub/">← 一覧</a></div>
+  <div id="status">読み込み中…</div>
+  <div id="panel">
+    <h3>建物モデル</h3>
+    <select id="model-list" size="10"></select>
+    <h3>マーカー種別</h3>
+    <div class="row">
+      <select id="marker-kind"><option value="door">玄関 (橙)</option><option value="window">窓 (水色)</option></select>
+      <button id="btn-del" class="sub">選択削除</button>
+    </div>
+    <button id="btn-save">全モデル分を保存</button>
+  </div>
+  <div id="hint"><b>建物クリック</b>でマーカー設置 / <b>マーカークリック</b>で選択→削除 / ドラッグで視点</div>
+  <script type="module" src="./entry-editor.js"></script>
+</body>
+</html>
