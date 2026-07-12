@@ -32,7 +32,7 @@ fs.writeFileSync(path.join(dest, 'plateau-fly.js'), jsSrc);
 console.log('copied: plateau-fly.js (paths rewritten)');
 
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'kenney-buildings.js', 'room-gen.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js']) {
+for (const f of ['vrm-cloth.js', 'kenney-buildings.js', 'room-gen.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js']) {
   const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8').replace(/\.\.\/lib\//g, './');
   fs.writeFileSync(path.join(dest, f), libSrc);
   console.log(`copied: ${f}`);
@@ -86,6 +86,14 @@ for (const v of vrmaSet) {
   fs.copyFileSync(src, path.join(vrmaDest, v));
   console.log(`copied: vrma/${v}`);
 }
+// セリフ（ken住民）。speech-set.js は lib 相対 '../speech/' を見るので dist ルートに speech/ を置く
+const spSrc = path.join(pub, 'speech', 'ken.speech.json');
+if (fs.existsSync(spSrc)) {
+  fs.mkdirSync(path.join(dest, 'speech'), { recursive: true });
+  fs.copyFileSync(spSrc, path.join(dest, 'speech', 'ken.speech.json'));
+  console.log('copied: speech/ken.speech.json');
+}
+
 // ラグドール調整値（ken）
 const ragSrc = path.join(pub, 'ragdoll', 'ken.ragdoll.json');
 if (fs.existsSync(ragSrc)) {

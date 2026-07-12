@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "id": "ken",
+ "displayName": "住民",
+ "states": {
+  "idle": {
+   "mode": "loop", "intervalMs": 8000, "charsPerSecond": 8,
+   "lines": ["いい天気だなあ", "腹へったな…", "今日も平和だ", "散歩日和だね"]
+  },
+  "commute": {
+   "mode": "loop", "intervalMs": 9000, "charsPerSecond": 9,
+   "lines": ["遅刻しちゃう…", "仕事いくかー", "早く帰ってゲームしよ", "今日の会議いやだなあ", "定時で帰るぞ…"]
+  },
+  "flee": {
+   "mode": "loop", "intervalMs": 1200, "charsPerSecond": 14,
+   "lines": ["うわあああ！", "なんだあいつ！？", "にげろーー！", "助けてくれ！", "化け物だ！！"]
+  }
+ },
+ "events": {
+  "grabbed": { "lines": ["はなせーっ！", "うわっ、何する！？", "たすけて！"] },
+  "thrown": { "lines": ["ぎゃあああ！", "うわーーっ！"] },
+  "witness": { "lines": ["ひ、人が襲われてる！", "け、警察ーー！！", "なんてことを…！"] },
+  "predation": { "lines": ["や、やめてくれ…！", "ひいいっ…"] }
+ }
+}
