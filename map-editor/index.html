@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Map Editor — 地形・道路・建物（脱PLATEAU）</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #101522; color: #e6ecf5; font-family: system-ui, sans-serif; }
+    #app { position: fixed; inset: 0; }
+    #topbar { position: fixed; top: 8px; left: 8px; z-index: 20; }
+    #topbar a { background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
+    #status { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20; background: rgba(0,0,0,0.55); color: #cfe; padding: 6px 12px; border-radius: 4px; font-size: 12px; }
+    #panel { position: fixed; top: 8px; right: 8px; z-index: 20; width: 250px; background: rgba(12,16,28,0.92); border: 1px solid #2a3756; border-radius: 8px; padding: 12px; font-size: 12px; display: flex; flex-direction: column; gap: 8px; max-height: calc(100% - 16px); overflow-y: auto; }
+    #panel h3 { margin: 0 0 2px; font-size: 13px; color: #9fd0ff; }
+    #panel label { display: flex; justify-content: space-between; align-items: center; gap: 6px; color: #aabbd0; }
+    #panel input[type=range] { flex: 1; }
+    #panel select, #panel input[type=text], #panel input[type=number] { background: #1a2438; color: #e6ecf5; border: 1px solid #2a3756; border-radius: 4px; padding: 4px 6px; font-size: 12px; width: 100%; }
+    #panel button { background: #2b4a80; color: #fff; border: none; border-radius: 4px; padding: 7px 10px; font-size: 12px; cursor: pointer; }
+    #panel button:hover { background: #3a5fa0; }
+    #panel button.sub { background: #24314f; }
+    #panel button.on { background: #3f6f3f; }
+    .row { display: flex; gap: 6px; } .row > * { flex: 1; }
+    .val { color: #e6ecf5; min-width: 38px; text-align: right; }
+    #hint { position: fixed; bottom: 8px; left: 8px; z-index: 20; background: rgba(0,0,0,0.5); color: #9ab; padding: 6px 10px; border-radius: 4px; font-size: 11px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="topbar"><a href="../hub/">← 一覧</a></div>
+  <div id="status">読み込み中…</div>
+  <div id="panel">
+    <h3>新規地形</h3>
+    <label>シード <input type="number" id="gen-seed" value="1" style="width:80px"></label>
+    <label>起伏(m) <input type="range" id="gen-amp" min="0" max="600" value="260"><span class="val" id="gen-amp-val">260</span></label>
+    <div class="row"><button id="btn-flat" class="sub">フラット</button><button id="btn-noise">ノイズ生成</button></div>
+    <h3>地形ブラシ（左ドラッグ）</h3>
+    <div class="row">
+      <button id="tool-raise" class="on">盛り上げ</button>
+      <button id="tool-lower" class="sub">掘り下げ</button>
+    </div>
+    <div class="row">
+      <button id="tool-smooth" class="sub">なだらか</button>
+      <button id="tool-flatten" class="sub">平坦化</button>
+    </div>
+    <label>半径(m) <input type="range" id="brush-r" min="15" max="500" value="120"><span class="val" id="brush-r-val">120</span></label>
+    <label>強さ <input type="range" id="brush-s" min="1" max="100" value="40"><span class="val" id="brush-s-val">40</span></label>
+    <h3>ペイント</h3>
+    <button id="btn-autocolor">自動配色（標高/傾斜）</button>
+    <label>平地→山(m) <input type="range" id="ac-flat" min="0" max="300" value="80"><span class="val" id="ac-flat-val">80</span></label>
+    <label>山しきい(m) <input type="range" id="ac-hill" min="20" max="500" value="120"><span class="val" id="ac-hill-val">120</span></label>
+    <label>急斜面 <input type="range" id="ac-steep" min="10" max="120" value="55"><span class="val" id="ac-steep-val">0.55</span></label>
+    <div class="row">
+      <button id="tool-paint" class="sub">色ブラシ</button>
+      <input type="color" id="paint-color" value="#4f7f47" style="height:30px;padding:1px;background:#1a2438;border:1px solid #2a3756;border-radius:4px;">
+    </div>
+    <h3>道路（スプライン）</h3>
+    <div class="row">
+      <button id="btn-road-mode" class="sub">道路編集モード</button>
+      <button id="btn-road-new" class="sub">＋新しい道路</button>
+    </div>
+    <div class="row">
+      <button id="btn-road-delpt" class="sub">選択点を削除</button>
+      <button id="btn-road-delroad" class="sub">道路ごと削除</button>
+    </div>
+    <button id="btn-road-import" class="sub">既存のOSM道路を取り込んで編集</button>
+    <button id="btn-road-flatten" class="sub">道路下の地形を均す（埋まり解消）</button>
+    <div style="font-size:10px;color:#667;">クリックで点を追加（続けて引ける）／点をドラッグで移動（他の道路の点に吸着＝交差点）／右クリックで引き終わり。高さは常に地形に追従。</div>
+    <h3>建物（差分編集）</h3>
+    <div class="row">
+      <button id="btn-bld-mode" class="sub">建物編集モード</button>
+      <button id="btn-bld-del" class="sub">選択を削除</button>
+    </div>
+    <div class="row">
+      <button id="btn-bld-add-house" class="sub">＋住宅</button>
+      <button id="btn-bld-add-mid" class="sub">＋中層</button>
+      <button id="btn-bld-add-tower" class="sub">＋高層</button>
+    </div>
+    <div style="font-size:10px;color:#667;">箱クリック=選択→ドラッグ移動 / <b>R</b>回転 / <b>Del</b>削除。＋ボタン→地形クリックで設置。自動配置への差分だけ保存されるので、道路確定後に調整推奨。</div>
+    <h3>水面</h3>
+    <div class="row">
+      <button id="btn-water-mode" class="sub">水面編集モード</button>
+      <button id="btn-water-add" class="sub">＋水面</button>
+    </div>
+    <div id="water-opts" style="display:none;">
+      <label>幅 <input type="range" id="water-w" min="20" max="9000" value="600"><span class="val" id="water-w-val">600</span></label>
+      <label>奥行 <input type="range" id="water-d" min="20" max="9000" value="450"><span class="val" id="water-d-val">450</span></label>
+      <label>水位 <input type="range" id="water-lv" min="-50" max="400" step="0.5" value="10"><span class="val" id="water-lv-val">10</span></label>
+      <button id="btn-water-del" class="sub">この水面を削除</button>
+    </div>
+    <div style="font-size:10px;color:#667;">＋水面→地形クリックで設置（水位=その場の高さ+1m）。クリック選択→ドラッグ移動、スライダでサイズ/水位。</div>
+    <h3>町プレビュー</h3>
+    <button id="btn-town" class="sub">道路＋建物を地形に載せる</button>
+    <div style="font-size:10px;color:#667;">自作道路があればそれを、無ければOSM道路を使用。建物はゲームと同じ配置ロジック（箱表示）。ブラシや道路編集に追従します。</div>
+    <h3>保存 / 読込</h3>
+    <input type="text" id="save-name" placeholder="map名 (例: mytown)">
+    <div class="row"><button id="btn-save">保存</button><select id="load-list"></select></div>
+    <button id="btn-load" class="sub">読み込み</button>
+    <div style="font-size:10px;color:#667;">ゲームで見る: plateau-fly/?map=名前（地形のみ・道路は従来）</div>
+  </div>
+  <div id="hint"><b>左ドラッグ</b>ブラシ適用（Shift=逆） / <b>右ドラッグ</b>視点回転 / <b>ホイール</b>ズーム / <b>中ドラッグ</b>パン</div>
+  <script type="module" src="./map-editor.js"></script>
+</body>
+</html>

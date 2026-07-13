@@ -74,12 +74,27 @@
       </label>
     </div>
     <button id="btn-unit-exit" class="sub" style="display:none">← 部屋に戻る</button>
+    <h3>生活プレビュー</h3>
+    <button id="btn-life">▶ プレビュー開始（NPCが生活する）</button>
+    <label>時刻 <input type="range" id="life-clock" min="0" max="23.99" step="0.05" value="6.4"><span class="val" id="life-clock-val">06:24</span></label>
+    <label>速度
+      <select id="life-speed">
+        <option value="0">停止</option>
+        <option value="120">x120</option>
+        <option value="480" selected>x480（1日=3分）</option>
+        <option value="1440">x1440（1日=1分）</option>
+      </select>
+    </label>
+    <div style="color:#ffd890;" id="life-action">—</div>
+    <div id="life-anims" style="display:flex;flex-direction:column;gap:4px;"></div>
+    <button id="btn-life-anims-save" class="sub">アニメ割当を保存（npc/furniture-anims.json）</button>
     <h3>保存 / 読込</h3>
     <input type="text" id="save-name" placeholder="room名 (例: myroom)">
     <div class="row"><button id="btn-save">保存</button><select id="load-list"></select></div>
     <button id="btn-load" class="sub">読み込み</button>
   </div>
-  <div id="hint"><b>クリック</b>家具を選択 / <b>G</b>移動・<b>R</b>回転 切替 / <b>Delete</b>削除 / ドラッグで視点</div>
+  <div id="hint"><b>クリック</b>家具を選択 / <b>G</b>移動・<b>R</b>回転 切替 / <b>Delete</b>削除 / ドラッグで視点 / <b>生活プレビュー</b>でNPCが1日のスケジュールで動く</div>
+  <div id="life-label" style="position:fixed;z-index:19;display:none;background:rgba(12,16,28,0.85);border:1px solid #2a3756;border-radius:10px;padding:3px 10px;font-size:12px;color:#ffe;pointer-events:none;transform:translate(-50%,-100%);"></div>
   <script type="module" src="./room-editor.js"></script>
 </body>
 </html>

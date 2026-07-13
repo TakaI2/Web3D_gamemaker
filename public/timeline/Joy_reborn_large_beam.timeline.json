@@ -4,6 +4,8 @@
   "durationFrames": 87,
   "trimIn": 0,
   "trimOut": 87,
+  "loopStart": 24,
+  "loopEnd": 44,
   "tracks": [
     {
       "kind": "effect",

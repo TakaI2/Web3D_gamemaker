@@ -45,7 +45,7 @@ const cfg = {
   player: { mouthBone: 'head', mouthOffset: [0, -0.03, 0.09] },
   npc:    { biteBone: 'neck',  biteOffset: [-0.03, 0.02, 0.03], mode: 'anim' },   // mode: 'anim'|'ragdoll'
   align:  { pos: [0, 0, 0.02], rotDeg: [0, 180, 0], lock: true, blendIn: 0.15, blendOut: 0.2 },
-  anim:   { playerVrma: '', victimVrma: '', fps: FPS, trimIn: 0, trimOut: 0, loopVictim: true, sound: '' },
+  anim:   { playerVrma: '', victimVrma: '', fps: FPS, trimIn: 0, trimOut: 0, loopStart: null, loopEnd: null, eatTime: 4.5, loopVictim: true, sound: '' },
 };
 
 // ── キーフレーム（口/噛点/アラインをタイムラインで変化。cloth-preview 風。線形補間）──
@@ -163,6 +163,12 @@ function drawTimeline() {
   ctx.clearRect(0, 0, cssW, cssH);
   ctx.fillStyle = '#0d0f22'; ctx.fillRect(0, 0, cssW, cssH);
   ctx.fillStyle = 'rgba(60,200,150,0.08)'; ctx.fillRect(tlF2X(cfg.anim.trimIn), 0, Math.max(0, cfg.anim.trimOut - cfg.anim.trimIn) * tlPxF, cssH);
+  if (cfg.anim.loopStart != null && cfg.anim.loopEnd != null) {   // 部分ループ帯（橙）
+    ctx.fillStyle = 'rgba(232,163,61,0.14)'; ctx.fillRect(tlF2X(cfg.anim.loopStart), 0, Math.max(0, cfg.anim.loopEnd - cfg.anim.loopStart) * tlPxF, cssH);
+    ctx.strokeStyle = '#e8a33d';
+    ctx.beginPath(); ctx.moveTo(tlF2X(cfg.anim.loopStart) + 0.5, 0); ctx.lineTo(tlF2X(cfg.anim.loopStart) + 0.5, cssH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(tlF2X(cfg.anim.loopEnd) - 0.5, 0); ctx.lineTo(tlF2X(cfg.anim.loopEnd) - 0.5, cssH); ctx.stroke();
+  }
   ctx.font = '10px system-ui'; ctx.textBaseline = 'middle';
   const step = Math.max(1, Math.round(55 / tlPxF / 5) * 5);   // 目盛りは約55px間隔（5の倍数）
   for (let f = 0; f <= tf; f += step) { const x = tlF2X(f); if (x < TL_HEADER - 1 || x > cssW) continue; ctx.strokeStyle = '#20203a'; ctx.beginPath(); ctx.moveTo(x, TL_RULER); ctx.lineTo(x, cssH); ctx.stroke(); }
@@ -640,6 +646,9 @@ function applyConfig(c) {
   }
   if (c.anim) {
     Object.assign(cfg.anim, { fps: c.anim.fps ?? FPS, trimIn: c.anim.trimIn ?? 0, trimOut: c.anim.trimOut ?? 0, loopVictim: c.anim.loopVictim ?? true });
+    cfg.anim.loopStart = Number.isFinite(c.anim.loopStart) ? c.anim.loopStart : null;
+    cfg.anim.loopEnd = Number.isFinite(c.anim.loopEnd) ? c.anim.loopEnd : null;
+    cfg.anim.eatTime = (c.anim.eatTime > 0) ? c.anim.eatTime : 4.5;
     cfg.anim.playerVrma = c.anim.playerVrma || '';
     cfg.anim.victimVrma = c.anim.victimVrma || '';
     cfg.anim.sound = c.anim.sound || '';
@@ -648,6 +657,8 @@ function applyConfig(c) {
   populateBoneSelects();
   syncOffsetSliders('mouth'); syncOffsetSliders('bite'); syncAlignSliders();
   document.getElementById('cb-loop-victim').checked = cfg.anim.loopVictim;
+  updateLoopLabel();
+  { const e = document.getElementById('eat-time'); if (e) e.value = String(cfg.anim.eatTime); }
   { const s = document.getElementById('anim-sound'); if (s) s.value = cfg.anim.sound || ''; }
   loadTracks(c.tracks);   // キーフレーム（あれば）
   loadNudges(c.nudges);   // 小突き（あれば）
@@ -664,8 +675,9 @@ function buildConfigJson() {
     player: { target: player.name || '', mouthBone: cfg.player.mouthBone, mouthOffset: cfg.player.mouthOffset.slice() },
     npc: { biteBone: cfg.npc.biteBone, biteOffset: cfg.npc.biteOffset.slice(), mode: cfg.npc.mode },
     align: { pos: cfg.align.pos.slice(), rotEuler: cfg.align.rotDeg.slice(), lock: cfg.align.lock, blendIn: cfg.align.blendIn, blendOut: cfg.align.blendOut },
-    anim: { playerVrma: cfg.anim.playerVrma, victimVrma: cfg.anim.victimVrma, fps: FPS, trimIn: cfg.anim.trimIn, trimOut: cfg.anim.trimOut, loopVictim: cfg.anim.loopVictim, sound: cfg.anim.sound },
+    anim: { playerVrma: cfg.anim.playerVrma, victimVrma: cfg.anim.victimVrma, fps: FPS, trimIn: cfg.anim.trimIn, trimOut: cfg.anim.trimOut, loopVictim: cfg.anim.loopVictim, sound: cfg.anim.sound, eatTime: cfg.anim.eatTime },
   };
+  if (cfg.anim.loopStart != null && cfg.anim.loopEnd != null) { out.anim.loopStart = cfg.anim.loopStart; out.anim.loopEnd = cfg.anim.loopEnd; }
   const tr = serializeTracks();
   if (tr) out.tracks = tr;   // 口/噛点/アラインのキーフレーム
   if (biteNudges.length) out.nudges = biteNudges.map(n => ({ f: n.f, bone: n.bone, dir: n.dir.slice(), strength: n.strength }));
@@ -685,6 +697,10 @@ function updateFrameLabel() {
   document.getElementById('scrub').value = String(Math.round(playTime * FPS));
 }
 function updateTrimLabel() { document.getElementById('trim-lbl').textContent = `${cfg.anim.trimIn}–${cfg.anim.trimOut}`; }
+function updateLoopLabel() {
+  const el = document.getElementById('loop-lbl');
+  if (el) el.textContent = (cfg.anim.loopStart != null && cfg.anim.loopEnd != null) ? `${cfg.anim.loopStart} ↻ ${cfg.anim.loopEnd}` : 'なし';
+}
 
 function bindSlider(id, apply, fmt) {
   const sl = document.getElementById(id), vl = document.getElementById(id + '-val');
@@ -752,6 +768,19 @@ function setupUI() {
   document.getElementById('btn-in').addEventListener('click', () => { cfg.anim.trimIn = Math.min(Math.round(playTime * FPS), cfg.anim.trimOut - 1); updateTrimLabel(); });
   document.getElementById('btn-out').addEventListener('click', () => { cfg.anim.trimOut = Math.max(Math.round(playTime * FPS), cfg.anim.trimIn + 1); updateTrimLabel(); });
   document.getElementById('btn-trim-reset').addEventListener('click', () => { cfg.anim.trimIn = 0; cfg.anim.trimOut = totalFrames(); updateTrimLabel(); });
+  // 部分ループ
+  document.getElementById('btn-loop-start').addEventListener('click', () => {
+    cfg.anim.loopStart = Math.max(0, Math.round(playTime * FPS));
+    if (cfg.anim.loopEnd == null || cfg.anim.loopEnd <= cfg.anim.loopStart) cfg.anim.loopEnd = cfg.anim.trimOut || totalFrames();
+    updateLoopLabel();
+  });
+  document.getElementById('btn-loop-end').addEventListener('click', () => {
+    cfg.anim.loopEnd = Math.max(1, Math.round(playTime * FPS));
+    if (cfg.anim.loopStart == null || cfg.anim.loopStart >= cfg.anim.loopEnd) cfg.anim.loopStart = Math.max(0, cfg.anim.loopEnd - 1);
+    updateLoopLabel();
+  });
+  document.getElementById('btn-loop-clear').addEventListener('click', () => { cfg.anim.loopStart = null; cfg.anim.loopEnd = null; updateLoopLabel(); });
+  { const e = document.getElementById('eat-time'); if (e) e.addEventListener('change', () => { const v = parseFloat(e.value); if (v > 0) cfg.anim.eatTime = v; }); }
 
   // 口 / 噛みつき点
   document.getElementById('mouth-bone').addEventListener('change', e => { cfg.player.mouthBone = e.target.value; });
@@ -842,7 +871,9 @@ function render() {
   if (playing && masterDur() > 0) {
     const inT = cfg.anim.trimIn / FPS, outT = cfg.anim.trimOut / FPS;
     playTime += dt * speed;
-    if (playTime >= outT - 1e-4) { if (loop) playTime = inT; else { playTime = outT; playing = false; updatePlayButtons(); } }
+    const lpS = cfg.anim.loopStart, lpE = cfg.anim.loopEnd;
+    if (lpS != null && lpE != null && lpE > lpS && playTime >= lpE / FPS - 1e-4) playTime = lpS / FPS;   // 部分ループ（ゲームと同じ動き）
+    else if (playTime >= outT - 1e-4) { if (loop) playTime = inT; else { playTime = outT; playing = false; updatePlayButtons(); } }
     updateFrameLabel();
   }
 

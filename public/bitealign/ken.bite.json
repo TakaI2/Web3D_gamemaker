@@ -41,6 +41,9 @@
     "fps": 30,
     "trimIn": 0,
     "trimOut": 104,
+    "loopStart": 75,
+    "loopEnd": 104,
+    "eatTime": 6.5,
     "loopVictim": true,
     "sound": ""
   },

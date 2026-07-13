@@ -203,6 +203,17 @@
         <button id="btn-trim-out" title="現在フレームを Out に設定">Out=現在 ⟧</button>
         <button id="btn-trim-reset" title="トリムを全体に戻す">全体</button>
       </div>
+      <div class="row" style="margin-top:4px;">
+        <label>部分ループ</label>
+        <span id="lbl-loop" style="color:#e8a33d;font-size:12px;font-variant-numeric:tabular-nums;">なし</span>
+      </div>
+      <div style="font-size:10px;color:#667;margin-bottom:4px;">ゲーム側が保持再生する間（チャージビーム照射中など）この区間を繰り返します。</div>
+      <div class="row-wrap">
+        <button id="btn-loop-start" title="現在フレームをループ開始に設定">⟬ 開始=現在</button>
+        <button id="btn-loop-end" title="現在フレームをループ終了に設定">終了=現在 ⟭</button>
+        <button id="btn-loop-clear" title="部分ループを解除">解除</button>
+        <label style="width:auto;"><input type="checkbox" id="cb-loop-preview"> ループ再生</label>
+      </div>
     </div>
 
     <!-- Cloth (mantle) -->

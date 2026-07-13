@@ -45,7 +45,9 @@ let currentVrmaName = '';   // public/vrma 基準のファイル名。timeline.j
 const timeline = {
   fps: 30, durationFrames: 90, currentFrame: 0,
   trimIn: 0, trimOut: 90, speed: 1,
+  loopStart: null, loopEnd: null,   // 部分ループ区間（ゲーム側の保持再生で繰り返す）。null=なし
 };
+let loopPreview = false;            // チェックONで [loopStart,loopEnd] を繰り返しプレビュー
 let lastTlName = '';
 let lastBundleName = '';
 let otherTracks = [];   // 読み込んだ effect 以外のトラック（grip/blendShape等）を保持して再保存時に温存
@@ -1147,8 +1149,23 @@ function renderTimeline() {
   ctx.beginPath(); ctx.moveTo(0, RULER_H - 0.5); ctx.lineTo(W, RULER_H - 0.5); ctx.stroke();
 
   drawTrim(ctx, W, H);
+  drawLoopRange(ctx, W, H);
   drawAudioCues(ctx, W);
   drawPlayhead(ctx, W, H);
+}
+
+function drawLoopRange(ctx, W, H) {
+  if (timeline.loopStart == null || timeline.loopEnd == null) return;
+  const xS = frameToX(timeline.loopStart), xE = frameToX(timeline.loopEnd);
+  const x0 = Math.max(xS, HEADER_W), x1 = Math.min(xE, W);
+  if (x1 <= x0) return;
+  ctx.fillStyle = 'rgba(232,163,61,0.12)';
+  ctx.fillRect(x0, RULER_H, x1 - x0, H - RULER_H);
+  ctx.strokeStyle = '#e8a33d'; ctx.lineWidth = 1.5;
+  if (xS >= HEADER_W && xS <= W) { ctx.beginPath(); ctx.moveTo(xS + 0.5, RULER_H); ctx.lineTo(xS + 0.5, H); ctx.stroke(); }
+  if (xE >= HEADER_W && xE <= W) { ctx.beginPath(); ctx.moveTo(xE - 0.5, RULER_H); ctx.lineTo(xE - 0.5, H); ctx.stroke(); }
+  ctx.fillStyle = '#e8a33d'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  if (x0 + 24 < x1) ctx.fillText('↻', x0 + 4, RULER_H + 11);
 }
 
 function drawTrim(ctx, W, H) {
@@ -1312,6 +1329,7 @@ function exportTimeline() {
   }
   for (const cue of audioCues) tracks.push({ kind: 'audio', id: cue.id, src: cue.src, frame: cue.frame, volume: cue.volume, name: cue.name });
   const out = { version: 2, fps: timeline.fps, durationFrames: timeline.durationFrames, trimIn: timeline.trimIn, trimOut: timeline.trimOut, tracks };
+  if (timeline.loopStart != null && timeline.loopEnd != null) { out.loopStart = timeline.loopStart; out.loopEnd = timeline.loopEnd; }
   if (timeline.speed && timeline.speed !== 1) out.speed = timeline.speed;
   if (currentVrmaName) out.vrma = currentVrmaName;
   return out;
@@ -1335,6 +1353,11 @@ function importTimeline(json) {
   }
   timeline.trimIn = Number.isFinite(json.trimIn) ? Math.max(0, Math.min(json.trimIn, timeline.durationFrames)) : 0;
   timeline.trimOut = Number.isFinite(json.trimOut) ? Math.max(timeline.trimIn + 1, Math.min(json.trimOut, timeline.durationFrames)) : timeline.durationFrames;
+  if (Number.isFinite(json.loopStart) && Number.isFinite(json.loopEnd)) {
+    timeline.loopStart = Math.max(0, Math.min(json.loopStart, timeline.durationFrames - 1));
+    timeline.loopEnd = Math.max(timeline.loopStart + 1, Math.min(json.loopEnd, timeline.durationFrames));
+  } else { timeline.loopStart = null; timeline.loopEnd = null; }
+  updateLoopLabel();
 
   for (const t of json.tracks) {
     if (t.kind === 'effect') {
@@ -1430,6 +1453,10 @@ function drawAudioCues(ctx, W) {
 
 function updateFrameLabel() { document.getElementById('lbl-frame').textContent = String(timeline.currentFrame); }
 function updateTrimLabel() { document.getElementById('lbl-trim').textContent = `${timeline.trimIn} – ${timeline.trimOut}`; }
+function updateLoopLabel() {
+  const el = document.getElementById('lbl-loop');
+  if (el) el.textContent = (timeline.loopStart != null && timeline.loopEnd != null) ? `${timeline.loopStart} ↻ ${timeline.loopEnd}` : 'なし';
+}
 
 // ── ディソルブ（溶解）適用/解除 ──
 function spawnDissTest() {
@@ -1587,6 +1614,20 @@ function setupUI() {
   document.getElementById('btn-trim-in').addEventListener('click', () => { timeline.trimIn = Math.min(timeline.currentFrame, timeline.trimOut - 1); updateTrimLabel(); renderTimeline(); });
   document.getElementById('btn-trim-out').addEventListener('click', () => { timeline.trimOut = Math.max(timeline.currentFrame, timeline.trimIn + 1); updateTrimLabel(); renderTimeline(); });
   document.getElementById('btn-trim-reset').addEventListener('click', () => { timeline.trimIn = 0; timeline.trimOut = timeline.durationFrames; updateTrimLabel(); renderTimeline(); });
+
+  // 部分ループ
+  document.getElementById('btn-loop-start').addEventListener('click', () => {
+    timeline.loopStart = Math.max(0, Math.min(timeline.currentFrame, timeline.durationFrames - 1));
+    if (timeline.loopEnd == null || timeline.loopEnd <= timeline.loopStart) timeline.loopEnd = timeline.trimOut;
+    updateLoopLabel(); renderTimeline();
+  });
+  document.getElementById('btn-loop-end').addEventListener('click', () => {
+    timeline.loopEnd = Math.max(1, Math.min(timeline.currentFrame, timeline.durationFrames));
+    if (timeline.loopStart == null || timeline.loopStart >= timeline.loopEnd) timeline.loopStart = Math.max(0, timeline.loopEnd - 1);
+    updateLoopLabel(); renderTimeline();
+  });
+  document.getElementById('btn-loop-clear').addEventListener('click', () => { timeline.loopStart = null; timeline.loopEnd = null; updateLoopLabel(); renderTimeline(); });
+  document.getElementById('cb-loop-preview').addEventListener('change', (e) => { loopPreview = e.target.checked; });
 
   // エフェクト追加
   const addAnchor = document.getElementById('add-anchor');
@@ -1797,8 +1838,13 @@ function render() {
     const inT = timeline.trimIn / timeline.fps, outT = timeline.trimOut / timeline.fps;
     const prevTime = vrmaAction.time;
     mixer.update(dt);
-    let curTime = vrmaAction.time, looped = false;
-    if (curTime >= outT - 0.0005 || curTime < prevTime - 0.001) {
+    let curTime = vrmaAction.time, looped = false, loopFromF = timeline.trimIn;
+    const hasLoop = loopPreview && timeline.loopStart != null && timeline.loopEnd != null;
+    if (hasLoop && curTime >= timeline.loopEnd / timeline.fps - 0.0005) {
+      // 部分ループプレビュー: [loopStart,loopEnd] で折り返す
+      curTime = timeline.loopStart / timeline.fps; vrmaAction.time = curTime;
+      looped = true; loopFromF = timeline.loopStart;
+    } else if (curTime >= outT - 0.0005 || curTime < prevTime - 0.001) {
       if (vrmaLoop) { curTime = inT; vrmaAction.time = inT; looped = true; }
       else { vrmaPlaying = false; curTime = outT; vrmaAction.time = outT; timeline.currentFrame = timeline.trimOut; updatePlayButtons(); }
     }
@@ -1806,8 +1852,8 @@ function render() {
     if (newFrame !== timeline.currentFrame) {
       const prev = timeline.currentFrame;
       timeline.currentFrame = newFrame;
-      // ループ折返し時は先頭(trimIn)からのバーストを拾う／通常は prev→new 区間
-      if (looped) { fireBurstsBetween(timeline.trimIn - 1, newFrame); fireAudioBetween(timeline.trimIn - 1, newFrame); }
+      // ループ折返し時は折返し先頭(trimIn/loopStart)からのバーストを拾う／通常は prev→new 区間
+      if (looped) { fireBurstsBetween(loopFromF - 1, newFrame); fireAudioBetween(loopFromF - 1, newFrame); }
       else if (newFrame > prev) { fireBurstsBetween(prev, newFrame); fireAudioBetween(prev, newFrame); }
       updateFrameLabel();
     }

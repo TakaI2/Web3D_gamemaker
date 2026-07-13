@@ -21,8 +21,9 @@ import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, 
 import { TilesRenderer } from 'https://esm.sh/3d-tiles-renderer@0.4.28?deps=three@0.184.0';
 import { GLTFExtensionsPlugin, ImplicitTilingPlugin } from 'https://esm.sh/3d-tiles-renderer@0.4.28/plugins?deps=three@0.184.0';
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
-import { generateBuildings } from '../lib/kenney-buildings.js';
+import { generateBuildings, instanceId } from '../lib/kenney-buildings.js';
 import { generateHouse } from '../lib/room-gen.js';
+import { deserializeTerrain, createTerrainMesh, buildRoadGraph } from '../lib/terrain.js';
 import { createNpcSpeech } from '../lib/npc-speech.js';
 import { createSpeechUI } from '../lib/speech-ui.js';
 import { fetchSpeechSet, buildSpeechCharacter } from '../lib/speech-set.js';
@@ -38,7 +39,7 @@ let locked = false, recentered = false, diagMsg = '';
 const KENNEY_CITY = true;   // true: PLATEAUタイルを撤去し実道路網にKenney建物を配置（破壊実験P1）
 const PLAYER_NPC = 'Joy_reborn.npc.json';
 const FACE_OFFSET = Math.PI;   // Joy_reborn は正面が逆焼き→180°補正
-const flight = { accel: 32, drag: 2.4, maxSpeed: 8, turn: 8 };   // TPS-Flight と同じ操作感（ホイールで増速可）
+const flight = { accel: 32, drag: 2.4, maxSpeed: 9, turn: 8 };   // TPS-Flight と同じ操作感（ホイールで増速可）
 const cam = { dist: 4.0, height: 1.2, follow: 8, side: 0.75 };   // side=肩越しオフセット(m)。プレイヤーを画面中心よりやや左へ＝クロスヘア/エフェクトが見やすい
 const FADE = 0.18, DESCEND_SIN = 0.3;
 const STATE_DEFS = {   // 飛行アニメ状態（各 timeline→VRMA）。tps-flight と同じ
@@ -117,8 +118,10 @@ async function init() {
   pivot = new THREE.Group(); pivot.matrixAutoUpdate = false; scene.add(pivot);
 
   // 原点の参照グリッド＋軸（タイルが出なくても座標系が見える＝八王子原点付近の地表）
-  const grid = new THREE.GridHelper(8000, 80, 0x557799, 0x2a3a4a);   // 地表の目安（薄く）
-  grid.material.transparent = true; grid.material.opacity = 0.16; scene.add(grid);
+  if (!MAP_NAME) {   // 地表の目安グリッド（PLATEAUタイル待ちの間の座標系表示。マップモードでは水面に透けるので出さない）
+    const grid = new THREE.GridHelper(8000, 80, 0x557799, 0x2a3a4a);
+    grid.material.transparent = true; grid.material.opacity = 0.16; scene.add(grid);
+  }
 
   if (!KENNEY_CITY) try {
     tiles = new TilesRenderer(TILESET);
@@ -149,7 +152,10 @@ async function init() {
 
   recenterToHachioji();   // 固定原点で即時再中心化
   groundGroup = new THREE.Group(); scene.add(groundGroup);
-  let chain = buildAerialGround();
+  // ?map=<name> でmap-editor製の自作地形に置換（M1: 地形のみ。道路/建物は従来ソース）
+  let chain = MAP_NAME
+    ? buildMapGround().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)))
+    : buildAerialGround();
   if (!KENNEY_CITY) chain = chain.then(() => new Promise((res) => setTimeout(res, 2500)));   // タイル優先で道路を後ろへ
   chain = chain.then(() => loadRoads());
   if (KENNEY_CITY) chain = chain.then(() => buildKenneyCity());   // 実道路網に Kenney 建物を配置
@@ -157,7 +163,7 @@ async function init() {
     loadImpactFx().catch((e) => console.warn('着弾FX準備失敗:', e));
     ensureTotemFx().catch((e) => console.warn('トーテムFX準備失敗:', e));
     prepareKenAssets().then((ok) => { if (ok) setKenCount(KEN_COUNT); }).catch((e) => console.warn('ken準備失敗:', e));
-    try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); }
+    loadAgentOverrides().then(() => { try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); } });
   });
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
   loadPlayer().then(() => prepareBiteAssets()).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
@@ -194,6 +200,80 @@ function recenterToHachioji() {
 
 // ── 地面: 地理院タイル(航空写真)＋DEM(標高)で地形追従。建物(楕円体高)に合わせ geoid 補正 ──
 const GROUND_ZOOM = 16, GROUND_RADIUS = 5, DEM_ZOOM = 14, GROUND_SUB = 8;
+// ── マップモード（map-editor製 .map.json の地形へ置換）──
+const MAP_NAME = new URLSearchParams(location.search).get('map');
+let mapTerrain = null;   // createTerrainMesh の戻り値（heightAt含む）
+let mapRoads = [];       // .map.json のスプライン道路（あればOSMの代わりに使う）
+let mapBuildings = null; // .map.json の建物差分 {removed[], moved{}, added[]}
+let mapWater = [];       // .map.json の水面矩形 {x,z,w,d,level}
+const waterMeshes = [];
+let waterNearMat = null, waterFarMat = null, _waterLodT = 0;
+const WATER_FAR = 600;   // これ以上離れた水面は静的マテリアルへ（LOD）
+function buildMapWater() {
+  // 法線マップをcanvasで生成（アセット不要・柔らかいノイズ）
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = 'rgb(128,128,255)';
+  ctx.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 260; i++) {
+    const x = Math.random() * 128, y = Math.random() * 128, r = 3 + Math.random() * 9;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const dx = (Math.random() * 44 - 22) | 0, dy = (Math.random() * 44 - 22) | 0;
+    g.addColorStop(0, `rgba(${128 + dx},${128 + dy},255,0.5)`);
+    g.addColorStop(1, 'rgba(128,128,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 128, 128);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  waterNearMat = new THREE.MeshStandardMaterial({ color: 0x2f6f8f, transparent: true, opacity: 0.82, roughness: 0.12, metalness: 0.55, normalMap: tex, normalScale: new THREE.Vector2(0.4, 0.4), depthWrite: false });
+  waterFarMat = new THREE.MeshStandardMaterial({ color: 0x2f6f8f, transparent: true, opacity: 0.8, roughness: 0.35, metalness: 0.3, depthWrite: false });
+  for (const w of mapWater) {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), waterNearMat);
+    mesh.position.set(w.x, w.level ?? 0, w.z);
+    mesh.scale.set(w.w || 100, 1, w.d || 100);
+    const rep = Math.max(2, Math.round((w.w || 100) / 30));
+    mesh.userData.rep = rep;   // 大きい水面ほど法線を細かく繰り返す
+    scene.add(mesh);
+    waterMeshes.push(mesh);
+  }
+  if (waterMeshes.length) tex.repeat.set(waterMeshes[0].userData.rep, waterMeshes[0].userData.rep);
+  // 遠距離マテリアルのパイプラインも起動時にコンパイルさせる（切替ヒッチ防止）
+  const pre = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), waterFarMat);
+  pre.position.set(0, -800, 0);
+  scene.add(pre);
+  console.log('water planes:', waterMeshes.length);
+}
+function updateWater(dt) {
+  if (!waterMeshes.length) return;
+  if (waterNearMat?.normalMap) {   // ゆっくり流れる法線＝波のきらめき
+    waterNearMat.normalMap.offset.x += dt * 0.012;
+    waterNearMat.normalMap.offset.y += dt * 0.008;
+  }
+  _waterLodT -= dt;
+  if (_waterLodT > 0) return;
+  _waterLodT = 0.5;
+  for (const m of waterMeshes) {
+    const far = Math.hypot(m.position.x - player.pos.x, m.position.z - player.pos.z) - Math.max(m.scale.x, m.scale.z) / 2 > WATER_FAR;
+    const want = far ? waterFarMat : waterNearMat;
+    if (m.material !== want) m.material = want;
+  }
+}
+async function buildMapGround() {
+  const res = await fetch('../maps/' + encodeURIComponent(MAP_NAME) + '.map.json');
+  if (!res.ok) throw new Error('maps/' + MAP_NAME + '.map.json が見つかりません');
+  const j = await res.json();
+  mapTerrain = createTerrainMesh(THREE, deserializeTerrain(j.terrain));
+  groundGroup.add(mapTerrain.group);
+  mapRoads = Array.isArray(j.roads) ? j.roads.filter((r) => r.points && r.points.length >= 2) : [];
+  mapBuildings = (j.buildings && ((j.buildings.removed || []).length || (j.buildings.added || []).length || Object.keys(j.buildings.moved || {}).length)) ? j.buildings : null;
+  mapWater = Array.isArray(j.water) ? j.water : [];
+  if (mapWater.length) try { buildMapWater(); } catch (e) { console.warn('水面生成失敗', e); }
+  // 地形・道路とも完全自作なら外部データ表記を消す（DEMインポート/OSM取込道路は表記が必要なまま）
+  if (mapRoads.length && !j.terrain?.attribution && !j.osmRoads) { const a = $('attrib'); if (a) a.style.display = 'none'; }
+  console.log('map:', MAP_NAME, mapTerrain.data.size + 'm / res', mapTerrain.data.res, '/ roads', mapRoads.length);
+}
 const GEOID = 37;              // Kanto ジオイド高(概算, m)。DEM(標高)→楕円体高 へ +GEOID（建物と整合）
 const GROUND_FALLBACK = 100;   // DEM欠測時の標高(m)
 function lon2tileX(lon, z) { return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
@@ -331,7 +411,10 @@ async function loadPlayer() {
         const tin = Number.isFinite(tl.trimIn) ? Math.max(0, Math.min(tl.trimIn, total - 1)) : 0;
         const tout = Number.isFinite(tl.trimOut) ? Math.max(tin + 1, Math.min(tl.trimOut, total)) : total;
         const speed = (Number.isFinite(tl.speed) && tl.speed > 0) ? tl.speed : 1;
-        player.states[name] = { action, timeline: tl, fps, dur: clip.duration, loop: def.loop, trimIn: tin, trimOut: tout, total, speed };
+        // 部分ループ（任意）: oneShot保持中に [loopStart,loopEnd] を繰り返す（チャージビーム照射中など）
+        const lpS = Number.isFinite(tl.loopStart) ? Math.max(tin, Math.min(tl.loopStart, tout - 1)) : null;
+        const lpE = lpS != null ? (Number.isFinite(tl.loopEnd) ? Math.max(lpS + 1, Math.min(tl.loopEnd, tout)) : tout) : null;
+        player.states[name] = { action, timeline: tl, fps, dur: clip.duration, loop: def.loop, trimIn: tin, trimOut: tout, total, speed, loopStart: lpS, loopEnd: lpE };
         await createStateEffects(player.states[name], tl);   // timeline の effect トラック（FXエディタ配置）を準備
       } catch (e) { console.warn('状態ロード失敗:', name, e); }
     }
@@ -434,6 +517,17 @@ function applyTrim() {
   else if (a.time < inT - 1e-4) { a.time = inT; changed = true; }
   if (changed) player.mixer.update(0);
 }
+// 部分ループ: oneShot 保持中は timeline の [loopStart,loopEnd] を繰り返し、
+// 残り保持時間が尾部（loopEnd→trimOut）ぶんを切ったら通し再生に移って自然に終わる
+function applyHoldLoop() {
+  const st = player.states[player.current];
+  if (!st || st.loopStart == null || !player.oneShot || player.oneShot.name !== player.current) return;
+  const sT = st.loopStart / st.fps, eT = st.loopEnd / st.fps;
+  const tailT = (st.trimOut / st.fps - eT) / (st.speed || 1);
+  if (player.oneShot.until <= tailT + 1e-3) return;   // 尾部再生フェーズ
+  const a = st.action;
+  if (a.time >= eT) { a.time = sT + ((a.time - sT) % Math.max(1e-3, eT - sT)); player.mixer.update(0); }
+}
 function updatePlayerAnim(dt) {
   if (!player.ready) return;
   if (player.eating) { updatePlayerEating(dt); return; }   // 捕食中は feed のみ駆動
@@ -451,6 +545,7 @@ function updatePlayerAnim(dt) {
   }
   setState(desiredState());
   player.mixer.update(dt);
+  applyHoldLoop();
   applyTrim();
   player.vrm.update(dt);
   const cst = player.states[player.current];
@@ -673,6 +768,7 @@ let activeEdges = [];          // { aId, bId, a, b, len }
 let cars = [];
 
 async function loadRoads() {
+  if (mapTerrain && mapRoads.length) { buildMapRoads(); await finishRoads(); return; }   // 自作道路（M2）
   let files = [];
   try { files = await (await fetch('../roads/manifest.json')).json(); } catch { showError('道路manifest取得失敗'); return; }
   if (!Array.isArray(files) || !files.length) { console.warn('roads: no files'); return; }
@@ -690,6 +786,7 @@ async function loadRoads() {
   roadNodes = new Map();
   for (const [id, ll] of nodes) {
     const local = llaToLocal(ll[1], ll[0], elevAt(ll[1], ll[0]) + GEOID + 0.5);   // 路面=地面+0.5m
+    if (mapTerrain) local.y = mapTerrain.heightAt(local.x, local.z) + 0.5;   // マップ地形に道路を追従
     if (Math.hypot(local.x, local.z) > CAR_RADIUS) continue;
     roadNodes.set(id, { local, adj: adj.get(id) });
   }
@@ -704,70 +801,258 @@ async function loadRoads() {
       activeEdges.push({ aId: id, bId: nb, a, b, len: a.distanceTo(b) });
     }
   }
+  await finishRoads();
+}
+// 道路グラフ確定後の共通処理（実体化・車・ライト・路面インデックス）
+async function finishRoads() {
+  buildRoadSurfIndex();
   await buildRoadMeshes().catch((e) => { console.warn('道路メッシュ生成失敗（デバッグ線で代替）:', e); drawRoadLines(); });
   await spawnCars();
   try { buildCarLights(); } catch (e) { console.warn('車ライト生成失敗', e); }
   console.log('roads center nodes', roadNodes.size, 'edges', activeEdges.length, 'cars', cars.length);
+}
+// .map.json のスプライン → roadNodes/activeEdges（吸着済み制御点＝交差点ノード）
+function buildMapRoads() {
+  const g = buildRoadGraph(mapRoads);
+  roadNodes = new Map();
+  for (const [id, n] of g.nodes) {
+    roadNodes.set(id, { local: new THREE.Vector3(n.x, mapTerrain.heightAt(n.x, n.z) + 0.5, n.z), adj: n.adj });
+  }
+  activeEdges = [];
+  for (const [aId, bId] of g.edges) {
+    const a = roadNodes.get(aId).local, b = roadNodes.get(bId).local;
+    activeEdges.push({ aId, bId, a, b, len: a.distanceTo(b) });
+  }
+  console.log('map roads:', mapRoads.length, 'splines →', roadNodes.size, 'nodes /', activeEdges.length, 'edges');
 }
 // ── P2: 道路の実体化＋街灯 ─────────────────────────────────────
 // OSM実道路は任意角度なので Kenney の road-straight を「エッジ長に引き伸ばし」てインスタンス配置。
 // 交差点ノードは円パッチで繋ぎ、街灯(light-curved)を等間隔配置＋夜だけ光る発光点を Points で重ねる。
 const ROAD_WIDTH = 7.0;        // 道路幅(m)
 const ROAD_LIFT = 0.12;        // 地形からの浮かせ量（z-fighting回避）
+const USE_BENDS = false;       // カーブタイル: 任意角度だと向きが合わず不評→無効化（trueで復活）
+const BEND_BASE = 0;           // road-bend-sidewalk の基準向き（ズレたら±90°単位で調整）
+const TEE_BASE = 0;            // road-intersection-path の枝方向の基準（同上）
+const SIGNAL_HEIGHT = 5.2;     // 信号機(light-square)の高さ(m)
+const MAX_SIGNALS = 6000;      // 信号ポール上限。八王子1600m圏で~3,900本必要（900では地域偏りで大半の交差点に立たなかった）
+const BARRIER_MIN_EDGE = 80;   // これ以上長いエッジは road-straight-barrier（ガードレール付き）
+const XING_SPACING = 170;      // 横断歩道(road-crossing)の間隔(m)
+const MAX_XINGS = 1200;
 const LIGHT_SPACING = 42;      // 街灯間隔(m)
 const LIGHT_HEIGHT = 5.5;      // 街灯の高さ(m)
-const MAX_LIGHTS = 3000;
+const MAX_LIGHTS = 6000;   // 八王子1600m圏で実測4,126本必要（3000では郊外が頭打ちで消えていた）
 let streetGlowMat = null;
+let roadGroup = null;          // 道路一式（将来、地形編集時に丸ごと再構築するための入れ物）
+// ── 路面の高さ問い合わせ: 道路タイルは地形より~0.6m高いため、道路上の接地（捕食・NPC・ラグドール）は路面を使う ──
+let roadSurfGrid = null, roadTopOff = 0.25;   // roadTopOff=ROAD_LIFT+タイル厚（buildRoadMeshesで実測更新）
+const ROAD_SURF_CELL = 48;
+function buildRoadSurfIndex() {
+  roadSurfGrid = new Map();
+  for (const e of activeEdges) {
+    const minx = Math.min(e.a.x, e.b.x) - ROAD_WIDTH, maxx = Math.max(e.a.x, e.b.x) + ROAD_WIDTH;
+    const minz = Math.min(e.a.z, e.b.z) - ROAD_WIDTH, maxz = Math.max(e.a.z, e.b.z) + ROAD_WIDTH;
+    for (let gz = Math.floor(minz / ROAD_SURF_CELL); gz <= Math.floor(maxz / ROAD_SURF_CELL); gz++) {
+      for (let gx = Math.floor(minx / ROAD_SURF_CELL); gx <= Math.floor(maxx / ROAD_SURF_CELL); gx++) {
+        const k = gx + '_' + gz;
+        if (!roadSurfGrid.has(k)) roadSurfGrid.set(k, []);
+        roadSurfGrid.get(k).push(e);
+      }
+    }
+  }
+}
+function roadTopAt(x, z) {   // 道路上なら路面Y、外ならnull（セル分割で近傍エッジだけ距離判定）
+  if (!roadSurfGrid) return null;
+  const list = roadSurfGrid.get(Math.floor(x / ROAD_SURF_CELL) + '_' + Math.floor(z / ROAD_SURF_CELL));
+  if (!list) return null;
+  let best = null;
+  const hw = ROAD_WIDTH / 2 + 0.4;
+  for (const e of list) {
+    const dx = e.b.x - e.a.x, dz = e.b.z - e.a.z;
+    const l2 = dx * dx + dz * dz || 1;
+    let t = ((x - e.a.x) * dx + (z - e.a.z) * dz) / l2;
+    t = Math.max(0, Math.min(1, t));
+    const px = e.a.x + dx * t, pz = e.a.z + dz * t;
+    if (Math.hypot(x - px, z - pz) > hw) continue;
+    const y = e.a.y + (e.b.y - e.a.y) * t + roadTopOff;
+    if (best == null || y > best) best = y;
+  }
+  return best;
+}
 async function buildRoadMeshes() {
   if (!activeEdges.length) return;
+  if (roadGroup) { scene.remove(roadGroup); roadGroup = null; }
+  roadGroup = new THREE.Group();
   const loader = new GLTFLoader();
-  const loadKit = async (name) => {
-    const gltf = await loader.loadAsync(new URL('../models/kenney_city-kit-roads/Models/GLB%20format/' + name + '.glb', location.href).href);
+  const loadKit = async (name, dir = 'kenney_city-kit-roads/Models/GLB%20format') => {
+    const gltf = await loader.loadAsync(new URL('../models/' + dir + '/' + name + '.glb', location.href).href);
     return bakeModel(gltf.scene);   // {geometry, material, baseY, size}
   };
   const road = await loadKit('road-straight');
   const lamp = await loadKit('light-curved');
-  // 道路: レーン方向をZに正規化（正方形タイルはレーンがX向き＝90°回す）→底面を0へ
-  const rg = road.geometry.clone();
-  if (road.size.z >= road.size.x) rg.rotateY(Math.PI / 2);
-  rg.computeBoundingBox();
-  const rb = rg.boundingBox;
-  rg.translate(-(rb.min.x + rb.max.x) / 2, -rb.min.y, -(rb.min.z + rb.max.z) / 2);
-  const roadLen = Math.max(0.01, rb.max.z - rb.min.z), roadWid = Math.max(0.01, rb.max.x - rb.min.x);
-  const wScale = ROAD_WIDTH / roadWid;
-  const roadMesh = new THREE.InstancedMesh(rg, road.material, activeEdges.length);
-  roadMesh.frustumCulled = false;
+  // 交差点/カーブ/横断歩道/バリア道路のタイル（無ければ従来動作にフォールバック）
+  const optKit = (name) => loadKit(name).catch(() => null);
+  const [tCross, tTee, tBendRaw, tXing, roadBar, sigLamp] = await Promise.all([
+    optKit('road-crossroad-path'), optKit('road-intersection-path'), optKit('road-bend-sidewalk'),
+    optKit('road-crossing'), optKit('road-straight-barrier'), optKit('light-square'),
+  ]);
+  const tBend = USE_BENDS ? tBendRaw : null;
+  // タイル正規化: laneRotate=正方形タイルのレーンX向きをZへ90°回す → XZ中心・底面0
+  const normTile = (asset, laneRotate) => {
+    const g = asset.geometry.clone();
+    if (laneRotate && asset.size.z >= asset.size.x) g.rotateY(Math.PI / 2);
+    g.computeBoundingBox();
+    const b = g.boundingBox;
+    g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+    return { g, w: Math.max(0.01, b.max.x - b.min.x), l: Math.max(0.01, b.max.z - b.min.z), h: Math.max(0, b.max.y - b.min.y), mat: asset.material };
+  };
+  const R = normTile(road, true);
+  const roadThick = R.h;
+  roadTopOff = ROAD_LIFT + roadThick;   // 路面高さ問い合わせ(roadTopAt)用に実測を反映
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
   const _dir = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _rotM = new THREE.Matrix4(), _zero = new THREE.Vector3();
-  for (let i = 0; i < activeEdges.length; i++) {
-    const e = activeEdges[i];
-    _dir.copy(e.b).sub(e.a);
-    const len = _dir.length() || 1;
-    _dir.normalize();
-    _rotM.lookAt(_zero, _dir, _up);           // -Z→dir（道路は前後対称なので符号は不問）
-    _q.setFromRotationMatrix(_rotM);
-    _p.copy(e.a).add(e.b).multiplyScalar(0.5);
-    _p.y += ROAD_LIFT;
-    _s.set(wScale, 1, len / roadLen);   // 厚みは等倍（幅スケールを掛けると路面が数十cm持ち上がる）
-    _m.compose(_p, _q, _s);
-    roadMesh.setMatrixAt(i, _m);
+
+  // ── ノード分類: 出射方向の組から 十字(4方向直交)/T字(本線+直交枝)/カーブ(2方向~90°) を判定 ──
+  const nodeDirs = new Map();
+  for (const e of activeEdges) {
+    const dx = e.b.x - e.a.x, dz = e.b.z - e.a.z, l = Math.hypot(dx, dz) || 1;
+    if (!nodeDirs.has(e.aId)) nodeDirs.set(e.aId, []);
+    if (!nodeDirs.has(e.bId)) nodeDirs.set(e.bId, []);
+    nodeDirs.get(e.aId).push({ x: dx / l, z: dz / l });
+    nodeDirs.get(e.bId).push({ x: -dx / l, z: -dz / l });
   }
-  scene.add(roadMesh);
-  // 交差点パッチ（全ノードに道路色の円）
+  const JTOL = Math.PI / 180 * 25;   // 直交とみなす許容角
+  const yawOf = (d) => Math.atan2(d.x, d.z);
+  const wrapA = (a) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+  const junc = { cross: [], tee: [], bend: [], any: [] };   // any=直交判定に漏れた3叉以上（信号だけ立てる）
+  const tiledNodes = new Set();
+  for (const [id, nd] of roadNodes) {
+    const dirs = nodeDirs.get(id);
+    if (!dirs) continue;
+    let put = null;
+    if (dirs.length === 2 && tBend) {
+      const d = wrapA(yawOf(dirs[1]) - yawOf(dirs[0]));
+      if (Math.abs(Math.abs(d) - Math.PI / 2) < JTOL) put = { arr: junc.bend, ry: (d > 0 ? yawOf(dirs[0]) : yawOf(dirs[1])) + BEND_BASE };
+    } else if (dirs.length === 3 && tTee) {
+      let bi = -1, bj = -1, bd = 1;
+      for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) {
+        const dot = dirs[i].x * dirs[j].x + dirs[i].z * dirs[j].z;
+        if (dot < bd) { bd = dot; bi = i; bj = j; }
+      }
+      const br = dirs[3 - bi - bj], t = dirs[bi];
+      if (bd < -Math.cos(JTOL) && Math.abs(br.x * t.x + br.z * t.z) < Math.sin(JTOL * 1.4)) put = { arr: junc.tee, ry: yawOf(br) + TEE_BASE };
+    } else if (dirs.length === 4 && tCross) {
+      const used = new Set(), axes = [];
+      let ok = true;
+      for (let i = 0; i < 4 && ok; i++) {
+        if (used.has(i)) continue;
+        let mj = -1, md = 1;
+        for (let j = 0; j < 4; j++) {
+          if (j === i || used.has(j)) continue;
+          const dot = dirs[i].x * dirs[j].x + dirs[i].z * dirs[j].z;
+          if (dot < md) { md = dot; mj = j; }
+        }
+        if (mj < 0 || md > -Math.cos(JTOL)) { ok = false; break; }
+        used.add(i); used.add(mj); axes.push(dirs[i]);
+      }
+      if (ok && axes.length === 2 && Math.abs(axes[0].x * axes[1].x + axes[0].z * axes[1].z) < Math.sin(JTOL * 1.4)) put = { arr: junc.cross, ry: yawOf(axes[0]) };
+    }
+    if (put) { put.arr.push({ x: nd.local.x, y: nd.local.y, z: nd.local.z, ry: put.ry }); tiledNodes.add(id); }
+    else if (dirs.length >= 3) junc.any.push({ x: nd.local.x, y: nd.local.y, z: nd.local.z, ry: yawOf(dirs[0]) });
+  }
+  const addJunc = (asset, list) => {
+    if (!asset || !list.length) return 0;
+    const t = normTile(asset, false);
+    const mesh = new THREE.InstancedMesh(t.g, t.mat, list.length);
+    mesh.frustumCulled = false;
+    const s = ROAD_WIDTH / t.w;
+    for (let i = 0; i < list.length; i++) {
+      const J = list[i];
+      _p.set(J.x, J.y + ROAD_LIFT + 0.02, J.z);   // 短縮した道路端との重なり帯だけ僅かに上＝共平面回避
+      _q.setFromAxisAngle(_up, J.ry);
+      _s.set(s, 1, s);
+      _m.compose(_p, _q, _s);
+      mesh.setMatrixAt(i, _m);
+    }
+    roadGroup.add(mesh);
+    return list.length;
+  };
+  const nJunc = addJunc(tCross, junc.cross) + addJunc(tTee, junc.tee) + addJunc(tBend, junc.bend);
+  if (sigLamp) try { buildSignals(sigLamp, junc); } catch (e) { console.warn('信号生成失敗', e); }
+
+  // ── 道路セグメント: 長いエッジは barrier 付きタイル（＝ガードレール）で描く ──
+  const stdIdx = [], barIdx = [];
+  for (let i = 0; i < activeEdges.length; i++) ((roadBar && activeEdges[i].len >= BARRIER_MIN_EDGE) ? barIdx : stdIdx).push(i);
+  const fillRoad = (tile, idxList) => {
+    if (!idxList.length) return;
+    const mesh = new THREE.InstancedMesh(tile.g, tile.mat, idxList.length);
+    mesh.frustumCulled = false;
+    const ws = ROAD_WIDTH / tile.w;
+    for (let k = 0; k < idxList.length; k++) {
+      const e = activeEdges[idxList[k]];
+      _dir.copy(e.b).sub(e.a);
+      const len = _dir.length() || 1;
+      _dir.normalize();
+      _rotM.lookAt(_zero, _dir, _up);           // -Z→dir（道路は前後対称なので符号は不問）
+      _q.setFromRotationMatrix(_rotM);
+      _p.copy(e.a).add(e.b).multiplyScalar(0.5);
+      _p.y += ROAD_LIFT;
+      // 交差点で複数セグメントが同一平面で重なると黒く明滅する（z-fighting）ため両端を短縮
+      const pull = Math.min(ROAD_WIDTH * 0.45, len * 0.3);
+      _s.set(ws, 1, Math.max(0.5, len - pull * 2) / tile.l);   // 厚みは等倍
+      _m.compose(_p, _q, _s);
+      mesh.setMatrixAt(k, _m);
+    }
+    roadGroup.add(mesh);
+  };
+  fillRoad(R, stdIdx);
+  if (roadBar) fillRoad(normTile(roadBar, true), barIdx);
+
+  // ── 横断歩道: 長めのエッジに等間隔オーバーレイ（路面より2.5cm上）──
+  let nXing = 0;
+  if (tXing) {
+    const X = normTile(tXing, true);
+    const spots = [];
+    for (const e of activeEdges) {
+      if (e.len < XING_SPACING * 0.7) continue;
+      const n = Math.min(3, Math.floor(e.len / XING_SPACING));
+      for (let k = 0; k < n && spots.length < MAX_XINGS; k++) spots.push({ e, t: (k + 0.5) / n });
+    }
+    if (spots.length) {
+      const mesh = new THREE.InstancedMesh(X.g, X.mat, spots.length);
+      mesh.frustumCulled = false;
+      const s = ROAD_WIDTH / X.w;
+      for (let i = 0; i < spots.length; i++) {
+        const { e, t } = spots[i];
+        _dir.copy(e.b).sub(e.a).normalize();
+        _rotM.lookAt(_zero, _dir, _up);
+        _q.setFromRotationMatrix(_rotM);
+        _p.set(e.a.x + (e.b.x - e.a.x) * t, e.a.y + (e.b.y - e.a.y) * t + ROAD_LIFT + 0.025, e.a.z + (e.b.z - e.a.z) * t);
+        _s.set(s, 1, s);
+        _m.compose(_p, _q, _s);
+        mesh.setMatrixAt(i, _m);
+      }
+      roadGroup.add(mesh);
+      nXing = spots.length;
+    }
+  }
+
+  // ── 円パッチ: タイルを置けなかった変則ノードだけ塞ぐ ──
   const patchGeo = new THREE.CircleGeometry(0.5, 20);
   patchGeo.rotateX(-Math.PI / 2);
   const patchMat = new THREE.MeshStandardMaterial({ color: 0x46484c, roughness: 0.95 });
-  const nodes = [...roadNodes.values()];
-  const patch = new THREE.InstancedMesh(patchGeo, patchMat, nodes.length);
+  const plainNodes = [];
+  for (const [id, nd] of roadNodes) if (!tiledNodes.has(id)) plainNodes.push(nd);
+  const patch = new THREE.InstancedMesh(patchGeo, patchMat, plainNodes.length);
   patch.frustumCulled = false;
-  for (let i = 0; i < nodes.length; i++) {
-    _p.copy(nodes[i].local); _p.y += ROAD_LIFT + 0.02;
+  for (let i = 0; i < plainNodes.length; i++) {
+    _p.copy(plainNodes[i].local); _p.y += ROAD_LIFT + roadThick + 0.02;
     _q.identity();
     _s.set(ROAD_WIDTH, 1, ROAD_WIDTH);
     _m.compose(_p, _q, _s);
     patch.setMatrixAt(i, _m);
   }
-  scene.add(patch);
+  roadGroup.add(patch);
+  console.log('junctions:', nJunc, `(cross ${junc.cross.length} / tee ${junc.tee.length} / bend ${junc.bend.length} / 変則 ${junc.any.length})`, 'crossings:', nXing, 'barrier edges:', barIdx.length, 'patches:', plainNodes.length);
   // 街灯: 各エッジ沿いに等間隔・左右交互。腕(+Z)が道路を向くように回す
   const lg = lamp.geometry.clone();
   lg.computeBoundingBox();
@@ -775,7 +1060,15 @@ async function buildRoadMeshes() {
   lg.translate(-(lb.min.x + lb.max.x) / 2, -lb.min.y, -(lb.min.z + lb.max.z) / 2);
   const lScale = LIGHT_HEIGHT / Math.max(0.01, lb.max.y - lb.min.y);
   const lampMats = [], glowPos = [];
-  const armZ = (lb.max.z - lb.min.z) / 2 * lScale;   // 腕の張り出し（発光点の位置に使う）
+  const armZ = (lb.max.z - lb.min.z) / 2 * lScale;   // 腕の張り出し（発光点の既定位置に使う）
+  // entry-editor で街灯モデルに光点マーカーがあればそれを使う（ローカル→正規化空間→スケール）
+  await loadBldEntries();
+  const lampMk = (bldEntries['kenney_city-kit-roads/Models/GLB format/light-curved.glb'] || []).find((m) => m.kind === 'light');
+  const lampLocal = lampMk ? {
+    x: (lampMk.pos[0] - (lb.min.x + lb.max.x) / 2) * lScale,
+    y: (lampMk.pos[1] - lb.min.y) * lScale,
+    z: (lampMk.pos[2] - (lb.min.z + lb.max.z) / 2) * lScale,
+  } : null;
   let side = 1;
   for (const e of activeEdges) {
     const len = e.a.distanceTo(e.b);
@@ -791,7 +1084,10 @@ async function buildRoadMeshes() {
       const by = e.a.y + (e.b.y - e.a.y) * t + ROAD_LIFT;
       const ry = Math.atan2(px * side, pz * side);   // 腕が道路の中心側を向く（実物合わせで符号反転済み）
       lampMats.push({ x: bx, y: by, z: bz, ry });
-      glowPos.push(bx + Math.sin(ry) * armZ * 0.8, by + LIGHT_HEIGHT * 0.92, bz + Math.cos(ry) * armZ * 0.8);
+      if (lampLocal) {   // エディタ指定の光点（ヨー回転して配置）
+        const cs = Math.cos(ry), sn = Math.sin(ry);
+        glowPos.push(bx + lampLocal.x * cs + lampLocal.z * sn, by + lampLocal.y, bz - lampLocal.x * sn + lampLocal.z * cs);
+      } else glowPos.push(bx + Math.sin(ry) * armZ * 0.8, by + LIGHT_HEIGHT * 0.92, bz + Math.cos(ry) * armZ * 0.8);
     }
   }
   const lampMesh = new THREE.InstancedMesh(lg, lamp.material, lampMats.length);
@@ -804,7 +1100,7 @@ async function buildRoadMeshes() {
     _m.compose(_p, _q, _s);
     lampMesh.setMatrixAt(i, _m);
   }
-  scene.add(lampMesh);
+  roadGroup.add(lampMesh);
   // 街灯の発光球（夜だけ）。WebGPUのPoints1px制限を避けて加算小球で
   streetGlowMat = new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
   const glow = new THREE.InstancedMesh(new THREE.SphereGeometry(0.5, 6, 5), streetGlowMat, glowPos.length / 3);
@@ -813,8 +1109,174 @@ async function buildRoadMeshes() {
     _m.makeTranslation(glowPos[i * 3], glowPos[i * 3 + 1], glowPos[i * 3 + 2]);
     glow.setMatrixAt(i, _m);
   }
-  scene.add(glow);
-  console.log('roads:', activeEdges.length, 'patches:', nodes.length, 'lights:', lampMats.length);
+  roadGroup.add(glow);
+  const counts = await buildRoadsideProps(loadKit, _m, _q, _p, _s, _dir, _up);
+  scene.add(roadGroup);
+  console.log('roads:', activeEdges.length, 'lights:', lampMats.length, 'trees:', counts.trees);
+}
+
+// ── 信号機: 十字/T字交差点に light-square を立て、腕先に三色の加算発光球（昼夜問わず点灯）──
+// 2フェーズ交互（軸A青⇔軸B赤）。ネオンと同じ InstancedMesh 小球方式・instanceColorを状態遷移時だけ更新
+let signalMesh = null, signalMeta = [], signalTimer = 0, signalState = -1;
+const SIGNAL_CYCLE = [[4.0, 'g', 'r'], [1.2, 'y', 'r'], [4.0, 'r', 'g'], [1.2, 'r', 'y']];   // [秒, 群0色, 群1色]
+const SIG_RGB = { g: [0.15, 1.0, 0.35], y: [1.0, 0.8, 0.1], r: [1.0, 0.12, 0.08] };
+function buildSignals(asset, junc) {
+  signalMesh = null; signalMeta = []; signalState = -1;
+  const g = asset.geometry.clone();
+  g.computeBoundingBox();
+  const b = g.boundingBox;
+  g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+  const t = { g, mat: asset.material, h: Math.max(0.01, b.max.y - b.min.y), l: Math.max(0.01, b.max.z - b.min.z) };
+  const sc = SIGNAL_HEIGHT / Math.max(0.01, t.h);
+  const armZ = t.l / 2 * sc;                    // 腕の張り出し（+Z想定・light-curvedと同じ）
+  const headY = t.h * sc * 0.93;
+  const poles = [];   // {x,y,z,ry,group}
+  // 配置は初版と同じ。向きだけ初版から180°回転（ユーザー実物合わせ）
+  for (const J of junc.cross) {                 // 十字=対角2本（群0/1で交互に切替が見える）
+    if (poles.length >= MAX_SIGNALS - 1) break;
+    const off = ROAD_WIDTH / 2 + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);
+    poles.push({ x: J.x + cs * off + sn * off, y: J.y, z: J.z - sn * off + cs * off, ry: J.ry, group: 0 });
+    poles.push({ x: J.x - cs * off - sn * off, y: J.y, z: J.z + sn * off - cs * off, ry: J.ry - Math.PI / 2, group: 1 });
+  }
+  for (const J of junc.tee) {                   // T字=枝の脇に1本
+    if (poles.length >= MAX_SIGNALS) break;
+    const off = ROAD_WIDTH / 2 + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);
+    poles.push({ x: J.x + cs * off, y: J.y, z: J.z - sn * off, ry: J.ry, group: 0 });
+  }
+  for (const J of junc.any) {                   // 変則角度の交差点にも1本（自作マップ対策）
+    if (poles.length >= MAX_SIGNALS) break;
+    const off = ROAD_WIDTH / 2 + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);
+    poles.push({ x: J.x + cs * off, y: J.y, z: J.z - sn * off, ry: J.ry, group: poles.length % 2 });
+  }
+  if (!poles.length) return;
+  // ポール本体
+  const pm = new THREE.InstancedMesh(t.g, t.mat, poles.length);
+  pm.frustumCulled = false;
+  const _pm = new THREE.Matrix4(), _pq = new THREE.Quaternion(), _pp = new THREE.Vector3(), _ps = new THREE.Vector3(sc, sc, sc);
+  const _upS = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < poles.length; i++) {
+    const P = poles[i];
+    _pq.setFromAxisAngle(_upS, P.ry);
+    _pm.compose(_pp.set(P.x, P.y + ROAD_LIFT, P.z), _pq, _ps);
+    pm.setMatrixAt(i, _pm);
+  }
+  roadGroup.add(pm);
+  // 三色バルブ（腕の先端から 赤・黄・青 の順で内側へ）
+  const bulbs = [];
+  for (const P of poles) {
+    const cs = Math.cos(P.ry), sn = Math.sin(P.ry);
+    for (let k = 0; k < 3; k++) {
+      const lz = armZ - 0.35 - 0.55 * k;   // 先端=赤
+      bulbs.push({ x: P.x + sn * lz, y: P.y + ROAD_LIFT + headY, z: P.z + cs * lz, color: ['r', 'y', 'g'][k], group: P.group });
+    }
+  }
+  signalMesh = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.24, 6, 5),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false }),
+    bulbs.length,
+  );
+  signalMesh.frustumCulled = false;
+  const _bm = new THREE.Matrix4();
+  for (let i = 0; i < bulbs.length; i++) {
+    _bm.makeTranslation(bulbs[i].x, bulbs[i].y, bulbs[i].z);
+    signalMesh.setMatrixAt(i, _bm);
+    signalMeta.push({ color: bulbs[i].color, group: bulbs[i].group });
+    // 初期色をここで書く＝instanceColorバッファを「最初の描画前」に確定させる。
+    // 描画後に遅延生成するとWebGPUのパイプラインが色なしでコンパイルされ、以後の色変更が効かない
+    const rgb = SIG_RGB[bulbs[i].color];
+    _sigC.setRGB(rgb[0], rgb[1], rgb[2]).multiplyScalar(0.05);
+    signalMesh.setColorAt(i, _sigC);
+  }
+  signalMesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+  signalMesh.instanceColor.needsUpdate = true;
+  roadGroup.add(signalMesh);
+  console.log('signals:', poles.length, 'poles /', bulbs.length, 'bulbs');
+}
+const _sigC = new THREE.Color();
+function updateSignals(dt) {   // 実時間サイクル（Tの早送りに依存しない）。状態が変わった時だけ色更新
+  if (!signalMesh) return;
+  signalTimer += dt;
+  const total = SIGNAL_CYCLE.reduce((s, c) => s + c[0], 0);
+  let t = signalTimer % total, idx = 0;
+  while (t > SIGNAL_CYCLE[idx][0]) { t -= SIGNAL_CYCLE[idx][0]; idx++; }
+  if (idx === signalState) return;
+  signalState = idx;
+  const [, c0, c1] = SIGNAL_CYCLE[idx];
+  for (let i = 0; i < signalMeta.length; i++) {
+    const m = signalMeta[i];
+    const rgb = SIG_RGB[m.color];
+    const active = (m.group === 0 ? c0 : c1) === m.color;
+    _sigC.setRGB(rgb[0], rgb[1], rgb[2]).multiplyScalar(active ? 1 : 0.05);
+    signalMesh.setColorAt(i, _sigC);
+  }
+  if (signalMesh.instanceColor) signalMesh.instanceColor.needsUpdate = true;
+}
+
+// ── 街路樹: 街灯と同じ「エッジ沿い等間隔インスタンス」パターン ─────
+// （ガードレールは road-straight-barrier タイルに統合済み＝fence-low レールは撤去）
+const TREE_SPACING = 30;                        // 街路樹の間隔(m)
+const TREE_OFFSET = ROAD_WIDTH / 2 + 2.8;       // 道路中心からの張り出し(m)
+const TREE_HEIGHT = 7.0;                        // tree-largeの樹高(m)。smallはこの0.6倍
+const MAX_TREES = 8000;   // 実測5,158本必要（4000では郊外が頭打ち）
+async function buildRoadsideProps(loadKit, _m, _q, _p, _s, _dir, _up) {
+  const SUB_DIR = 'kenney_city-kit-suburban_20/Models/GLB%20format';
+  const [treeL, treeS] = await Promise.all([
+    loadKit('tree-large', SUB_DIR), loadKit('tree-small', SUB_DIR),
+  ]);
+  const prep = (asset) => {   // 底面0・XZ中心へ正規化した複製ジオメトリ
+    const g = asset.geometry.clone();
+    g.computeBoundingBox();
+    const b = g.boundingBox;
+    g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+    return { g, size: b.getSize(new THREE.Vector3()), mat: asset.material };
+  };
+  const tL = prep(treeL), tS = prep(treeS);
+  // 決定的乱数（mulberry32相当）: リロードしても同じ並木になる
+  let rs = 0xC17EE5 >>> 0;
+  const rnd = () => {
+    rs = (rs + 0x6D2B79F5) >>> 0;
+    let t = rs;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const treeMats = { L: [], S: [] };
+  for (const e of activeEdges) {
+    const len = e.len;
+    _dir.copy(e.b).sub(e.a).normalize();
+    const px = -_dir.z, pz = _dir.x;                 // 水平垂直
+    // 街路樹: 左右交互・大小と向きは決定的ランダム
+    if (len >= TREE_SPACING * 0.8 && treeMats.L.length + treeMats.S.length < MAX_TREES) {
+      const n = Math.max(1, Math.floor(len / TREE_SPACING));
+      for (let k = 1; k <= n && treeMats.L.length + treeMats.S.length < MAX_TREES; k++) {
+        const t = (k - 0.5) / n, sd = rnd() < 0.5 ? 1 : -1;
+        (rnd() < 0.7 ? treeMats.L : treeMats.S).push({
+          x: e.a.x + (e.b.x - e.a.x) * t + px * sd * TREE_OFFSET,
+          y: e.a.y + (e.b.y - e.a.y) * t - 0.15,     // 横斜面で浮くより沈む方がマシ
+          z: e.a.z + (e.b.z - e.a.z) * t + pz * sd * TREE_OFFSET,
+          ry: rnd() * Math.PI * 2, s: 0.85 + rnd() * 0.4,
+        });
+      }
+    }
+  }
+  const addInst = (p, mats, mkScale) => {
+    if (!mats.length) return;
+    const mesh = new THREE.InstancedMesh(p.g, p.mat, mats.length);
+    mesh.frustumCulled = false;
+    for (let i = 0; i < mats.length; i++) {
+      const M = mats[i];
+      _p.set(M.x, M.y, M.z);
+      _q.setFromAxisAngle(_up, M.ry);
+      mkScale(M, _s);
+      _m.compose(_p, _q, _s);
+      mesh.setMatrixAt(i, _m);
+    }
+    roadGroup.add(mesh);
+  };
+  const sL = TREE_HEIGHT / Math.max(0.01, tL.size.y), sS = TREE_HEIGHT * 0.6 / Math.max(0.01, tS.size.y);
+  addInst(tL, treeMats.L, (M, s) => s.setScalar(sL * M.s));
+  addInst(tS, treeMats.S, (M, s) => s.setScalar(sS * M.s));
+  return { trees: treeMats.L.length + treeMats.S.length };
 }
 
 function drawRoadLines() {
@@ -883,7 +1345,7 @@ function updateCars(dt) {
 
 function setupControls() {
   const cv = renderer.domElement;
-  cv.addEventListener('click', () => { if (!locked) cv.requestPointerLock(); });
+  cv.addEventListener('click', () => { if (!locked && !agentEd.open) cv.requestPointerLock(); });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());   // 右クリックメニュー抑止
   cv.addEventListener('mousedown', (e) => {
     if (!locked || player.eating) return;   // 捕食中は入力ロック
@@ -905,6 +1367,9 @@ function setupControls() {
     camPitch = Math.max(-1.25, Math.min(1.35, camPitch));
   });
   window.addEventListener('keydown', (e) => {
+    if (agentEd.open && e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // 入力欄への打鍵はゲームに流さない
+    if (e.code === 'KeyM') { toggleAgentEd(); return; }
+    if (agentEd.open) return;   // エディタ表示中はゲーム操作を止める
     keysDown[e.code] = true;
     if (e.code === 'KeyE' && locked) onInteract();
     if (e.code === 'KeyT') timeScale = timeScale === 1 ? 10 : timeScale === 10 ? 60 : 1;   // 時間の早送り（動作確認用）
@@ -915,6 +1380,32 @@ function setupControls() {
 
 const _clock = new THREE.Clock();
 let _dbg = 0;
+// map-editor の建物差分を自動配置へ適用（IDは自動配置の元座標から＝moved適用前に計算）
+function applyMapBuildings(gen) {
+  const rm = new Set(mapBuildings.removed || []);
+  const mv = mapBuildings.moved || {};
+  const out = [];
+  for (const it of gen.instances) {
+    const id = instanceId(it);
+    if (rm.has(id)) continue;
+    const m = mv[id];
+    if (m) {
+      it.x = m.x; it.z = m.z;
+      if (m.ry != null) it.ry = m.ry;
+      it.y = mapTerrain ? mapTerrain.heightAt(it.x, it.z) : it.y;
+    }
+    out.push(it);
+  }
+  for (const a of (mapBuildings.added || [])) {
+    out.push({
+      kit: a.kit, model: a.model, tier: a.tier || 'house',
+      x: a.x, z: a.z, ry: a.ry || 0, s: a.s || 1, tall: a.tier !== 'house',
+      y: mapTerrain ? mapTerrain.heightAt(a.x, a.z) : groundYAt(a.x, a.z, 0),
+    });
+  }
+  console.log('map buildings diff: removed', rm.size, 'moved', Object.keys(mv).length, 'added', (mapBuildings.added || []).length);
+  gen.instances = out;
+}
 // ── P1: Kenney 都市（PLATEAU タイルの代替。実道路網に建物を手続き配置＝巨大ステージ効率実験）──
 const BLD_KIT_DIR = { city: 'city_GLB format/', suburban: 'kenney_city-kit-suburban_20/Models/GLB format/' };
 let cityRoot = null;        // scene 直下の建物ルート（モデル単位の InstancedMesh 群）
@@ -930,11 +1421,12 @@ async function buildKenneyCity() {
   // 活性エッジ(world XZ＋DEM Y)→ジェネレータ
   const edges = activeEdges.map((e) => [e.a.x, e.a.y, e.a.z, e.b.x, e.b.y, e.b.z]);
   const gen = generateBuildings(edges, { seed: 20260706 });
+  if (mapBuildings) applyMapBuildings(gen);   // map-editorの差分（削除/移動/追加）
   cityInfo = { count: gen.instances.length, zones: gen.zones };
   console.log('city buildings', gen.instances.length, gen.zones);
 
-  // 進入マーカー（entry-editor 製）: モデル相対パス -> [{kind:'door'|'window', pos:[x,y,z]}]
-  try { bldEntries = await (await fetch('../models/building-entries.json')).json(); } catch { bldEntries = {}; }
+  // 進入マーカー（entry-editor 製）: モデル相対パス -> [{kind:'door'|'window'|'light'|'glow', ...}]
+  await loadBldEntries();
 
   // 使用モデルの GLB を「1マージ済みジオメトリ＋共有マテリアル」に（InstancedMesh 用）
   const used = new Set(gen.instances.map((i) => i.kit + '|' + i.model));
@@ -1002,6 +1494,7 @@ async function buildKenneyCity() {
   }
   partitionBuildings();   // 初期の近/遠振り分け（compile で両パイプラインを事前生成させる）
   try { buildNeon(); } catch (e) { console.warn('neon生成失敗', e); }   // 屋上ランプ（夜用）
+  try { buildWindowGlows(); } catch (e) { console.warn('窓発光生成失敗', e); }   // 窓の光漏れ（夜用）
   // カーブ（欠損）材質のパイプラインを事前コンパイル（初弾のヒッチ軽減）
   const _dummyGeo = new THREE.BoxGeometry(1, 1, 1);
   for (const mkey of Object.keys(kitMat)) {
@@ -1216,7 +1709,7 @@ function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT) {
   const tiltA = Math.random() * Math.PI * 2;   // 傾き方向（水平軸）をランダムに固定
   const rec = {
     std, baseMatrix: m.clone(), uCenters: cm.uCenters, uRadii: cm.uRadii, uKill: cm.uKill, uKillOn: cm.uKillOn, uBaseY: cm.uBaseY,
-    baseY0: baseY, height, hits: 0, boxIdx: rec0.boxIdx, carveR,
+    baseY0: baseY, height, hits: 0, boxIdx: rec0.boxIdx, carveR, bldRec: rec0,
     hp: hpMax, hpMax, decay: hpMax / BLD_DECAY_TIME,
     tiltAxis: new THREE.Vector3(Math.cos(tiltA), 0, Math.sin(tiltA)),
     pivot: new THREE.Vector3(_p2.x, baseY, _p2.z),   // 傾き回転の支点（基部中心）
@@ -1243,6 +1736,7 @@ function applyBldDamage(rec, dmg) {
 }
 function startCollapse(rec) {   // 崩壊開始＋当たり判定を無効化。現在の傾きを基準行列に焼き込む
   if (rec.dying) return;
+  hideBuildingLights(rec.bldRec);   // 窓明かり・屋上ランプを消す（廃墟が光り続けない）
   applyTilt(rec, tiltAngle(rec), rec.baseMatrix);   // baseMatrix ← 傾き込みへ更新
   rec.std.matrix.copy(rec.baseMatrix); rec.std.matrixWorldNeedsUpdate = true;
   rec.dying = true; rec.dieT = 0; dyingList.push(rec);
@@ -1551,11 +2045,15 @@ function updateCarPhysics(dt) {
 }
 
 // ── P3a: 生活NPC（エージェント層）。全員データのみで通勤し、近傍だけ ken の身体で実体化 ──
-const AGENT_COUNT = 80, AGENT_WALK = 1.5;          // 徒歩1.5m/s
+const AGENT_COUNT = 2000, AGENT_WALK = 1.5;        // 人口（データのみ）・徒歩1.5m/s
 const AGENT_BIND_R = 60, AGENT_RELEASE_R = 85;     // 実体化/解除の距離（ヒステリシス）
 const agents = [];
-const _pathQueue = [];    // A*要求（フレームあたり2件まで処理＝早送り時のスパイク防止）
-let _agentBindT = 0;
+const walkingAgents = new Set();   // 歩行中だけ毎フレーム更新（在宅/在勤はイベント駆動で眠らせる）
+const wakeBuckets = new Map();     // 分バケット(0-1439) -> agent[]。毎日同じ分に発火（日次サイクル）
+const homeIndex = new Map();       // 自宅rec -> agent[]（入室時の在宅検索用）
+let lastMinute = -1;
+const _pathQueue = [];    // A*要求（フレームあたり2件まで処理。経路は日次キャッシュで初回のみ）
+let _agentBindT = 0, _agentPerfMs = 0, _agentPerfN = 0, _agentPerfT = 0;
 
 function nearestRoadNode(x, z) {
   let best = null, bd = Infinity;
@@ -1600,30 +2098,317 @@ function astar(fromId, toId) {
   return null;
 }
 
+function bucketAdd(minute, a) {
+  const key = ((minute % 1440) + 1440) % 1440;
+  if (!wakeBuckets.has(key)) wakeBuckets.set(key, []);
+  wakeBuckets.get(key).push(a);
+}
+function bucketRemove(minute, a) {
+  const l = wakeBuckets.get(((minute % 1440) + 1440) % 1440);
+  if (l) { const i = l.indexOf(a); if (i >= 0) l.splice(i, 1); }
+}
+// ── エージェント決定的化: 固定シード乱数＋氏名。毎回同じ住人が同じ家・職場・時刻で生成される ──
+const AGENT_SEED = 20260713;
+function makeRng(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const AGENT_SURNAME = ['佐藤', '鈴木', '高橋', '田中', '伊藤', '渡辺', '山本', '中村', '小林', '加藤', '吉田', '山田', '佐々木', '山口', '松本', '井上', '木村', '林', '斎藤', '清水'];
+const AGENT_GIVEN = ['太郎', '花子', '健', '美咲', '翔', '葵', '大輔', 'さくら', '誠', '陽菜', '拓也', '結衣', '直樹', '愛', '悠', '凛', '剛', '千夏', '学', '萌'];
+let agentOverrides = {};   // agent-editorの保存差分: { "<id>": {work,goWork,goHome,line} }
+let agentWorks = [], agentHouses = [];
+async function loadAgentOverrides() {
+  try { agentOverrides = (await (await fetch('../npc/agent-overrides.json')).json()) || {}; }
+  catch { agentOverrides = {}; }
+}
 function initAgents() {
   if (!roadNodes.size || !bldModels.length) return;
   const houses = [], works = [];
   for (const md of bldModels) for (const rec of md.recs) (rec.tier === 'house' ? houses : works).push(rec);
   if (!houses.length || !works.length) return;
-  for (let i = 0; i < AGENT_COUNT; i++) {
-    const home = houses[(Math.random() * houses.length) | 0];
-    const work = works[(Math.random() * works.length) | 0];
-    agents.push({
-      id: i, home, work,
-      homeNode: nearestRoadNode(home.x, home.z), workNode: nearestRoadNode(work.x, work.z),
-      goWork: 7 + Math.random() * 3, goHome: 17 + Math.random() * 4,   // 通勤時刻の個体差
-      state: 'home', path: null, seg: 0, segT: 0, pathPending: false,
-      pos: new THREE.Vector3(home.x, home.m ? 0 : 0, home.z),
-      side: Math.random() < 0.5 ? 1 : -1,   // 歩道の左右
-      body: null, paused: 0,
-    });
+  // 最寄りノード探索の高速化: ノード配列を一度作り、粗い格子で近傍だけ見る
+  const nodeArr = [...roadNodes.entries()];
+  const cellMap = new Map();
+  for (const [id, nd] of nodeArr) {
+    const key = `${Math.floor(nd.local.x / 100)}_${Math.floor(nd.local.z / 100)}`;
+    if (!cellMap.has(key)) cellMap.set(key, []);
+    cellMap.get(key).push([id, nd]);
   }
-  console.log('agents:', agents.length);
+  const nearNode = (x, z) => {
+    const cx = Math.floor(x / 100), cz = Math.floor(z / 100);
+    let best = null, bd = Infinity;
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      const list = cellMap.get(`${cx + dx}_${cz + dz}`);
+      if (list) for (const [id, nd] of list) { const d = (nd.local.x - x) ** 2 + (nd.local.z - z) ** 2; if (d < bd) { bd = d; best = id; } }
+    }
+    return best ?? nearestRoadNode(x, z);
+  };
+  agentHouses = houses; agentWorks = works;   // エディタ用に公開
+  const rnd = makeRng(AGENT_SEED);   // 決定的: 毎回同じ住人
+  for (let i = 0; i < AGENT_COUNT; i++) {
+    const homeIdx = (rnd() * houses.length) | 0;
+    let workIdx = (rnd() * works.length) | 0;
+    let goWork = 7 + rnd() * 3, goHome = 17 + rnd() * 4;
+    const name = AGENT_SURNAME[(rnd() * AGENT_SURNAME.length) | 0] + ' ' + AGENT_GIVEN[(rnd() * AGENT_GIVEN.length) | 0];
+    const side = rnd() < 0.5 ? 1 : -1;
+    const o = agentOverrides[i];   // エディタの保存差分を上書き適用
+    if (o) {
+      if (Number.isInteger(o.work) && works[o.work]) workIdx = o.work;
+      if (o.goWork > 0) goWork = o.goWork;
+      if (o.goHome > 0) goHome = o.goHome;
+    }
+    const home = houses[homeIdx], work = works[workIdx];
+    const a = {
+      id: i, name, home, work, homeIdx, workIdx,
+      homeNode: nearNode(home.x, home.z), workNode: nearNode(work.x, work.z),
+      goWork, goHome, line: (o && o.line) || '',
+      state: (gameHour >= goWork && gameHour < goHome) ? 'work' : 'home',   // 開始時刻に応じた初期配置
+      path: null, pathHW: null, pathWH: null, seg: 0, segT: 0, pathPending: false,
+      pos: new THREE.Vector3(home.x, 0, home.z),
+      side,
+      body: null, paused: 0,
+      buckets: [Math.floor(goWork * 60), Math.floor(goHome * 60)],
+    };
+    agents.push(a);
+    for (const b of a.buckets) bucketAdd(b, a);   // 毎日この分に起床判定（日次サイクルなので入れっぱなし）
+    if (!homeIndex.has(home)) homeIndex.set(home, []);
+    homeIndex.get(home).push(a);
+  }
+  console.log('agents:', agents.length, '(homes covered:', homeIndex.size, '/', houses.length, ') overrides:', Object.keys(agentOverrides).length);
+}
+// エディタからの編集反映: 時刻→分バケット入替 / 職場→最寄りノード再計算＋経路キャッシュ破棄
+function rescheduleAgent(a, goWork, goHome) {
+  for (const b of a.buckets) bucketRemove(b, a);
+  a.goWork = goWork; a.goHome = goHome;
+  a.buckets = [Math.floor(goWork * 60), Math.floor(goHome * 60)];
+  for (const b of a.buckets) bucketAdd(b, a);
+}
+function setAgentWork(a, workIdx) {
+  if (!agentWorks[workIdx]) return;
+  a.workIdx = workIdx; a.work = agentWorks[workIdx];
+  a.workNode = nearestRoadNode(a.work.x, a.work.z);
+  a.pathHW = a.pathWH = null;
+}
+
+// ── 生活NPCエディタ（Mキー・ゲーム内オーバーレイ）──────────────────────
+// 俯瞰マップ＋一覧＋詳細編集。編集は即ゲームに反映し、保存で public/npc/agent-overrides.json へ
+const agentEd = { open: false, sel: null, bounds: null, roadsCv: null, t: 0, listT: 0, inited: false };
+const AE_STATE_LABEL = { home: '在宅', work: '勤務中', toWork: '出勤中', toHome: '帰宅中' };
+
+function toggleAgentEd() {
+  agentEd.open = !agentEd.open;
+  const el = $('agent-ed');
+  if (el) el.style.display = agentEd.open ? 'flex' : 'none';
+  if (agentEd.open) {
+    if (document.pointerLockElement) document.exitPointerLock();
+    for (const k of Object.keys(keysDown)) keysDown[k] = false;   // 押しっぱなし解除
+    if (!agents.length) { setStatus('エージェント未生成（都市の読込完了を待ってください）'); }
+    initAgentEdOnce();
+    refreshAgentList();
+    drawAgentMap();
+  }
+}
+
+function initAgentEdOnce() {
+  if (agentEd.inited || !roadNodes.size) return;
+  agentEd.inited = true;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const [, nd] of roadNodes) {
+    minX = Math.min(minX, nd.local.x); maxX = Math.max(maxX, nd.local.x);
+    minZ = Math.min(minZ, nd.local.z); maxZ = Math.max(maxZ, nd.local.z);
+  }
+  agentEd.bounds = { minX, maxX, minZ, maxZ };
+  // 道路網は一度だけオフスクリーンに描いて使い回す
+  const cv = $('ae-map');
+  const off = document.createElement('canvas');
+  off.width = cv.width; off.height = cv.height;
+  const ctx = off.getContext('2d');
+  ctx.fillStyle = '#0a0e1a'; ctx.fillRect(0, 0, off.width, off.height);
+  ctx.strokeStyle = '#26314e'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const e of activeEdges) {
+    const a = aeW2M(e.a.x, e.a.z), b = aeW2M(e.b.x, e.b.z);
+    ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  }
+  ctx.stroke();
+  agentEd.roadsCv = off;
+  cv.addEventListener('click', (ev) => {   // マップ上のドットをクリックで選択
+    const r = cv.getBoundingClientRect();
+    const mx = (ev.clientX - r.left) * (cv.width / r.width), my = (ev.clientY - r.top) * (cv.height / r.height);
+    let best = null, bd = 12 * 12;
+    for (const a of agents) {
+      const p = aeAgentPos(a), q = aeW2M(p.x, p.z);
+      const d = (q[0] - mx) ** 2 + (q[1] - my) ** 2;
+      if (d < bd) { bd = d; best = a; }
+    }
+    if (best) selectAgent(best);
+  });
+  $('ae-close').addEventListener('click', toggleAgentEd);
+  $('ae-search').addEventListener('input', refreshAgentList);
+  $('ae-list').addEventListener('click', (ev) => {
+    const it = ev.target.closest('.ae-item');
+    if (it) { const a = agents[Number(it.dataset.id)]; if (a) selectAgent(a); }
+  });
+  $('ae-gowork').addEventListener('change', aeCommitTimes);
+  $('ae-gohome').addEventListener('change', aeCommitTimes);
+  $('ae-line').addEventListener('change', () => {
+    const a = agentEd.sel; if (!a) return;
+    a.line = $('ae-line').value.trim();
+    aeMarkOverride(a);
+  });
+  $('ae-work-rand').addEventListener('click', () => {
+    const a = agentEd.sel; if (!a) return;
+    setAgentWork(a, (Math.random() * agentWorks.length) | 0);
+    aeMarkOverride(a); fillAgentDetail(true); drawAgentMap();
+  });
+  $('ae-work-near').addEventListener('click', () => {
+    const a = agentEd.sel; if (!a) return;
+    let bi = a.workIdx, bd = Infinity;
+    for (let i = 0; i < agentWorks.length; i++) {
+      const w = agentWorks[i];
+      const d = (w.x - a.home.x) ** 2 + (w.z - a.home.z) ** 2;
+      if (d < bd) { bd = d; bi = i; }
+    }
+    setAgentWork(a, bi); aeMarkOverride(a); fillAgentDetail(true); drawAgentMap();
+  });
+  $('ae-save').addEventListener('click', saveAgentOverrides);
+}
+
+function aeW2M(x, z) {
+  const b = agentEd.bounds, cv = $('ae-map'), pad = 8;
+  const s = Math.min((cv.width - pad * 2) / Math.max(1, b.maxX - b.minX), (cv.height - pad * 2) / Math.max(1, b.maxZ - b.minZ));
+  return [pad + (x - b.minX) * s, pad + (z - b.minZ) * s];
+}
+function aeAgentPos(a) { return walkingAgents.has(a) ? a.pos : (a.state === 'work' ? a.work : a.home); }
+
+function selectAgent(a) {
+  agentEd.sel = a;
+  const d = $('ae-detail'); if (d) d.style.display = 'flex';
+  refreshAgentList();
+  fillAgentDetail(true);
+  drawAgentMap();
+}
+function fillAgentDetail(full) {
+  const a = agentEd.sel; if (!a) return;
+  $('ae-name').textContent = `#${a.id} ${a.name}`;
+  $('ae-info').innerHTML =
+    `状態: ${AE_STATE_LABEL[a.state] || a.state}<br>` +
+    `自宅: (${a.home.x.toFixed(0)}, ${a.home.z.toFixed(0)})<br>` +
+    `職場: ${a.work.tier} (${a.work.x.toFixed(0)}, ${a.work.z.toFixed(0)})`;
+  if (full) {   // 入力欄は選択時のみ上書き（編集中の値を毎秒消さない）
+    $('ae-gowork').value = a.goWork.toFixed(1);
+    $('ae-gohome').value = a.goHome.toFixed(1);
+    $('ae-line').value = a.line || '';
+  }
+}
+function aeCommitTimes() {
+  const a = agentEd.sel; if (!a) return;
+  const gw = Math.min(23.9, Math.max(0, parseFloat($('ae-gowork').value))) || a.goWork;
+  const gh = Math.min(23.9, Math.max(0, parseFloat($('ae-gohome').value))) || a.goHome;
+  rescheduleAgent(a, gw, gh);
+  aeMarkOverride(a);
+}
+function aeMarkOverride(a) {
+  const o = { work: a.workIdx, goWork: Number(a.goWork.toFixed(2)), goHome: Number(a.goHome.toFixed(2)) };
+  if (a.line) o.line = a.line;
+  agentOverrides[a.id] = o;
+  const st = $('ae-count'); if (st) st.textContent = `変更 ${Object.keys(agentOverrides).length}件（要保存）`;
+}
+async function saveAgentOverrides() {
+  try {
+    const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'npc', filename: 'agent-overrides.json', content: JSON.stringify(agentOverrides, null, 1) }) });
+    setStatus(r.ok ? `保存しました: npc/agent-overrides.json（${Object.keys(agentOverrides).length}件）` : '保存失敗: ' + r.status);
+  } catch (e) { setStatus('保存失敗: ' + (e?.message || e)); }
+}
+function refreshAgentList() {
+  const list = $('ae-list'); if (!list) return;
+  const q = ($('ae-search')?.value || '').trim().toLowerCase();
+  const rows = [];
+  let shown = 0;
+  for (const a of agents) {
+    if (q && String(a.id) !== q && !a.name.toLowerCase().includes(q)) continue;
+    rows.push(`<div class="ae-item${agentEd.sel === a ? ' sel' : ''}" data-id="${a.id}"><span>#${a.id} ${a.name}</span><span class="ae-state">${AE_STATE_LABEL[a.state] || a.state}</span></div>`);
+    if (++shown >= 60) break;
+  }
+  list.innerHTML = rows.join('') || '<div class="ae-item"><span class="ae-state">該当なし</span></div>';
+  const st = $('ae-count');
+  if (st && !st.textContent.includes('要保存')) st.textContent = `${agents.length}人`;
+}
+function drawAgentMap() {
+  const cv = $('ae-map'); if (!cv || !agentEd.roadsCv) return;
+  const ctx = cv.getContext('2d');
+  ctx.drawImage(agentEd.roadsCv, 0, 0);
+  for (const a of agents) {   // 在宅=緑 / 勤務=青 / 歩行=橙
+    const p = aeAgentPos(a), [x, y] = aeW2M(p.x, p.z);
+    ctx.fillStyle = walkingAgents.has(a) ? '#ffa030' : a.state === 'work' ? '#4d7dd8' : '#3fae6a';
+    ctx.fillRect(x - 1, y - 1, 2, 2);
+  }
+  { const [x, y] = aeW2M(player.pos.x, player.pos.z); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 3.2, 0, Math.PI * 2); ctx.fill(); }
+  const a = agentEd.sel;
+  if (a) {
+    const path = a.path || a.pathHW;
+    if (path) {
+      ctx.strokeStyle = 'rgba(255,220,120,0.8)'; ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      for (let i = 0; i < path.length; i++) {
+        const nd = roadNodes.get(path[i]); if (!nd) continue;
+        const [x, y] = aeW2M(nd.local.x, nd.local.z);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    const sq = (bx, bz, color) => { const [x, y] = aeW2M(bx, bz); ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.strokeRect(x - 4, y - 4, 8, 8); };
+    sq(a.home.x, a.home.z, '#3fae6a');   // 自宅=緑□
+    sq(a.work.x, a.work.z, '#4d7dd8');   // 職場=青□
+    const p = aeAgentPos(a), [x, y] = aeW2M(p.x, p.z);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+function updateAgentEd(dt) {
+  if (!agentEd.open) return;
+  if (!agentEd.inited) initAgentEdOnce();   // 開いた時点で都市未生成だった場合のリトライ
+  agentEd.t -= dt;
+  if (agentEd.t <= 0) {
+    agentEd.t = 0.25;
+    drawAgentMap();
+    const h = Math.floor(gameHour), mi = Math.floor((gameHour - h) * 60);
+    const ck = $('ae-clock'); if (ck) ck.textContent = `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')} x${timeScale}`;
+    if (agentEd.sel) fillAgentDetail(false);   // 状態表示だけ更新（入力欄は触らない）
+  }
+  agentEd.listT -= dt;
+  if (agentEd.listT <= 0) { agentEd.listT = 1.5; refreshAgentList(); }
+}
+
+function requestCommute(a, dir) {
+  const cached = dir === 'toWork' ? a.pathHW : a.pathWH;
+  if (cached) { startWalk(a, dir, cached); return; }
+  if (!a.pathPending) { a.pathPending = true; _pathQueue.push({ a, dir }); }
+}
+function startWalk(a, dir, path) {
+  a.path = path; a.seg = 0; a.segT = 0; a.state = dir;
+  walkingAgents.add(a);
+}
+function arriveAgent(a) {
+  a.state = a.state === 'toWork' ? 'work' : 'home';
+  a.path = null;
+  walkingAgents.delete(a);
+  if (a.body) { a.body.agent = null; a.body = null; }   // 到着で身体をプールへ返す
+}
+function wakeAgent(a) {   // 分バケットから毎日呼ばれる。歩行中/停止中は無視
+  if (a.paused > 0) return;
+  if (a.state === 'home' && gameHour >= a.goWork && gameHour < a.goHome) requestCommute(a, 'toWork');
+  else if (a.state === 'work' && (gameHour >= a.goHome || gameHour < a.goWork)) requestCommute(a, 'toHome');
 }
 
 function walkPath(a, dt) {
   const path = a.path;
-  if (!path || a.seg >= path.length - 1) { a.state = a.state === 'toWork' ? 'work' : 'home'; a.path = null; return; }
+  if (!path || a.seg >= path.length - 1) { arriveAgent(a); return; }
   let move = AGENT_WALK * dt * timeScale;
   while (move > 0 && a.seg < path.length - 1) {
     const n0 = roadNodes.get(path[a.seg]), n1 = roadNodes.get(path[a.seg + 1]);
@@ -1633,7 +2418,7 @@ function walkPath(a, dt) {
     if (move >= remain) { move -= remain; a.seg++; a.segT = 0; }
     else { a.segT += move / len; move = 0; }
   }
-  if (a.seg >= path.length - 1) { a.state = a.state === 'toWork' ? 'work' : 'home'; a.path = null; return; }
+  if (a.seg >= path.length - 1) { arriveAgent(a); return; }
   const n0 = roadNodes.get(path[a.seg]).local, n1 = roadNodes.get(path[a.seg + 1]).local;
   const dx = n1.x - n0.x, dz = n1.z - n0.z, len = Math.hypot(dx, dz) || 1;
   const ox = -dz / len * a.side * (ROAD_WIDTH / 2 + 1.0), oz = dx / len * a.side * (ROAD_WIDTH / 2 + 1.0);   // 歩道オフセット
@@ -1642,21 +2427,39 @@ function walkPath(a, dt) {
 
 function updateAgents(dt) {
   if (!agents.length) return;
-  // A*は1フレーム2件まで
+  const t0 = performance.now();
+  // A*は1フレーム2件まで。結果は往復キャッシュ（=各エージェント一生に1回だけ計算）
   for (let k = 0; k < 2 && _pathQueue.length; k++) {
-    const req = _pathQueue.shift();
-    req.a.path = astar(req.from, req.to);
-    req.a.seg = 0; req.a.segT = 0; req.a.pathPending = false;
-    req.a.state = req.a.path ? req.next : (req.next === 'toWork' ? 'work' : 'home');   // 経路なしなら即到着扱い
-  }
-  for (const a of agents) {
-    if (a.paused > 0) { a.paused -= dt; continue; }
-    const wantWork = gameHour >= a.goWork && gameHour < a.goHome;
-    if (!a.pathPending) {
-      if (wantWork && a.state === 'home') { a.pathPending = true; _pathQueue.push({ a, from: a.homeNode, to: a.workNode, next: 'toWork' }); }
-      else if (!wantWork && a.state === 'work') { a.pathPending = true; _pathQueue.push({ a, from: a.workNode, to: a.homeNode, next: 'toHome' }); }
+    const { a, dir } = _pathQueue.shift();
+    a.pathPending = false;
+    const p = astar(a.homeNode, a.workNode);
+    if (p && p.length > 1) {
+      a.pathHW = p; a.pathWH = p.slice().reverse();
+      startWalk(a, dir, dir === 'toWork' ? a.pathHW : a.pathWH);
+    } else {
+      a.state = dir === 'toWork' ? 'work' : 'home';   // 経路なし＝瞬間移動扱い
     }
-    if (a.state === 'toWork' || a.state === 'toHome') walkPath(a, dt);
+  }
+  // 分バケット起床（在宅/在勤のエージェントはここでしか触らない＝イベント駆動）
+  const nowMin = Math.floor(gameHour * 60) % 1440;
+  if (lastMinute < 0) lastMinute = nowMin;
+  let guard = 0;
+  while (lastMinute !== nowMin && guard++ < 1441) {
+    lastMinute = (lastMinute + 1) % 1440;
+    const list = wakeBuckets.get(lastMinute);
+    if (list) for (const a of list) wakeAgent(a);
+  }
+  // 歩行中だけ毎フレーム更新
+  for (const a of walkingAgents) {
+    if (a.paused > 0) { a.paused -= dt; continue; }
+    walkPath(a, dt);
+  }
+  // 計測（5秒毎にコンソールへ）
+  _agentPerfMs += performance.now() - t0; _agentPerfN++;
+  _agentPerfT += dt;
+  if (_agentPerfT >= 5) {
+    console.log(`agents: walking ${walkingAgents.size}/${agents.length}, upd ${(_agentPerfMs / Math.max(1, _agentPerfN)).toFixed(3)}ms/f, queue ${_pathQueue.length}`);
+    _agentPerfMs = 0; _agentPerfN = 0; _agentPerfT = 0;
   }
 }
 
@@ -1665,22 +2468,27 @@ function updateAgentBodies(dt) {
   _agentBindT -= dt;
   if (_agentBindT > 0 || !agents.length) return;
   _agentBindT = 0.4;
-  for (const a of agents) {
-    const walking = a.state === 'toWork' || a.state === 'toHome';
-    const d = walking ? Math.hypot(a.pos.x - player.pos.x, a.pos.z - player.pos.z) : Infinity;
-    if (a.body) {
-      const m = a.body;
-      if (m.dissolving || m._remove) { a.body = null; a.paused = 30; continue; }   // 倒された→しばらく再出現しない
-      if (m.grabbed || m.eating || m.tornado || m.ragdoll?.active || m.scared) continue;   // 干渉中は既存挙動に任せる
-      if (!walking || d > AGENT_RELEASE_R) { m.agent = null; a.body = null; }
-    } else if (walking && d < AGENT_BIND_R) {
-      const m = kens.find((k) => !k.agent && !k.grabbed && !k.eating && !k.dissolving && !k.tornado && !k.ragdoll?.active);
-      if (m) {
-        m.agent = a; a.body = m;
-        m.pos.set(a.pos.x, groundYAt(a.pos.x, a.pos.z, player.pos.y), a.pos.z);
-        m.vrm.scene.position.copy(m.pos);
-      }
-    }
+  // 解放チェック（bodyを持つのは最大でもプール数）
+  for (const m of kens) {
+    const a = m.agent;
+    if (!a) continue;
+    if (m.dissolving || m._remove) { a.body = null; m.agent = null; a.paused = 30; continue; }   // 倒された→しばらく再出現しない
+    if (m.grabbed || m.eating || m.tornado || m.ragdoll?.active || m.scared) continue;   // 干渉中は既存挙動に任せる
+    const d = Math.hypot(a.pos.x - player.pos.x, a.pos.z - player.pos.z);
+    if (!walkingAgents.has(a) || d > AGENT_RELEASE_R) { m.agent = null; a.body = null; }
+  }
+  // バインド（歩行中のみ走査。距離2乗で早期スキップ）
+  const r2 = AGENT_BIND_R * AGENT_BIND_R;
+  for (const a of walkingAgents) {
+    if (a.body || a.paused > 0) continue;
+    const dx = a.pos.x - player.pos.x, dz = a.pos.z - player.pos.z;
+    if (dx * dx + dz * dz > r2) continue;
+    const m = kens.find((k) => !k.agent && !k.interior && !k.grabbed && !k.eating && !k.dissolving && !k.tornado && !k.ragdoll?.active);
+    if (!m) break;   // プール枯渇
+    m.agent = a; a.body = m;
+    m.pos.set(a.pos.x, groundYAt(a.pos.x, a.pos.z, player.pos.y), a.pos.z);
+    m.vrm.scene.position.copy(m.pos);
+    if (a.line && speechUI) speechUI.setBubble(m, a.line, 12);   // エディタで設定した一言（実体化した瞬間に喋る）
   }
 }
 
@@ -1724,12 +2532,18 @@ const KEN_BOUNDS = { min: new THREE.Vector3(-1e5, -1e5, -1e5), max: new THREE.Ve
 const _kQ = new THREE.Vector3(), _kF = new THREE.Vector3(), _kJ = new THREE.Vector3();
 
 const _gRayK = new THREE.Raycaster(), _gFromK = new THREE.Vector3(), _G_DOWN = new THREE.Vector3(0, -1, 0);
-function groundYAt(x, z, ref) {   // 地形の地面Y（DEM地形へレイキャスト）。取れなければ ref
-  if (!groundGroup || !groundGroup.children.length) return ref ?? 0;
+function groundYAt(x, z, ref) {   // 地面Y。道路上なら路面（タイル天面）を返す＝捕食・NPCが路面に埋まらない
+  const rt = roadTopAt(x, z);
+  if (mapTerrain) {   // マップモードは配列参照＝レイキャスト不要
+    const y = mapTerrain.heightAt(x, z);
+    return rt != null && rt > y ? rt : y;
+  }
+  if (!groundGroup || !groundGroup.children.length) return rt ?? ref ?? 0;
   _gFromK.set(x, (ref ?? 0) + 80, z);
   _gRayK.set(_gFromK, _G_DOWN); _gRayK.far = 100000;
   const hit = _gRayK.intersectObject(groundGroup, true)[0];
-  return hit ? hit.point.y : (ref ?? 0);
+  const y = hit ? hit.point.y : (ref ?? 0);
+  return rt != null && rt > y ? rt : y;
 }
 
 async function loadVrmAnimations(name) {
@@ -1831,11 +2645,11 @@ async function spawnKen() {
   return true;
 }
 
-function kenCount() { return kens.length; }
+function kenCount() { return kens.filter((k) => !k.interior).length; }   // 屋外プールの数（在宅住人は別枠）
 function removeKen() {
   for (let i = kens.length - 1; i >= 0; i--) {
     const m = kens[i];
-    if (m.grabbed || m.eating || m === player.prey) continue;
+    if (m.grabbed || m.eating || m === player.prey || m.interior) continue;
     finalizeRemoveKenAssets(m);
     kens.splice(i, 1);
     return true;
@@ -1928,7 +2742,7 @@ function startKenDissolve(m) {
   if (m.dis) m.dis.setArmed(true);
   else m.dis = createDissolve(m.vrm.scene, KEN_DISSOLVE_OPTS);
   m.dis.setProgress(0);
-  m.dis.setGroundY(groundYAt(_kQ.x, _kQ.z, _kQ.y));   // 地形の地面へパドルを固定
+  m.dis.setGroundY(m.floorY != null ? m.floorY : groundYAt(_kQ.x, _kQ.z, _kQ.y));   // 地形or屋内床へパドルを固定
   m.dis.setPuddleCenter(_kQ.x, _kQ.z);
   spawnImpactFx(_kQ);
 }
@@ -1963,7 +2777,7 @@ function updateKenGround(m, dt) {   // 地形上を逃走/うろつき
     m.scared = true;
     const inv = dist > 1e-3 ? 1 / dist : 0;
     dx = -_kF.x * inv; dz = -_kF.z * inv;
-    speed = KEN_RUN_SPEED;
+    speed = m.interior ? 2.2 : KEN_RUN_SPEED;   // 屋内では全力疾走しない
   } else {
     m.scared = false;
     m.wanderTimer -= dt;
@@ -1973,15 +2787,19 @@ function updateKenGround(m, dt) {   // 地形上を逃走/うろつき
       m.wanderTimer = 1.5 + Math.random() * 2.5;
     }
     dx = m.wanderDirX; dz = m.wanderDirZ;
-    speed = KEN_WALK_SPEED;
+    speed = m.walkSpeed ?? KEN_WALK_SPEED;
   }
   const dl = Math.hypot(dx, dz) || 1;
   const tvx = dx / dl * speed, tvz = dz / dl * speed;
   const k = 1 - Math.exp(-dt / KEN_STEER_TAU);
   m.vel.x += (tvx - m.vel.x) * k; m.vel.z += (tvz - m.vel.z) * k; m.vel.y = 0;
   m.pos.addScaledVector(m.vel, dt);
-  m.pos.y = groundYAt(m.pos.x, m.pos.z, m.pos.y);
-  if (m.pos.distanceTo(player.pos) > KEN_FAR_TELEPORT) {   // 離れすぎたら近傍へ再配置
+  m.pos.y = m.floorY != null ? m.floorY : groundYAt(m.pos.x, m.pos.z, m.pos.y);   // 屋内は固定床高
+  if (m.bounds) {   // 在宅住人は自分の部屋の中だけ
+    m.pos.x = Math.max(m.bounds.x0, Math.min(m.bounds.x1, m.pos.x));
+    m.pos.z = Math.max(m.bounds.z0, Math.min(m.bounds.z1, m.pos.z));
+  }
+  if (!m.interior && m.pos.distanceTo(player.pos) > KEN_FAR_TELEPORT) {   // 離れすぎたら近傍へ再配置
     const e = activeEdges.length ? pickEdgeNear(player.pos, KEN_SPAWN_R * 2) : null;
     if (e) { m.pos.set(e.a.x, groundYAt(e.a.x, e.a.z, player.pos.y), e.a.z); }
   }
@@ -2015,7 +2833,7 @@ function updateOneKen(m, dt) {
   if (m.tornado) { updateKenTornado(m, dt); return; }
   const rd = m.ragdoll;
   if (rd.active) {
-    const env = { floorY: groundYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y), bounds: KEN_BOUNDS };
+    const env = { floorY: m.floorY != null ? m.floorY : groundYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y), bounds: KEN_BOUNDS };
     if (m.grabbed) { env.pinBone = m.grabBone || 'chest'; env.pinPos = frontAnchor; }
     updateRagdoll(rd, dt, env);
     if (!m.grabbed) { m.recoverTimer -= dt; if (m.recoverTimer <= 0) setRagdollActive(rd, false); }
@@ -2066,7 +2884,9 @@ async function prepareBiteAssets() {
         bite.feedClipDur = clip.duration;
         bite.feedIntroOut = Math.min(clip.duration - 1e-3, (a.loopStart ?? 75) / fps);
         bite.loopStartFrame = a.loopStart ?? 75;
-        bite.feedLoopEnd = Math.min(clip.duration - 1e-3, a.loopEnd != null ? a.loopEnd / fps : clip.duration - 1e-3);
+        // ループ終端: loopEnd > trimOut > クリップ末尾 の優先順（trimOut超の帯域を誤って再生しない）
+        const rawEnd = a.loopEnd != null ? a.loopEnd / fps : (a.trimOut > 0 ? a.trimOut / fps : clip.duration);
+        bite.feedLoopEnd = Math.min(clip.duration - 1e-3, rawEnd);
         if (bite.feedLoopEnd <= bite.feedIntroOut) bite.feedLoopEnd = clip.duration - 1e-3;
       }
     }
@@ -2082,7 +2902,7 @@ function updatePredation(dt) {
   const m = player.prey;
   if (!m || player.eating) return;
   if (!m.grabbed || m.dissolving || m._remove) { player.prey = null; return; }
-  const gy = groundYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y);
+  const gy = m.floorY != null ? m.floorY : groundYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y);
   if (kenLowestY(m) < gy + PREY_GROUND_Y) m.preyGroundT = (m.preyGroundT || 0) + dt;   // 体の最下点が地形に接地
   else m.preyGroundT = 0;
   if (m.preyGroundT >= PREY_GROUND_TIME) startEating(m);
@@ -2104,6 +2924,8 @@ function startEating(m) {
   if (m.speech) m.speech.bark('predation');
   player.eating = true; player.eatT = 0;
   player.vel.set(0, 0, 0);
+  const sy = groundYAt(player.pos.x, player.pos.z, player.pos.y);   // 道路上なら路面へスナップ（埋まり防止）
+  if (player.pos.y < sy + 0.02) { player.pos.y = sy + 0.02; player.vrm.scene.position.copy(player.pos); }
   m.eating = true; m.eatBlend = 0;
   m.grabbed = false;
   m.eatMode = (bite.cfg.npc && bite.cfg.npc.mode === 'ragdoll') ? 'ragdoll' : 'anim';
@@ -2192,7 +3014,7 @@ function fireNudge(m, n) {
   applyRagdollImpulse(m.ragdoll, _kF, bone);
 }
 function updateEatingRagdoll(m, dt) {
-  const env = { floorY: groundYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y), bounds: KEN_BOUNDS };
+  const env = { floorY: m.floorY != null ? m.floorY : groundYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y), bounds: KEN_BOUNDS };
   if (biteMouthAnchor(_kQ)) { env.pinBone = bite.cfg.npc.biteBone || 'neck'; env.pinPos = _kQ; }
   updateRagdoll(m.ragdoll, dt, env);
   m.vrm.update(dt);
@@ -2218,7 +3040,8 @@ function updatePlayerEating(dt) {
   player.vrm.update(dt);
   if (player.cloth) player.cloth.update(dt, 0);
   player.eatT += dt;
-  if (player.eatT >= PREDATION_EAT_TIME) finishEating();
+  const eatDur = (bite.cfg?.anim?.eatTime > 0) ? bite.cfg.anim.eatTime : PREDATION_EAT_TIME;   // bite-editorで調整可能
+  if (player.eatT >= eatDur) finishEating();
 }
 function finishEating() {
   const m = player.prey;
@@ -2387,6 +3210,7 @@ function updateDayNight(dt) {
   if (neonMat) neonMat.opacity = nightF;                     // 屋上ランプは夜だけ
   if (carHeadMat) { carHeadMat.opacity = nightF; carTailMat.opacity = nightF; }
   if (streetGlowMat) streetGlowMat.opacity = nightF;   // 街灯も夜だけ
+  if (windowGlowMat) windowGlowMat.opacity = nightF * 0.9;   // 窓の光漏れも夜だけ
   if (cloudMat) {   // 雲: 時刻で色（夕焼けは太陽色に染まる）と濃さを変え、ゆっくり流す
     cloudMat.color.copy(dayLerp('sunC', gameHour)).lerp(_dcWhite, 0.6);
     cloudMat.opacity = 0.85 - nightF * 0.55;
@@ -2432,13 +3256,38 @@ function buildClouds() {
 }
 
 // ── ネオン/屋上ランプ: 高層=四隅・中層=中央1点を、全建物まとめて1つの Points で描画 ──
-let neonMat = null;
+// entry-editor で光点(light)マーカーを打ったモデルは、その位置・色を優先（全ティア有効）
+let neonMat = null, neonMesh = null, windowGlowMesh = null;
+const recLights = new Map();   // 建物rec -> {neon:[idx], glow:[idx]}（破壊時の消灯用）
+function recLightsOf(rec) {
+  if (!recLights.has(rec)) recLights.set(rec, { neon: [], glow: [] });
+  return recLights.get(rec);
+}
+const _offM = new THREE.Matrix4().makeScale(0, 0, 0);
+function hideBuildingLights(rec) {   // 崩壊した建物のネオン/窓発光をゼロスケールで消す
+  const e = rec && recLights.get(rec);
+  if (!e) return;
+  if (neonMesh) { for (const i of e.neon) neonMesh.setMatrixAt(i, _offM); if (e.neon.length) neonMesh.instanceMatrix.needsUpdate = true; }
+  if (windowGlowMesh) { for (const i of e.glow) windowGlowMesh.setMatrixAt(i, _offM); if (e.glow.length) windowGlowMesh.instanceMatrix.needsUpdate = true; }
+  recLights.delete(rec);
+}
 function buildNeon() {
   const pos = [], col = [];
   const c = new THREE.Color(), _v = new THREE.Vector3();
   for (const md of bldModels) {
     const bb = md.tpl.geometry.boundingBox;
+    const custom = (md.entries || []).filter((e) => e.kind === 'light');
     for (const rec of md.recs) {
+      if (custom.length) {
+        for (const L of custom) {
+          _v.fromArray(L.pos).applyMatrix4(rec.m);
+          if (L.color) c.set(L.color);
+          else c.setHSL(Math.random() < 0.55 ? 0.0 : (Math.random() < 0.6 ? 0.6 : 0.09), 1.0, 0.55);
+          recLightsOf(rec).neon.push(pos.length);
+          pos.push({ x: _v.x, y: _v.y, z: _v.z, r: c.r, g: c.g, b: c.b });
+        }
+        continue;
+      }
       if (rec.tier === 'house') continue;
       const corners = rec.tier === 'tower'
         ? [[bb.min.x, bb.max.y, bb.min.z], [bb.max.x, bb.max.y, bb.min.z], [bb.min.x, bb.max.y, bb.max.z], [bb.max.x, bb.max.y, bb.max.z]]
@@ -2446,6 +3295,7 @@ function buildNeon() {
       for (const p of corners) {
         _v.set(p[0], p[1] + 0.6, p[2]).applyMatrix4(rec.m);
         c.setHSL(Math.random() < 0.55 ? 0.0 : (Math.random() < 0.6 ? 0.6 : 0.09), 1.0, 0.55);   // 赤/青/橙
+        recLightsOf(rec).neon.push(pos.length);
         pos.push({ x: _v.x, y: _v.y, z: _v.z, r: c.r, g: c.g, b: c.b });
       }
     }
@@ -2463,7 +3313,62 @@ function buildNeon() {
   }
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   scene.add(mesh);
+  neonMesh = mesh;
   console.log('neon lamps:', pos.length);
+}
+
+// ── 窓の光漏れ: entry-editor の glow マーカー矩形を全建物インスタンスへ展開（夜だけ点灯）──
+// 通常合成＋深度テストあり＝壁の向こうは見えない。番地ハッシュで一部だけ点灯＝生活感と数の節約
+let windowGlowMat = null;
+const MAX_WINDOW_GLOWS = 20000, WINDOW_LIT_RATE = 0.6;
+function buildWindowGlows() {
+  const items = [];
+  // 窓ポイントマーカー(window)も既定サイズで光漏れ扱い（向きはバウンディングボックスの最寄り面から推定）
+  const guessRy = (p, bb) => {
+    const dW = p[0] - bb.min.x, dE = bb.max.x - p[0], dS = p[2] - bb.min.z, dN = bb.max.z - p[2];
+    const m = Math.min(dW, dE, dS, dN);
+    return m === dW ? -Math.PI / 2 : m === dE ? Math.PI / 2 : m === dS ? Math.PI : 0;
+  };
+  for (const md of bldModels) {
+    const bb = md.tpl.geometry.boundingBox;
+    const glows = [];
+    for (const e of md.entries || []) {
+      if (e.kind === 'glow') glows.push(e);
+      else if (e.kind === 'window') glows.push({ pos: e.pos, ry: guessRy(e.pos, bb), size: [0.14, 0.18] });
+    }
+    if (!glows.length) continue;
+    for (const rec of md.recs) {
+      for (let gi = 0; gi < glows.length; gi++) {
+        const h = ((Math.round(rec.x) * 73856093) ^ (Math.round(rec.z) * 19349663) ^ (gi * 83492791)) >>> 0;
+        if ((h % 1000) / 1000 > WINDOW_LIT_RATE) continue;   // この窓は消灯
+        if (items.length >= MAX_WINDOW_GLOWS) break;
+        items.push({ rec, g: glows[gi], h });
+      }
+    }
+  }
+  if (!items.length) { console.log('window glows: 0（glowマーカー未設定）'); return; }
+  windowGlowMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), windowGlowMat, items.length);
+  mesh.frustumCulled = false;
+  const _pp = new THREE.Vector3(), _qq = new THREE.Quaternion(), _ss = new THREE.Vector3();
+  const _lm = new THREE.Matrix4(), _wm = new THREE.Matrix4(), _cc = new THREE.Color(), _up2 = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < items.length; i++) {
+    const { rec, g, h } = items[i];
+    const ry = g.ry || 0;
+    _pp.fromArray(g.pos).addScaledVector(_ss.set(Math.sin(ry), 0, Math.cos(ry)), 0.006);   // 面から浮かせてz-fighting回避
+    _qq.setFromAxisAngle(_up2, ry);
+    _ss.set(g.size?.[0] ?? 0.3, g.size?.[1] ?? 0.4, 1);
+    _lm.compose(_pp, _qq, _ss);
+    _wm.multiplyMatrices(rec.m, _lm);
+    mesh.setMatrixAt(i, _wm);
+    recLightsOf(rec).glow.push(i);
+    _cc.setHSL(0.085 + ((h >>> 10) % 100) / 100 * 0.045, 0.85, 0.55 + ((h >>> 4) % 100) / 100 * 0.15);   // 暖色バリエーション
+    mesh.setColorAt(i, _cc);
+  }
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  scene.add(mesh);
+  windowGlowMesh = mesh;
+  console.log('window glows:', items.length);
 }
 
 // ── 車ライト: ヘッド/テールを各1つの Points（動的更新）。夜は遠距離の車体を隠しライトだけ描く ──
@@ -2654,7 +3559,12 @@ function updateWanted(dt) {
 }
 
 // ── 建物内装: 番地シードでその場生成（保存データゼロ）。玄関/窓マーカー（entry-editor）からEキーで出入り ──
-let bldEntries = {};   // モデル相対パス -> マーカー配列（buildKenneyCity で読込）
+let bldEntries = {};   // モデル相対パス -> マーカー配列（entry-editor製。道路の街灯より先に読む）
+let _bldEntriesP = null;
+function loadBldEntries() {   // 何度呼んでも1回だけfetch
+  if (!_bldEntriesP) _bldEntriesP = fetch('../models/building-entries.json').then((r) => r.json()).then((j) => { bldEntries = j || {}; }).catch(() => { bldEntries = {}; });
+  return _bldEntriesP;
+}
 const INTERIOR_ORIGIN = new THREE.Vector3(0, -320, 0);   // 内装ポケット（地形の遥か下＝街と干渉しない）
 const ENTRY_RANGE = 6, PROMPT_SCAN_R = 40;
 const FURN_DIR = '../models/kenney_furniture-kit/Models/GLTF format/';
@@ -2679,9 +3589,9 @@ async function loadFurn(name) {
   return e;
 }
 
-// 建物の進入マーカー（無ければテンプレ正面中央の玄関を仮定）
+// 建物の進入マーカー（入口になるものが無ければテンプレ正面中央の玄関を仮定。lightだけのモデルも玄関を補う）
 function mdMarkers(md) {
-  if (md.entries && md.entries.length) return md.entries;
+  if (md.entries && md.entries.some((e) => e.kind !== 'light')) return md.entries;
   const bb = md.tpl.geometry.boundingBox;
   return [{ kind: 'door', pos: [(bb.min.x + bb.max.x) / 2, bb.min.y + 0.02, bb.max.z] }];
 }
@@ -2703,6 +3613,7 @@ function updateEntryPrompt(dt) {
       if (rec.dead) continue;
       if (Math.abs(rec.x - player.pos.x) > PROMPT_SCAN_R || Math.abs(rec.z - player.pos.z) > PROMPT_SCAN_R) continue;
       for (const mk of markers) {
+        if (mk.kind === 'light') continue;   // 光点は入口ではない（glowは窓入口として有効）
         _emk.fromArray(mk.pos).applyMatrix4(rec.m);
         const dist = _emk.distanceTo(player.pos);
         if (dist < best) { best = dist; entryCandidate = { md, rec, kind: mk.kind }; }
@@ -2761,9 +3672,59 @@ async function enterBuilding(cand) {
   const t2 = performance.now();
   console.log(`interior: layout ${(t1 - t0).toFixed(1)}ms / spawn ${(t2 - t1).toFixed(1)}ms / seed ${seed}`);
   setStatus(`入室（生成 ${(t1 - t0).toFixed(1)}ms＋構築 ${(t2 - t1).toFixed(0)}ms）/ 玄関付近で【E】退出`);
+  interior.residents = [];
+  spawnResidents(layout, rec).catch((e) => console.warn('住人スポーン失敗:', e));   // この家が「自宅」で在宅中のエージェント
+}
+
+// この建物を自宅とする在宅エージェントを、内装に住人として実体化（夜=ベッド脇/日中=ソファや食卓付近）
+async function spawnResidents(layout, rec) {
+  const residentsAll = homeIndex.get(rec) || [];
+  const homies = residentsAll.filter((a) => a.state === 'home').slice(0, 2);   // インデックスでO(1)検索
+  if (!homies.length) {
+    // 理由を可視化: 「住人はいるが外出中」or「誰の家でもない（空き家）」
+    if (residentsAll.length) setStatus(`入室 / 住人は外出中のようだ（${residentsAll.length}人暮らし）/ 玄関で【E】退出`);
+    console.log(`residents: ${residentsAll.length} registered, 0 at home (hour=${gameHour.toFixed(1)})`);
+    return;
+  }
+  console.log(`residents: spawning ${homies.length}/${residentsAll.length} (hour=${gameHour.toFixed(1)})`);
+  const floorY = INTERIOR_ORIGIN.y + FLOORT_I;
+  const isNight = gameHour >= 21 || gameHour < 7;
+  const items0 = (layout.items || []).filter((i) => (i.level || 0) === 0 && !i.unit);
+  for (const a of homies) {
+    const pref = isNight ? ['bed', 'sofa'] : ['sofa', 'armchair', 'diningTable', 'chair'];
+    let spot = null;
+    for (const cat of pref) {
+      const c = items0.filter((i) => i.cat === cat);
+      if (c.length) { spot = c[(Math.random() * c.length) | 0]; break; }
+    }
+    const sx = spot ? spot.x : layout.w / 2, sz = spot ? spot.z : layout.d / 2;
+    if (!await spawnKen()) break;
+    const m = kens[kens.length - 1];
+    m.interior = true;
+    m.walkSpeed = 0.5;             // 家の中はゆっくり
+    m.floorY = floorY;
+    const room = (layout.rooms || []).find((r) => (r.level || 0) === 0 && sx >= r.x0 - 0.5 && sx <= r.x0 + r.w - 0.5 && sz >= r.z0 - 0.5 && sz <= r.z0 + r.d - 0.5);
+    const b = room || { x0: 0, z0: 0, w: layout.w, d: layout.d };
+    m.bounds = {   // 自分の部屋の中だけ動く
+      x0: INTERIOR_ORIGIN.x + (b.x0 - 0.1) * TILE_I, x1: INTERIOR_ORIGIN.x + (b.x0 + b.w - 0.9) * TILE_I,
+      z0: INTERIOR_ORIGIN.z + (b.z0 - 0.1) * TILE_I, z1: INTERIOR_ORIGIN.z + (b.z0 + b.d - 0.9) * TILE_I,
+    };
+    m.pos.set(INTERIOR_ORIGIN.x + (sx + 0.7) * TILE_I, floorY, INTERIOR_ORIGIN.z + sz * TILE_I);
+    m.vrm.scene.position.copy(m.pos);
+    // 将来の生活アニメ用アンカー（sleep/sit）。VRMA が用意でき次第ここに合わせる
+    m.lifeSpot = spot ? { action: spot.cat === 'bed' ? 'sleep' : 'sit', x: spot.x, z: spot.z, ry: spot.ry || 0 } : null;
+    interior.residents.push(m);
+  }
+  if (interior.residents.length) setStatus(`入室 / 住人が${interior.residents.length}人いる…（玄関で【E】退出）`);
 }
 
 function exitInterior() {
+  for (const m of (interior.residents || [])) {   // 住人を撤収（プールとは別枠）
+    if (player.prey === m) player.prey = null;
+    const i = kens.indexOf(m);
+    if (i >= 0) { kens.splice(i, 1); finalizeRemoveKenAssets(m); }
+  }
+  interior.residents = [];
   if (interior.group) { scene.remove(interior.group); interior.group = null; }   // ジオメトリ/材質はキャッシュ共有なのでdisposeしない
   interior.active = false;
   const r = interior.ret;
@@ -2800,6 +3761,9 @@ function tick() {
   updateCarLights();      // 車のヘッド/テールライト（夜）
   updateAgents(dt);       // 生活エージェント（データ層＝通勤）
   updateAgentBodies(dt);  // 近傍の通勤者へ ken の身体を割当
+  updateAgentEd(dt);      // 生活NPCエディタ（Mキー・開いている間だけ）
+  updateSignals(dt);      // 信号の三色サイクル（実時間・昼夜問わず点灯）
+  updateWater(dt);        // 水面: 法線スクロール＋距離LOD（マップモードのみ）
   updateWanted(dt);       // 手配度＋パトカー追跡＋サイレン
   if (speechUI) speechUI.update(dt, kenScreenPos);   // 頭上セリフバブル
   if (KENNEY_CITY) updateDamage(dt);
