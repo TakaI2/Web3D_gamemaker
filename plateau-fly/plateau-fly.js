@@ -1383,6 +1383,109 @@ function setupControls() {
   });
   window.addEventListener('keyup', (e) => { keysDown[e.code] = false; });
   window.addEventListener('wheel', (e) => { flight.maxSpeed = Math.max(4, Math.min(2000, flight.maxSpeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15))); });   // 基準8まで戻せるよう下限4
+  if (IS_TOUCH) setupTouchControls(cv);
+}
+
+// ── スマホ用タッチ操作（PCは従来どおり。粗ポインタ検出で自動有効化）──
+// 左半分=仮想スティック(移動) / 右半分=ドラッグで視点。右側タップ=通常ビーム、
+// 長押し=掴み（対象が居れば）／対象なしはチャージ→離してラージビーム。掴み中は指を離すと投擲
+const IS_TOUCH = (typeof window !== 'undefined') && (window.matchMedia?.('(pointer: coarse)').matches || 'ontouchstart' in window);
+const TOUCH_HOLD = 0.28;         // 長押し判定(秒)
+const TOUCH_LOOK = 0.0045;       // 視点感度
+function setupTouchControls(cv) {
+  for (const el of document.querySelectorAll('.touch-ui')) el.style.display = el.classList.contains('touch-btn') ? 'flex' : 'block';
+  $('joystick-base').style.display = 'none';
+  $('touch-charge').style.display = 'none';
+  const hint = $('hint');
+  if (hint) hint.textContent = '左半分ドラッグ=移動 / ▲▼=昇降 / 右半分ドラッグ=視点 / 右タップ=ビーム / 長押し=掴む(対象なしはチャージ→離してラージ) / 掴み中は指を離すと投擲';
+  locked = true;   // タッチはポインタロック不要＝入力を常時有効化
+  // 仮想スティック（左半分）
+  const base = $('joystick-base'), stick = $('joystick-stick');
+  let moveId = null, moveCx = 0, moveCy = 0;
+  const JOY_R = 55;
+  const setMoveKeys = (dx, dy) => {
+    const t = JOY_R * 0.3;
+    keysDown['KeyW'] = dy < -t; keysDown['KeyS'] = dy > t;
+    keysDown['KeyA'] = dx < -t; keysDown['KeyD'] = dx > t;
+  };
+  // 視点＋アクション（右半分）
+  let lookId = null, lookX = 0, lookY = 0, downT = 0, moved = 0, holdFired = false, touchGrabbed = false;
+  const holdCheck = () => {   // 長押し成立: まず掴みを試し、ダメならチャージ開始
+    if (holdFired || lookId == null || player.eating) return;
+    holdFired = true;
+    grabTarget();
+    if (isHolding()) { touchGrabbed = true; return; }
+    player.charging = true; player.chargeT = 0;
+    $('touch-charge').style.display = 'block';
+  };
+  cv.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.clientX < window.innerWidth / 2 && moveId == null) {   // 左=スティック出現
+        moveId = t.identifier; moveCx = t.clientX; moveCy = t.clientY;
+        base.style.display = 'block';
+        base.style.left = (moveCx - 70) + 'px'; base.style.top = (moveCy - 70) + 'px';
+        stick.style.transform = 'translate(0px,0px)';
+      } else if (lookId == null) {                                  // 右=視点/アクション
+        lookId = t.identifier; lookX = t.clientX; lookY = t.clientY;
+        downT = performance.now(); moved = 0; holdFired = false; touchGrabbed = false;
+      }
+    }
+  }, { passive: false });
+  cv.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier === moveId) {
+        let dx = t.clientX - moveCx, dy = t.clientY - moveCy;
+        const d = Math.hypot(dx, dy);
+        if (d > JOY_R) { dx *= JOY_R / d; dy *= JOY_R / d; }
+        stick.style.transform = `translate(${dx}px,${dy}px)`;
+        setMoveKeys(dx, dy);
+      } else if (t.identifier === lookId) {
+        const dx = t.clientX - lookX, dy = t.clientY - lookY;
+        lookX = t.clientX; lookY = t.clientY;
+        moved += Math.abs(dx) + Math.abs(dy);
+        camYaw -= dx * TOUCH_LOOK;
+        camPitch = Math.max(-1.25, Math.min(1.35, camPitch - dy * TOUCH_LOOK));
+      }
+    }
+    if (lookId != null && !holdFired && moved < 18 && performance.now() - downT >= TOUCH_HOLD * 1000) holdCheck();
+  }, { passive: false });
+  const endTouch = (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier === moveId) {
+        moveId = null;
+        base.style.display = 'none';
+        setMoveKeys(0, 0);
+      } else if (t.identifier === lookId) {
+        lookId = null;
+        if (!holdFired && moved < 18 && performance.now() - downT >= TOUCH_HOLD * 1000) holdCheck();   // move無しの長押し
+        if (touchGrabbed) releaseGrab();                        // 掴み解放＝投擲
+        else if (player.charging) {                             // チャージ解放
+          player.charging = false;
+          $('touch-charge').style.display = 'none';
+          if (!player.eating) { if (player.chargeT < TAP_THRESHOLD) normalShot(); else fireLargeBeam(); }
+        } else if (!holdFired && moved < 18 && !player.eating) normalShot();   // 短タップ=通常ビーム
+        touchGrabbed = false; holdFired = false;
+      }
+    }
+  };
+  cv.addEventListener('touchend', endTouch, { passive: false });
+  cv.addEventListener('touchcancel', endTouch, { passive: false });
+  // 長押し判定は移動が無くても発火させる（ポーリング）
+  setInterval(() => {
+    if (lookId != null && !holdFired && moved < 18 && performance.now() - downT >= TOUCH_HOLD * 1000) holdCheck();
+    if (player.charging) $('touch-charge').textContent = `チャージ ${(Math.min(player.chargeT / MAX_CHARGE_TIME, 1) * 100) | 0}%`;
+    else $('touch-charge').style.display = 'none';   // トーテム分岐などでチャージが解除された場合も消す
+    const be = $('btn-enter');
+    if (be) be.style.display = entryPrompt ? 'flex' : 'none';   // 入退室ボタンはプロンプトが出ている時だけ
+  }, 120);
+  $('btn-up').addEventListener('touchstart', (e) => { e.preventDefault(); keysDown['Space'] = true; }, { passive: false });
+  $('btn-up').addEventListener('touchend', (e) => { e.preventDefault(); keysDown['Space'] = false; }, { passive: false });
+  $('btn-down').addEventListener('touchstart', (e) => { e.preventDefault(); keysDown['ShiftLeft'] = true; }, { passive: false });
+  $('btn-down').addEventListener('touchend', (e) => { e.preventDefault(); keysDown['ShiftLeft'] = false; }, { passive: false });
+  $('btn-enter').addEventListener('touchstart', (e) => { e.preventDefault(); onInteract(); }, { passive: false });
 }
 
 const _clock = new THREE.Clock();
