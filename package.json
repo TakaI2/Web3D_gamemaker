@@ -24,7 +24,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "build:cityfly": "node scripts/build-plateau-fly.mjs"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.4.0",

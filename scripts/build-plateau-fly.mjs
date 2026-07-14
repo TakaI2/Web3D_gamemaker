@@ -2,23 +2,26 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// plateau-fly を自己完結の dist-plateau-fly/ に書き出す（/htdocs/plateau-fly/ へ配置）。
-// three / three-vrm / 3d-tiles-renderer / DRACO・KTX2 デコーダは全て CDN（esm.sh / jsdelivr）から
-// 実行時取得するため同梱不要。ローカル参照（lib / npc / timeline / vrma / roads / models）だけを
-// dist 内へコピーし、相対パスを ./ 起点へ書き換える。
-// PLATEAU(reearth) と 地理院タイル(GSI) はリモート配信なのでネット接続が必要。
+// CityFly（旧 PLATEAU Fly）を自己完結の dist-cityfly/ に書き出す。
+// three / three-vrm 等は CDN（esm.sh / jsdelivr）から実行時取得するため同梱不要。
+// ローカル参照（lib / npc / timeline / vrma / roads / models / maps）だけを dist 内へコピーし、
+// 相対パスを ./ 起点へ書き換える。DEFAULT_MAP を index.html に注入＝起動時から自作マップで動く
+// （PLATEAU/GSIへはアクセスしない。道路スプライン未保存のマップはOSMフォールバック＝OSM表記が自動表示される）。
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const src  = path.join(root, 'plateau-fly');
-const dest = path.join(root, 'dist-plateau-fly');
+const dest = path.join(root, 'dist-cityfly');
 const pub  = path.join(root, 'public');
+const DEFAULT_MAP = process.env.MAP || 'mytown';   // 既定マップ（MAP=名前 npm run build:cityfly で変更可）
 
 fs.rmSync(dest, { recursive: true, force: true });
 fs.mkdirSync(dest, { recursive: true });
 
-// index.html はそのままコピー
-fs.copyFileSync(path.join(src, 'index.html'), path.join(dest, 'index.html'));
-console.log('copied: index.html');
+// index.html: DEFAULT_MAP を注入してコピー
+const html = fs.readFileSync(path.join(src, 'index.html'), 'utf8')
+  .replace('<script type="module"', `<script>window.DEFAULT_MAP = '${DEFAULT_MAP}';</script>\n  <script type="module"`);
+fs.writeFileSync(path.join(dest, 'index.html'), html);
+console.log(`copied: index.html (DEFAULT_MAP=${DEFAULT_MAP})`);
 
 // plateau-fly.js: ローカル相対参照を dist 内ローカル（./）へ書き換え
 const jsSrc = fs.readFileSync(path.join(src, 'plateau-fly.js'), 'utf8')
@@ -27,13 +30,29 @@ const jsSrc = fs.readFileSync(path.join(src, 'plateau-fly.js'), 'utf8')
   .replace(/\.\.\/npc\//g, './npc/')
   .replace(/\.\.\/timeline\//g, './timeline/')
   .replace(/\.\.\/vrma\//g, './vrma/')
-  .replace(/\.\.\/roads\//g, './roads/');
+  .replace(/\.\.\/roads\//g, './roads/')
+  .replace(/\.\.\/maps\//g, './maps/')
+  .replace(/\.\.\/fx\//g, './fx/')
+  .replace(/\.\.\/ragdoll\//g, './ragdoll/')
+  .replace(/\.\.\/bitealign\//g, './bitealign/')
+  .replace(/\.\.\/audio\//g, './audio/')
+  .replace(/\.\.\/api\//g, './api/');   // api/save は開発サーバ専用（本番は保存ボタンが失敗表示になるだけ）
 fs.writeFileSync(path.join(dest, 'plateau-fly.js'), jsSrc);
 console.log('copied: plateau-fly.js (paths rewritten)');
 
+// 自作マップ（.map.json）
+const mapsSrc = path.join(pub, 'maps');
+if (fs.existsSync(mapsSrc)) {
+  const mapsDest = path.join(dest, 'maps'); fs.mkdirSync(mapsDest, { recursive: true });
+  for (const f of fs.readdirSync(mapsSrc).filter((f) => f.endsWith('.map.json'))) fs.copyFileSync(path.join(mapsSrc, f), path.join(mapsDest, f));
+  console.log('copied: maps/*.map.json');
+}
+
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'kenney-buildings.js', 'room-gen.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js']) {
-  const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8').replace(/\.\.\/lib\//g, './');
+for (const f of ['vrm-cloth.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js']) {
+  const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8')
+    .replace(/\.\.\/lib\//g, './')
+    .replace(/\.\.\/speech\//g, './speech/');   // speech-set.js は import.meta.url 相対（distではlibがルート直下）
   fs.writeFileSync(path.join(dest, f), libSrc);
   console.log(`copied: ${f}`);
 }
@@ -128,10 +147,12 @@ fs.copyFileSync(path.join(carSrc, 'Textures', 'colormap.png'), path.join(carDest
 console.log(`copied: ${CAR_KIT.length} car models + colormap.png`);
 
 // Kenney 建物キット（KENNEY_CITY モード用）＋ 各キットの colormap
+// suburban には街路樹(tree-large/small)も追加。roads キットは道路実体化・交差点・信号で使用
 const letters = (a, z) => Array.from({ length: z.charCodeAt(0) - a.charCodeAt(0) + 1 }, (_, i) => String.fromCharCode(a.charCodeAt(0) + i));
 const BLD = [
   { dir: 'city_GLB format', models: [...letters('a', 'n').map((c) => 'building-' + c), ...letters('a', 'e').map((c) => 'building-skyscraper-' + c)] },
-  { dir: 'kenney_city-kit-suburban_20/Models/GLB format', models: letters('a', 'u').map((c) => 'building-type-' + c) },
+  { dir: 'kenney_city-kit-suburban_20/Models/GLB format', models: [...letters('a', 'u').map((c) => 'building-type-' + c), 'tree-large', 'tree-small'] },
+  { dir: 'kenney_city-kit-roads/Models/GLB format', models: ['road-straight', 'light-curved', 'light-square', 'road-crossroad-path', 'road-intersection-path', 'road-bend-sidewalk', 'road-crossing', 'road-straight-barrier'] },
 ];
 for (const kit of BLD) {
   const s = path.join(pub, 'models', kit.dir);
@@ -175,4 +196,4 @@ for (const f of roadFiles) fs.copyFileSync(path.join(roadSrc, f), path.join(road
 fs.writeFileSync(path.join(roadDest, 'manifest.json'), JSON.stringify(roadFiles));
 console.log(`copied: ${roadFiles.length} road tiles + static manifest.json`);
 
-console.log('\ndist-plateau-fly/ ready for deployment to /htdocs/plateau-fly/');
+console.log('\ndist-cityfly/ ready for deployment（既定マップ: ' + DEFAULT_MAP + '）');

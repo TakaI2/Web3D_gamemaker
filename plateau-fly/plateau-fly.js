@@ -201,7 +201,7 @@ function recenterToHachioji() {
 // ── 地面: 地理院タイル(航空写真)＋DEM(標高)で地形追従。建物(楕円体高)に合わせ geoid 補正 ──
 const GROUND_ZOOM = 16, GROUND_RADIUS = 5, DEM_ZOOM = 14, GROUND_SUB = 8;
 // ── マップモード（map-editor製 .map.json の地形へ置換）──
-const MAP_NAME = new URLSearchParams(location.search).get('map');
+const MAP_NAME = new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || null;   // dist はビルド時に window.DEFAULT_MAP を注入
 let mapTerrain = null;   // createTerrainMesh の戻り値（heightAt含む）
 let mapRoads = [];       // .map.json のスプライン道路（あればOSMの代わりに使う）
 let mapBuildings = null; // .map.json の建物差分 {removed[], moved{}, added[]}
@@ -270,8 +270,15 @@ async function buildMapGround() {
   mapBuildings = (j.buildings && ((j.buildings.removed || []).length || (j.buildings.added || []).length || Object.keys(j.buildings.moved || {}).length)) ? j.buildings : null;
   mapWater = Array.isArray(j.water) ? j.water : [];
   if (mapWater.length) try { buildMapWater(); } catch (e) { console.warn('水面生成失敗', e); }
-  // 地形・道路とも完全自作なら外部データ表記を消す（DEMインポート/OSM取込道路は表記が必要なまま）
-  if (mapRoads.length && !j.terrain?.attribution && !j.osmRoads) { const a = $('attrib'); if (a) a.style.display = 'none'; }
+  // 表記を実際の使用データに合わせて動的に書き換え（PLATEAU/GSI航空写真はマップモードでは不使用）
+  const a = $('attrib');
+  if (a) {
+    const parts = [];
+    if (j.terrain?.attribution) parts.push('地形標高: 地理院タイル/国土地理院');
+    if (!mapRoads.length || j.osmRoads) parts.push('道路データ: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL)');   // スプライン未保存＝OSMフォールバック
+    if (parts.length) a.innerHTML = parts.join('｜ ');
+    else a.style.display = 'none';
+  }
   console.log('map:', MAP_NAME, mapTerrain.data.size + 'm / res', mapTerrain.data.res, '/ roads', mapRoads.length);
 }
 const GEOID = 37;              // Kanto ジオイド高(概算, m)。DEM(標高)→楕円体高 へ +GEOID（建物と整合）
