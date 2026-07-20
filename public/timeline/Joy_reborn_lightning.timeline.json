@@ -92,6 +92,7 @@
       "count": 24,
       "params": {
         "color": "#ffbdbd",
+        "width": 4,
         "emissive": 3.35,
         "jitter": 0.37,
         "freq": 15,
@@ -179,6 +180,7 @@
       "count": 24,
       "params": {
         "color": "#ffbdbd",
+        "width": 4,
         "emissive": 1.7,
         "jitter": 0,
         "freq": 15,

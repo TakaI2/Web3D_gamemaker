@@ -89,9 +89,33 @@
       <button id="btn-water-del" class="sub">この水面を削除</button>
     </div>
     <div style="font-size:10px;color:#667;">＋水面→地形クリックで設置（水位=その場の高さ+1m）。クリック選択→ドラッグ移動、スライダでサイズ/水位。</div>
+    <h3>植生（森）</h3>
+    <div class="row">
+      <button id="btn-veg-mode" class="sub">🌲 植生ペイント</button>
+      <button id="btn-veg-clear" class="sub">全消去</button>
+    </div>
+    <label>密度 <input type="range" id="veg-d" min="0.1" max="1" step="0.05" value="1"><span class="val" id="veg-d-val">1.00</span></label>
+    <button id="btn-veg-settings" class="sub">⚙ 植生の設定（接地位置など）</button>
+    <div style="font-size:10px;color:#667;">左ドラッグで木の生える範囲を塗る（Shift=消す）。半径は地形ブラシと共通。密度=そのセルに木が生える確率。道路・建物・水面・急斜面は自動で避けます。<b>未ペイントのマップは従来どおり自動群生。</b></div>
+    <h3>公園（閉じスプライン）</h3>
+    <div class="row">
+      <button id="btn-park-mode" class="sub">公園編集モード</button>
+      <button id="btn-park-new" class="sub">＋新しい公園</button>
+    </div>
+    <div class="row">
+      <button id="btn-park-delpt" class="sub">選択点を削除</button>
+      <button id="btn-park-del" class="sub">公園ごと削除</button>
+    </div>
+    <label>噴水 <select id="park-fountain" style="width:auto;flex:1;">
+      <option value="round">丸 (fountain-round-detail)</option>
+      <option value="square">四角 (fountain-square-detail)</option>
+    </select></label>
+    <label>生垣の重なり <input type="range" id="park-ovr" min="1" max="2.5" step="0.05" value="1.1"><span class="val" id="park-ovr-val">1.10</span></label>
+    <div style="font-size:10px;color:#667;">クリックで頂点を追加（自動で閉じる・右クリックで引き終わり）。ゲームでは境界に生垣（道路に最も近い区画がゲート）、中央に噴水、各頂点の内側にランタン（夜発光）、中は緑地になります。</div>
     <h3>町プレビュー</h3>
     <button id="btn-town" class="sub">道路＋建物を地形に載せる</button>
-    <div style="font-size:10px;color:#667;">自作道路があればそれを、無ければOSM道路を使用。建物はゲームと同じ配置ロジック（箱表示）。ブラシや道路編集に追従します。</div>
+    <button id="btn-gamepv" class="sub">🎮 実モデル表示（ゲームの見た目）</button>
+    <div style="font-size:10px;color:#667;">自作道路があればそれを、無ければOSM道路を使用。建物はゲームと同じ配置ロジック（箱表示）。🎮はCityFlyと同じGLB/スケールで建物・道路・公園・森を表示（編集後はもう一度押して更新）。</div>
     <h3>保存 / 読込</h3>
     <input type="text" id="save-name" placeholder="map名 (例: mytown)">
     <div class="row"><button id="btn-save">保存</button><select id="load-list"></select></div>
@@ -99,6 +123,23 @@
     <div style="font-size:10px;color:#667;">ゲームで見る: plateau-fly/?map=名前（地形のみ・道路は従来）</div>
   </div>
   <div id="hint"><b>左ドラッグ</b>ブラシ適用（Shift=逆） / <b>右ドラッグ</b>視点回転 / <b>ホイール</b>ズーム / <b>中ドラッグ</b>パン</div>
+  <div id="veg-modal" style="display:none; position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:30; width:300px; background:rgba(12,16,28,0.96); border:1px solid #2a3756; border-radius:8px; padding:14px; font-size:12px; flex-direction:column; gap:10px; box-shadow:0 8px 40px rgba(0,0,0,0.6);">
+    <h3 style="margin:0; font-size:13px; color:#9fd0ff;">植生の設定</h3>
+    <label style="display:flex; justify-content:space-between; align-items:center; gap:6px; color:#aabbd0;">接地オフセット(m)
+      <input type="range" id="veg-yoff" min="-3" max="3" step="0.1" value="0" style="flex:1;">
+      <span class="val" id="veg-yoff-val">0.0</span>
+    </label>
+    <label style="display:flex; flex-direction:column; gap:4px; color:#aabbd0; align-items:stretch;">木のモデル（models/ から選択）
+      <input type="text" id="veg-model-filter" value="tree" placeholder="絞り込み (例: tree)" style="background:#1a2438; color:#e6ecf5; border:1px solid #2a3756; border-radius:4px; padding:4px 6px; font-size:12px;">
+      <select id="veg-model" style="background:#1a2438; color:#e6ecf5; border:1px solid #2a3756; border-radius:4px; padding:4px 6px; font-size:12px; width:100%;"></select>
+    </label>
+    <label style="display:flex; justify-content:space-between; align-items:center; gap:6px; color:#aabbd0;">木の高さ(m)
+      <input type="range" id="veg-h" min="2" max="25" step="0.5" value="7" style="flex:1;">
+      <span class="val" id="veg-h-val">7.0</span>
+    </label>
+    <div style="font-size:10px; color:#667;">木の根元の高さ。マイナス=地面に沈む / プラス=浮く。モデル未選択なら既定（街路樹と同じ大小ミックス）。プレビューに即反映され、保存するとゲーム（CityFly）の森にも適用されます。</div>
+    <button id="btn-veg-modal-close" style="background:#2b4a80; color:#fff; border:none; border-radius:4px; padding:7px 10px; font-size:12px; cursor:pointer;">閉じる</button>
+  </div>
   <script type="module" src="./map-editor.js"></script>
 </body>
 </html>

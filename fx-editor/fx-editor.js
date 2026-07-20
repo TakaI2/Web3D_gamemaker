@@ -163,6 +163,7 @@ const FX_PARAM_DEFS = {
   ],
   beam: [
     { key: 'color',    label: '帯 色',    type: 'color', default: '#bfe0ff' },
+    { key: 'width',    label: '帯 太さ',  type: 'range', min: 0.05, max: 4,  step: 0.05, default: 0.4 },
     { key: 'emissive', label: '帯 発光',  type: 'range', min: 0.2, max: 4,   step: 0.05, default: 1.7 },
     { key: 'jitter',   label: 'ギザギザ', type: 'range', min: 0,   max: 0.8, step: 0.01, default: 0.3 },
     { key: 'freq',     label: '細かさ',   type: 'range', min: 4,   max: 40,  step: 1,    default: 15 },
@@ -171,7 +172,7 @@ const FX_PARAM_DEFS = {
     { key: 'core',     label: '芯',       type: 'range', min: 0.5, max: 5,   step: 0.1,  default: 2 },
     { key: 'tube',        label: '円筒',      type: 'check', default: true },
     { key: 'tubeSheet',   label: '円筒 シート抜き', type: 'check', default: false },
-    { key: 'tubeRadius',  label: '円筒 太さ', type: 'range', min: 0.02, max: 1,  step: 0.01, default: 0.16 },
+    { key: 'tubeRadius',  label: '円筒 太さ', type: 'range', min: 0.02, max: 3,  step: 0.01, default: 0.16 },
     { key: 'tubeColor',   label: '円筒 色',   type: 'color', default: '#5aa0ff' },
     { key: 'tubeEmissive',label: '円筒 発光', type: 'range', min: 0.2,  max: 8,  step: 0.05, default: 2.6 },
     { key: 'tubeOpacity', label: '円筒 濃さ', type: 'range', min: 0,    max: 1,  step: 0.02, default: 0.85 },

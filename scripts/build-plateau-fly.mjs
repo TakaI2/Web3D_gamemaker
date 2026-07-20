@@ -36,15 +36,23 @@ const jsSrc = fs.readFileSync(path.join(src, 'plateau-fly.js'), 'utf8')
   .replace(/\.\.\/ragdoll\//g, './ragdoll/')
   .replace(/\.\.\/bitealign\//g, './bitealign/')
   .replace(/\.\.\/audio\//g, './audio/')
-  .replace(/\.\.\/api\//g, './api/');   // api/save は開発サーバ専用（本番は保存ボタンが失敗表示になるだけ）
+  .replace(/\.\.\/api\//g, './api/')   // api/save は開発サーバ専用（本番は保存ボタンが失敗表示になるだけ）
+  .replace(/\.\.\/([\w\-]+\.png)/g, './$1');   // コード直参照のテクスチャ（electric.png等）
 fs.writeFileSync(path.join(dest, 'plateau-fly.js'), jsSrc);
 console.log('copied: plateau-fly.js (paths rewritten)');
 
-// 自作マップ（.map.json）
+// 自作マップ（.map.json）。植生が参照する木モデル（forest.model）も収集して後で同梱
 const mapsSrc = path.join(pub, 'maps');
+const forestModels = new Set();
 if (fs.existsSync(mapsSrc)) {
   const mapsDest = path.join(dest, 'maps'); fs.mkdirSync(mapsDest, { recursive: true });
-  for (const f of fs.readdirSync(mapsSrc).filter((f) => f.endsWith('.map.json'))) fs.copyFileSync(path.join(mapsSrc, f), path.join(mapsDest, f));
+  for (const f of fs.readdirSync(mapsSrc).filter((f) => f.endsWith('.map.json'))) {
+    fs.copyFileSync(path.join(mapsSrc, f), path.join(mapsDest, f));
+    try {
+      const fm = JSON.parse(fs.readFileSync(path.join(mapsSrc, f), 'utf8')).forest?.model;
+      if (fm) forestModels.add(fm);
+    } catch { /* 壊れたマップは無視 */ }
+  }
   console.log('copied: maps/*.map.json');
 }
 
@@ -64,17 +72,20 @@ for (const n of ['Joy_reborn.npc.json', 'ken.npc.json']) {
   fs.copyFileSync(path.join(pub, 'npc', n), path.join(npcDest, n));
   console.log(`copied: npc/${n}`);
 }
+const clSrc = path.join(pub, 'npc', 'char-light.json');
+if (fs.existsSync(clSrc)) { fs.copyFileSync(clSrc, path.join(npcDest, 'char-light.json')); console.log('copied: npc/char-light.json'); }
 
 // timeline（飛行＋攻撃＋トーテム）+ それが参照する vrma
 const timelines = [
   'Joy_reborn_Fly_idle', 'Joy_reborn_Fly_f', 'Joy_reborn_front_down', 'Joy_reborn_Fly_back', 'Joy_reborn_Fly_L', 'Joy_reborn_Fly_R',
   'Joy_reborn_Fly_f2', 'Joy_reborn_capcher1', 'Joy_reborn_throw', 'Joy_reborn_cas1_L1', 'Joy_reborn_large_shot_load', 'Joy_reborn_large_beam', 'Joy_reborn_lightning', 'Joy_reborn_totem',
+  'Joy_reborn_drain_0', 'Joy_reborn_drain_1',   // アルティメット（電撃乱射）
 ];
 const tlDest = path.join(dest, 'timeline'); fs.mkdirSync(tlDest, { recursive: true });
 const vrmaDest = path.join(dest, 'vrma'); fs.mkdirSync(vrmaDest, { recursive: true });
 const vrmaSet = new Set(['Catwalk_Walk_Forward.vrma']);   // ken 歩行
 // timeline/fx が参照する public 直下のテクスチャpng（例 ../electric.png）を集めて同梱し、パスを ./ へ書き換え
-const texPngs = new Set();
+const texPngs = new Set(['electric.png']);   // アルティメット乱射のシート（コードから直接参照）
 const rewriteTexPaths = (text) => text.replace(/\.\.\/([\w\-. %@]+\.png)/g, (_, name) => { texPngs.add(name); return './' + name; });
 for (const t of timelines) {
   const file = path.join(pub, 'timeline', t + '.timeline.json');
@@ -161,6 +172,26 @@ for (const kit of BLD) {
   for (const m of kit.models) fs.copyFileSync(path.join(s, m + '.glb'), path.join(d, m + '.glb'));
   fs.copyFileSync(path.join(s, 'Textures', 'colormap.png'), path.join(d, 'Textures', 'colormap.png'));
   console.log(`copied: ${kit.models.length} building models from ${kit.dir}`);
+}
+
+// 公園モデル（生垣/ゲート/噴水/ランタン＝buildParksが固定参照）
+for (const m of ['hedge', 'hedge-gate', 'fountain-round-detail', 'fountain-square-detail', 'lantern']) {
+  forestModels.add('fantasy_GLB format/' + m + '.glb');
+}
+// 森の木モデル（マップの forest.model が参照）＋公園モデル。同キットの colormap もあれば同梱
+for (const rel of forestModels) {
+  const srcF = path.join(pub, 'models', rel);
+  if (!fs.existsSync(srcF)) { console.warn(`skip missing forest model: ${rel}`); continue; }
+  const dstF = path.join(dest, 'models', rel);
+  fs.mkdirSync(path.dirname(dstF), { recursive: true });
+  fs.copyFileSync(srcF, dstF);
+  const kitDir = path.dirname(rel);
+  const tex = path.join(pub, 'models', kitDir, 'Textures', 'colormap.png');
+  if (fs.existsSync(tex)) {
+    fs.mkdirSync(path.join(dest, 'models', kitDir, 'Textures'), { recursive: true });
+    fs.copyFileSync(tex, path.join(dest, 'models', kitDir, 'Textures', 'colormap.png'));
+  }
+  console.log(`copied: forest model ${rel}`);
 }
 
 // hk ビル（Building Generator 書き出し。public/models/hk_GLB format/）があれば同梱＋静的 models manifest

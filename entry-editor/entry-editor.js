@@ -1,7 +1,7 @@
 // entry-editor.js — 建物GLBに「玄関(door)/窓(window)/光点(light)/窓発光(glow)」マーカーを打つエディタ。
 // 座標は plateau-fly のベイク済みテンプレートと同じ「モデルのワールド行列適用後ローカル空間」。
 // 保存: public/models/building-entries.json = { "<GLB相対パス>": [{kind,pos:[x,y,z], color?, ry?, size?:[w,h]}] }
-//   light: 夜に光る点（屋上ランプ・街灯の発光位置）。color 省略=ゲーム側で自動配色
+//   light: 夜に光る点（屋上ランプ・街灯の発光位置）。color 省略=ゲーム側で自動配色。blink=点滅周期(秒・省略で常時点灯)
 //   glow : 夜に光る窓矩形（光漏れ）。ry=面の向き（Yヨー）、size=[幅,高さ]。窓入口としても機能
 import * as THREE from 'https://esm.sh/three@0.184.0';
 import { OrbitControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
@@ -67,6 +67,12 @@ function selectMarker(m) {
     $('glow-w').value = String(m.userData.def.size?.[0] ?? 0.3);
     $('glow-h').value = String(m.userData.def.size?.[1] ?? 0.4);
   }
+  // 選択した光点の色/点滅も同様に編集できる
+  if (m && m.userData.def.kind === 'light') {
+    $('light-opts').style.display = 'flex';
+    $('light-color').value = m.userData.def.color || '';
+    $('light-blink').value = String(m.userData.def.blink ?? 0);
+  }
   setStatus(m ? `選択: ${KIND_LABEL[m.userData.def.kind] || m.userData.def.kind}（削除ボタンで除去）` : '選択解除');
 }
 
@@ -83,7 +89,11 @@ function onClick(e) {
   if (!hit) { selectMarker(null); return; }
   const kind = $('marker-kind').value;
   const def = { kind, pos: [Number(hit.point.x.toFixed(3)), Number(hit.point.y.toFixed(3)), Number(hit.point.z.toFixed(3))] };
-  if (kind === 'light' && $('light-color').value) def.color = $('light-color').value;
+  if (kind === 'light') {
+    if ($('light-color').value) def.color = $('light-color').value;
+    const bl = Number($('light-blink').value);
+    if (bl > 0) def.blink = Number(bl.toFixed(2));
+  }
   if (kind === 'glow') {
     // クリック面の法線（水平成分）から向きを決め、面から少し浮かせる
     const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
@@ -155,10 +165,22 @@ async function init() {
   // 種別に応じたオプション表示＋選択中の窓発光サイズ編集
   const syncKindOpts = () => {
     const k = $('marker-kind').value;
-    $('light-opts').style.display = k === 'light' ? 'flex' : 'none';
+    $('light-opts').style.display = (k === 'light' || (selectedMarker && selectedMarker.userData.def.kind === 'light')) ? 'flex' : 'none';
     $('glow-opts').style.display = (k === 'glow' || (selectedMarker && selectedMarker.userData.def.kind === 'glow')) ? 'flex' : 'none';
   };
   $('marker-kind').addEventListener('change', syncKindOpts);
+  // 選択中の光点の色/点滅を書き換え（新規設置の既定値も兼ねる）
+  const onLightOpts = () => {
+    if (!selectedMarker || selectedMarker.userData.def.kind !== 'light') return;
+    const def = selectedMarker.userData.def;
+    if ($('light-color').value) { def.color = $('light-color').value; selectedMarker.material.color.set(def.color); }
+    else { delete def.color; selectedMarker.material.color.set(markerColor('light')); }
+    const bl = Number($('light-blink').value);
+    if (bl > 0) def.blink = Number(bl.toFixed(2));
+    else { delete def.blink; selectedMarker.material.opacity = 0.4; }   // 点滅解除時に暗いまま固まらない
+  };
+  $('light-color').addEventListener('change', onLightOpts);
+  $('light-blink').addEventListener('input', onLightOpts);
   const onGlowSize = () => {
     if (!selectedMarker || selectedMarker.userData.def.kind !== 'glow') return;
     const def = selectedMarker.userData.def;
@@ -170,7 +192,17 @@ async function init() {
   window.addEventListener('keydown', (e) => { if (e.code === 'Delete') deleteSelected(); });
   window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
   if (list.length) { sel.value = list[0]; loadModel(list[0]); }
-  renderer.setAnimationLoop(() => renderer.render(scene, camera));
+  renderer.setAnimationLoop(() => {
+    // 明滅プレビュー（ゲームと同じサイン波のゆっくり明滅）
+    const t = performance.now() / 1000;
+    for (const m of markerGroup.children) {
+      const def = m.userData.def;
+      if (def.kind !== 'light' || !(def.blink > 0)) continue;
+      const br = 0.5 - 0.5 * Math.cos((t / def.blink) * Math.PI * 2);   // 0→1→0
+      m.material.opacity = (m === selectedMarker ? 0.4 : 0.95) * (0.1 + 0.9 * br);
+    }
+    renderer.render(scene, camera);
+  });
   setStatus('建物を選び、面をクリックして玄関/窓マーカーを設置');
 }
 init().catch((e) => { setStatus('初期化失敗: ' + e.message); console.error(e); });

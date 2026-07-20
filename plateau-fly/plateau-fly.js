@@ -8,6 +8,7 @@ import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/KTX2Loader.js';
+import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
 import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
@@ -23,7 +24,7 @@ import { GLTFExtensionsPlugin, ImplicitTilingPlugin } from 'https://esm.sh/3d-ti
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
 import { generateBuildings, instanceId } from '../lib/kenney-buildings.js';
 import { generateHouse } from '../lib/room-gen.js';
-import { deserializeTerrain, createTerrainMesh, buildRoadGraph } from '../lib/terrain.js';
+import { deserializeTerrain, createTerrainMesh, buildRoadGraph, sampleRoadPoints, unb64 } from '../lib/terrain.js';
 import { createNpcSpeech } from '../lib/npc-speech.js';
 import { createSpeechUI } from '../lib/speech-ui.js';
 import { fetchSpeechSet, buildSpeechCharacter } from '../lib/speech-set.js';
@@ -57,7 +58,26 @@ const STATE_DEFS = {   // 飛行アニメ状態（各 timeline→VRMA）。tps-f
   large:     { tl: 'Joy_reborn_large_beam', loop: false },   // チャージ解放＝5秒貫通ビーム
   lightning: { tl: 'Joy_reborn_lightning',  loop: false },   // 3連目のスーパービーム
   totem:     { tl: 'Joy_reborn_totem',      loop: false },   // 接地中の長押し＝トーテム設置
+  drain0:    { tl: 'Joy_reborn_drain_0',    loop: false },   // アルティメット導入（一度だけ）
+  drain1:    { tl: 'Joy_reborn_drain_1',    loop: true },    // アルティメット中ループ
 };
+// 夜間キャラ補助光: プレイヤーVRMに追従する前後2灯のPointLight（距離減衰つき＝街をほぼ照らさない）。
+// 強さ/色は anim-editor の「キャラライト」パネルと同一構成→ npc/char-light.json で共有
+const charFill = { key: null, rim: null };
+let charLightCfg = { dirI: 1.9, ambI: 0.85, dirC: '#cfd8ff', ambC: '#b8c4dd' };
+async function loadCharLight() {
+  try { charLightCfg = { ...charLightCfg, ...(await (await fetch('../npc/char-light.json')).json()) }; }
+  catch { /* 未保存=既定値 */ }
+  if (charFill.key) { charFill.key.color.set(charLightCfg.dirC); charFill.rim.color.set(charLightCfg.ambC); }
+}
+function attachCharFill(root) {   // プレイヤーVRM読込時に呼ぶ（子として追従）
+  charFill.key = new THREE.PointLight(charLightCfg.dirC, 0, 7, 1.2);
+  charFill.key.position.set(0.35, 1.7, 0.7);    // 前上（キー光）
+  root.add(charFill.key);
+  charFill.rim = new THREE.PointLight(charLightCfg.ambC, 0, 6, 1.2);
+  charFill.rim.position.set(-0.3, 1.5, -0.8);   // 後上（回り込み）
+  root.add(charFill.rim);
+}
 const player = {
   vrm: null, mixer: null, cloth: null, states: {}, current: null, ready: false,
   pos: new THREE.Vector3(0, 230, 150), vel: new THREE.Vector3(), yaw: Math.PI, fwdY: 0,
@@ -111,6 +131,14 @@ async function init() {
   dayRefs.amb = new THREE.AmbientLight(0xffffff, 1.0); scene.add(dayRefs.amb);
   dayRefs.sun = new THREE.DirectionalLight(0xfff4e0, 1.7); dayRefs.sun.position.set(1, 2, 1.2); scene.add(dayRefs.sun);
   dayRefs.hemi = new THREE.HemisphereLight(0xbdd7ff, 0x4a4a40, 0.6); scene.add(dayRefs.hemi);
+  loadCharLight();   // 保存済みのキャラライト設定（ライト本体はプレイヤーVRM読込時に生成して追従）
+  // TPS Flightと同じ画づくり: Neutralトーンマップ＋HDR環境マップ（マント等の光沢。強度は昼夜連動）
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  new UltraHDRLoader().loadAsync('https://threejs.org/examples/textures/equirectangular/royal_esplanade_2k.hdr.jpg')
+    .then((hdr) => { hdr.mapping = THREE.EquirectangularReflectionMapping; scene.environment = hdr; })
+    .catch((e) => console.warn('HDR環境マップ読込失敗:', e));
+  initSunMoon();   // 太陽と月のディスク（日周に追従）
   initSky();   // WebGPU用 SkyMesh（読めなければ背景色レルプにフォールバック）
   try { buildClouds(); } catch (e) { console.warn('雲生成失敗', e); }
 
@@ -159,9 +187,13 @@ async function init() {
   if (!KENNEY_CITY) chain = chain.then(() => new Promise((res) => setTimeout(res, 2500)));   // タイル優先で道路を後ろへ
   chain = chain.then(() => loadRoads());
   if (KENNEY_CITY) chain = chain.then(() => buildKenneyCity());   // 実道路網に Kenney 建物を配置
+  if (MAP_NAME) chain = chain.then(() => buildParks().catch((e) => console.warn('公園生成失敗', e)));   // 閉じスプラインの公園
+  if (MAP_NAME) chain = chain.then(() => buildForest().catch((e) => console.warn('森生成失敗', e)));   // 空き地の森（建物確定後）
   chain = chain.then(() => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
     loadImpactFx().catch((e) => console.warn('着弾FX準備失敗:', e));
     ensureTotemFx().catch((e) => console.warn('トーテムFX準備失敗:', e));
+    try { initDebrisFx(); } catch (e) { console.warn('破片FX準備失敗:', e); }
+    try { initUltFx(); } catch (e) { console.warn('アルティメットFX準備失敗:', e); }
     prepareKenAssets().then((ok) => { if (ok) setKenCount(KEN_COUNT); }).catch((e) => console.warn('ken準備失敗:', e));
     loadAgentOverrides().then(() => { try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); } });
   });
@@ -206,6 +238,9 @@ let mapTerrain = null;   // createTerrainMesh の戻り値（heightAt含む）
 let mapRoads = [];       // .map.json のスプライン道路（あればOSMの代わりに使う）
 let mapBuildings = null; // .map.json の建物差分 {removed[], moved{}, added[]}
 let mapWater = [];       // .map.json の水面矩形 {x,z,w,d,level}
+let mapForest = null;    // .map.json の植生ペイント {cell,res,data:Uint8Array 密度0-255}（map-editorで描く）
+let mapParks = [];       // .map.json の公園 {points:[[x,z]...], fountain:'round'|'square'}（閉じスプライン）
+let mapParkCfg = {};     // .map.json の公園設定 {hedgeOvr}（map-editorのスライダ）
 const waterMeshes = [];
 let waterNearMat = null, waterFarMat = null, _waterLodT = 0;
 const WATER_FAR = 600;   // これ以上離れた水面は静的マテリアルへ（LOD）
@@ -269,6 +304,9 @@ async function buildMapGround() {
   mapRoads = Array.isArray(j.roads) ? j.roads.filter((r) => r.points && r.points.length >= 2) : [];
   mapBuildings = (j.buildings && ((j.buildings.removed || []).length || (j.buildings.added || []).length || Object.keys(j.buildings.moved || {}).length)) ? j.buildings : null;
   mapWater = Array.isArray(j.water) ? j.water : [];
+  mapForest = (j.forest && j.forest.data) ? { cell: j.forest.cell || 16, res: j.forest.res, yOff: j.forest.yOff ?? 0, model: j.forest.model || null, treeH: j.forest.treeH || 7, data: unb64(j.forest.data) } : null;
+  mapParks = Array.isArray(j.parks) ? j.parks.filter((pk) => pk.points && pk.points.length >= 3) : [];
+  mapParkCfg = j.parkCfg || {};
   if (mapWater.length) try { buildMapWater(); } catch (e) { console.warn('水面生成失敗', e); }
   // 表記を実際の使用データに合わせて動的に書き換え（PLATEAU/GSI航空写真はマップモードでは不使用）
   const a = $('attrib');
@@ -393,6 +431,7 @@ async function loadPlayer() {
     vrm.scene.position.copy(player.pos);
     vrm.scene.rotation.y = player.yaw + FACE_OFFSET;
     scene.add(vrm.scene); vrm.scene.updateMatrixWorld(true);
+    attachCharFill(vrm.scene);   // 夜間のキャラ補助ライト（追従2灯）
     player.vrm = vrm;
     player.mixer = new THREE.AnimationMixer(vrm.scene);
     // マント（GPUクロス）。空中でも落ちないよう floorY 無効化
@@ -543,11 +582,22 @@ function updatePlayerAnim(dt) {
     if (player.oneShot.until <= 0) { player.oneShot = null; if (!largeBeam.active) attackAimActive = false; }   // 攻撃終了で照準固定を解除
   }
   if (player.charging) {
-    player.chargeT = Math.min(MAX_CHARGE_TIME, player.chargeT + dt);
-    // 接地中＋捕食対象なし＝長押しがトーテム設置に化ける（空中はチャージ→large_beam）
+    player.chargeT = Math.min(ULT_CHARGE_TIME, player.chargeT + dt);   // 1.5s超も蓄積＝ゲージ（満タンでアルティメット）
+    // 接地中＋捕食対象なし＝長押しがトーテム設置に化ける（空中はチャージ→large_beam/アルティメット）
     if (player.chargeT >= TAP_THRESHOLD && player.grounded && !player.prey && !grabbedCar && !totemCast) {
       player.charging = false;
       startTotemCast();
+    }
+  }
+  {   // チャージゲージHUD
+    const g = $('gauge');
+    if (g) {
+      if (player.charging && player.chargeT >= TAP_THRESHOLD) {
+        g.style.display = 'block';
+        const f = Math.min(1, player.chargeT / ULT_CHARGE_TIME);
+        $('gauge-fill').style.width = (f * 100) + '%';
+        g.classList.toggle('full', f >= 1);
+      } else g.style.display = 'none';
     }
   }
   setState(desiredState());
@@ -749,12 +799,19 @@ async function loadImpactFx() {
     } catch (e) { console.warn('着弾FXプール生成失敗', e); break; }
   }
 }
-function spawnImpactFx(pos) {
+function spawnImpactFx(pos, scale = 1) {
   if (!impactFx.length) return;
   let slot = impactFx.find((s) => s.until <= 0);
   if (!slot) { slot = impactFx[0]; for (const s of impactFx) if (s.until < slot.until) slot = s; }
-  if (slot.fire) { slot.fire.object3D.position.copy(pos); slot.fire.object3D.visible = true; slot.fire.burst(3); }
-  slot.smoke.object3D.position.copy(pos); slot.smoke.object3D.visible = true; slot.smoke.burst(10);
+  if (slot.fire) {
+    slot.fire.object3D.scale.setScalar(IMPACT_SCALE * scale);   // スーパー/落雷は3倍等（プール再利用なので毎回設定）
+    slot.fire.object3D.position.copy(pos);
+    slot.fire.object3D.visible = true;
+    slot.fire.burst(scale > 1 ? 5 : 3);
+  }
+  slot.smoke.object3D.position.copy(pos);
+  slot.smoke.object3D.visible = true;
+  slot.smoke.burst(scale > 1 ? 22 : 10);
   slot.until = IMPACT_LIFE;
 }
 function updateImpactFx(dt) {
@@ -888,6 +945,8 @@ function roadTopAt(x, z) {   // 道路上なら路面Y、外ならnull（セル�
 async function buildRoadMeshes() {
   if (!activeEdges.length) return;
   if (roadGroup) { scene.remove(roadGroup); roadGroup = null; }
+  roadCarveSets.length = 0;
+  roadCarveIdx = 0;
   roadGroup = new THREE.Group();
   const loader = new GLTFLoader();
   const loadKit = async (name, dir = 'kenney_city-kit-roads/Models/GLB%20format') => {
@@ -966,6 +1025,43 @@ async function buildRoadMeshes() {
     if (put) { put.arr.push({ x: nd.local.x, y: nd.local.y, z: nd.local.z, ry: put.ry }); tiledNodes.add(id); }
     else if (dirs.length >= 3) junc.any.push({ x: nd.local.x, y: nd.local.y, z: nd.local.z, ry: yawOf(dirs[0]) });
   }
+
+  // ── 継ぎ目の方針をノード別に決定（円パッチだらけの見た目を廃止）──
+  //   ほぼ直線(≥155°)＝道路同士を直接突き合わせ(隙間3cm=不可視) / 曲がり＝二等分方向の短い路面で継ぐ /
+  //   タイル交差点＝従来の引き込み / 円パッチは「変則的な3叉以上」だけに残る
+  const PULL = ROAD_WIDTH * 0.45;
+  const nodePull = new Map();   // id -> セグメント端の引き込み量(m)
+  const joints = [];            // 曲がり継ぎ手 {x,y,z,ry,len}
+  const patchNodes = [];        // 円パッチを置くノード（変則多叉のみ）
+  for (const [id, nd] of roadNodes) {
+    const dirs = nodeDirs.get(id) || [];
+    if (tiledNodes.has(id)) { nodePull.set(id, PULL); continue; }
+    if (dirs.length === 2) {
+      const ang = Math.abs(wrapA(yawOf(dirs[1]) - yawOf(dirs[0])));   // π=直進
+      if (ang > Math.PI * 155 / 180) { nodePull.set(id, 0.03); continue; }
+      nodePull.set(id, PULL);
+      const thru = { x: dirs[1].x - dirs[0].x, z: dirs[1].z - dirs[0].z };   // 通過方向（二等分）
+      joints.push({ x: nd.local.x, y: nd.local.y, z: nd.local.z, ry: Math.atan2(thru.x, thru.z), len: PULL * 2 + 1.0 });
+      continue;
+    }
+    if (dirs.length <= 1) { nodePull.set(id, 0.03); continue; }   // 行き止まりは端まで描く
+    nodePull.set(id, PULL);
+    patchNodes.push(nd);
+  }
+  if (joints.length) {   // 曲がり継ぎ手＝road-straightの短片を僅かに浮かせて被せる（マイター継ぎの近似）
+    const jm = new THREE.InstancedMesh(R.g, R.mat, joints.length);
+    jm.frustumCulled = false;
+    const jws = ROAD_WIDTH / R.w;
+    for (let i = 0; i < joints.length; i++) {
+      const J = joints[i];
+      _p.set(J.x, J.y + ROAD_LIFT + 0.018, J.z);
+      _q.setFromAxisAngle(_up, J.ry);
+      _s.set(jws, 1, J.len / R.l);
+      _m.compose(_p, _q, _s);
+      jm.setMatrixAt(i, _m);
+    }
+    roadGroup.add(jm);
+  }
   const addJunc = (asset, list) => {
     if (!asset || !list.length) return 0;
     const t = normTile(asset, false);
@@ -991,7 +1087,16 @@ async function buildRoadMeshes() {
   for (let i = 0; i < activeEdges.length; i++) ((roadBar && activeEdges[i].len >= BARRIER_MIN_EDGE) ? barIdx : stdIdx).push(i);
   const fillRoad = (tile, idxList) => {
     if (!idxList.length) return;
-    const mesh = new THREE.InstancedMesh(tile.g, tile.mat, idxList.length);
+    // 道路を破壊可能に: カーブ材質（ワールド座標球）＝着弾点に穴＋焦げ縁。夜は暗くなるよう昼夜係数を掛ける
+    let mat = tile.mat;
+    try {
+      const c = makeCarveMaterial(tile.mat, 0, 1);
+      if (!roadLightU) roadLightU = uniform(1);
+      c.mat.colorNode = c.mat.colorNode.mul(roadLightU);
+      roadCarveSets.push({ uCenters: c.uCenters, uRadii: c.uRadii });
+      mat = c.mat;
+    } catch (e) { console.warn('道路カーブ材質失敗（通常材質で続行）', e); }
+    const mesh = new THREE.InstancedMesh(tile.g, mat, idxList.length);
     mesh.frustumCulled = false;
     const ws = ROAD_WIDTH / tile.w;
     for (let k = 0; k < idxList.length; k++) {
@@ -1001,11 +1106,13 @@ async function buildRoadMeshes() {
       _dir.normalize();
       _rotM.lookAt(_zero, _dir, _up);           // -Z→dir（道路は前後対称なので符号は不問）
       _q.setFromRotationMatrix(_rotM);
-      _p.copy(e.a).add(e.b).multiplyScalar(0.5);
+      // 両端をノード別の引き込み量で短縮（直進の継ぎ目は3cm=ほぼ突き合わせ、交差点はタイル/継ぎ手ぶん引く）
+      const pa = Math.min(nodePull.get(e.aId) ?? PULL, len * 0.3);
+      const pb = Math.min(nodePull.get(e.bId) ?? PULL, len * 0.3);
+      const segLen = Math.max(0.4, len - pa - pb);
+      _p.copy(e.a).addScaledVector(_dir, pa + segLen / 2);
       _p.y += ROAD_LIFT;
-      // 交差点で複数セグメントが同一平面で重なると黒く明滅する（z-fighting）ため両端を短縮
-      const pull = Math.min(ROAD_WIDTH * 0.45, len * 0.3);
-      _s.set(ws, 1, Math.max(0.5, len - pull * 2) / tile.l);   // 厚みは等倍
+      _s.set(ws, 1, segLen / tile.l);   // 厚みは等倍
       _m.compose(_p, _q, _s);
       mesh.setMatrixAt(k, _m);
     }
@@ -1047,8 +1154,7 @@ async function buildRoadMeshes() {
   const patchGeo = new THREE.CircleGeometry(0.5, 20);
   patchGeo.rotateX(-Math.PI / 2);
   const patchMat = new THREE.MeshStandardMaterial({ color: 0x46484c, roughness: 0.95 });
-  const plainNodes = [];
-  for (const [id, nd] of roadNodes) if (!tiledNodes.has(id)) plainNodes.push(nd);
+  const plainNodes = patchNodes;   // 変則的な3叉以上だけ（直線・曲がり・行き止まりは道路同士で継ぐ）
   const patch = new THREE.InstancedMesh(patchGeo, patchMat, plainNodes.length);
   patch.frustumCulled = false;
   for (let i = 0; i < plainNodes.length; i++) {
@@ -1117,6 +1223,13 @@ async function buildRoadMeshes() {
     glow.setMatrixAt(i, _m);
   }
   roadGroup.add(glow);
+  streetGlowMesh = glow;
+  // 街灯を破壊対象として登録（吹っ飛び用に同じジオメトリ/材質のプールを用意）
+  registerPropKind('lamp', lg, lamp.material);
+  for (let i = 0; i < lampMats.length; i++) {
+    const L = lampMats[i];
+    props.push({ kind: 'lamp', mesh: lampMesh, index: i, x: L.x, y: L.y, z: L.z, ry: L.ry, s: lScale, h: LIGHT_HEIGHT, r: 1.7, dead: false, glowIndex: i });
+  }
   const counts = await buildRoadsideProps(loadKit, _m, _q, _p, _s, _dir, _up);
   scene.add(roadGroup);
   console.log('roads:', activeEdges.length, 'lights:', lampMats.length, 'trees:', counts.trees);
@@ -1168,6 +1281,12 @@ function buildSignals(asset, junc) {
     pm.setMatrixAt(i, _pm);
   }
   roadGroup.add(pm);
+  // 信号を破壊対象として登録（バルブは pole i → 3i..3i+2 で対応）
+  registerPropKind('sig', t.g, t.mat);
+  for (let i = 0; i < poles.length; i++) {
+    const P = poles[i];
+    props.push({ kind: 'sig', mesh: pm, index: i, x: P.x, y: P.y + ROAD_LIFT, z: P.z, ry: P.ry, s: sc, h: SIGNAL_HEIGHT, r: 1.7, dead: false, bulbStart: i * 3 });
+  }
   // 三色バルブ（腕の先端から 赤・黄・青 の順で内側へ）
   const bulbs = [];
   for (const P of poles) {
@@ -1266,10 +1385,11 @@ async function buildRoadsideProps(loadKit, _m, _q, _p, _s, _dir, _up) {
       }
     }
   }
-  const addInst = (p, mats, mkScale) => {
+  const addInst = (p, mats, mkScale, kind, hBase) => {
     if (!mats.length) return;
     const mesh = new THREE.InstancedMesh(p.g, p.mat, mats.length);
     mesh.frustumCulled = false;
+    registerPropKind(kind, p.g, p.mat);
     for (let i = 0; i < mats.length; i++) {
       const M = mats[i];
       _p.set(M.x, M.y, M.z);
@@ -1277,13 +1397,458 @@ async function buildRoadsideProps(loadKit, _m, _q, _p, _s, _dir, _up) {
       mkScale(M, _s);
       _m.compose(_p, _q, _s);
       mesh.setMatrixAt(i, _m);
+      const h = hBase * M.s;   // 実際の樹高（個体スケール込み）
+      props.push({ kind, mesh, index: i, x: M.x, y: M.y, z: M.z, ry: M.ry, s: _s.x, h, r: Math.max(1.5, h * 0.3), dead: false });
     }
     roadGroup.add(mesh);
   };
   const sL = TREE_HEIGHT / Math.max(0.01, tL.size.y), sS = TREE_HEIGHT * 0.6 / Math.max(0.01, tS.size.y);
-  addInst(tL, treeMats.L, (M, s) => s.setScalar(sL * M.s));
-  addInst(tS, treeMats.S, (M, s) => s.setScalar(sS * M.s));
+  addInst(tL, treeMats.L, (M, s) => s.setScalar(sL * M.s), 'treeL', TREE_HEIGHT);
+  addInst(tS, treeMats.S, (M, s) => s.setScalar(sS * M.s), 'treeS', TREE_HEIGHT * 0.6);
+  treeAssets = { tL, tS, sL, sS };   // 森の自動群生（buildForest）で再利用
   return { trees: treeMats.L.length + treeMats.S.length };
+}
+
+// ── 森: 家も道も水もない空き地に樹木を自動群生（マップモードのみ・建物配置後に呼ぶ）──
+// 値ノイズで「まとまった森」を作り、占有グリッド（道路/建物/水）と急斜面を避けて配置。
+// 描画は400mチャンクのInstancedMesh＋視錐台カリング＝画面外の森は描かない。破壊対応（propsに登録）。
+let treeAssets = null;
+const FOREST_MAX = 9000;         // 総本数上限（超過分はマップ全体から均等に間引く）
+const FOREST_CELL = 7;           // 配置格子(m)。ジッタを加えて自然な散らばりに
+const FOREST_CHUNK = 400;        // 描画チャンク(m)
+const FOREST_ROAD_MARGIN = 13;   // 道路中心からの立入禁止距離(m)（街路樹と重ならない）
+async function buildForest() {
+  if (!mapTerrain) return;
+  // 木モデル: map-editorの植生設定で models/ から選択可（未指定は街路樹と同じ tree-large/small）
+  let custom = null;
+  if (mapForest && mapForest.model) {
+    try {
+      const url = '../models/' + mapForest.model.split('/').map(encodeURIComponent).join('/');
+      const asset = bakeModel((await new GLTFLoader().loadAsync(new URL(url, location.href).href)).scene);
+      const g = asset.geometry.clone();
+      g.computeBoundingBox();
+      const b = g.boundingBox;
+      g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);   // 底面0・XZ中心
+      custom = { g, mat: asset.material, h: Math.max(0.01, b.max.y - b.min.y) };
+    } catch (e) { console.warn('森モデル読込失敗（既定の木で続行）:', mapForest.model, e); }
+  }
+  if (!custom && !treeAssets) return;
+  const size = mapTerrain.data.size, half = size / 2;
+  let rs = 0xF07E57 >>> 0;   // 決定的乱数（リロードで同じ森）
+  const rnd = () => {
+    rs = (rs + 0x6D2B79F5) >>> 0;
+    let t = rs;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const h2 = (ix, iz) => {   // 2Dハッシュ→[0,1)
+    let n = (Math.imul(ix, 374761393) + Math.imul(iz, 668265263)) ^ 0x5F0E57;
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  };
+  const noise = (x, z, w) => {   // バイリニア値ノイズ（波長w）
+    const fx = x / w, fz = z / w, ix = Math.floor(fx), iz = Math.floor(fz);
+    const tx = fx - ix, tz = fz - iz;
+    const sx = tx * tx * (3 - 2 * tx), sz = tz * tz * (3 - 2 * tz);
+    const a = h2(ix, iz), b = h2(ix + 1, iz), c = h2(ix, iz + 1), d = h2(ix + 1, iz + 1);
+    return a + (b - a) * sx + (c - a) * sz + (a - b - c + d) * sx * sz;
+  };
+  // 占有グリッド: 道路・建物・水面（+余白）を立入禁止に塗る
+  const OG = 8;
+  const gw = Math.ceil(size / OG) + 4, off = half + OG * 2;
+  const occ = new Uint8Array(gw * gw);
+  const mark = (x, z, rx, rz) => {
+    const x0 = Math.max(0, Math.floor((x - rx + off) / OG)), x1 = Math.min(gw - 1, Math.floor((x + rx + off) / OG));
+    const z0 = Math.max(0, Math.floor((z - rz + off) / OG)), z1 = Math.min(gw - 1, Math.floor((z + rz + off) / OG));
+    for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) occ[cz * gw + cx] = 1;
+  };
+  for (const e of activeEdges) {   // 道路: 4m刻みで歩いて周囲を塗る
+    const n = Math.max(1, Math.ceil(e.len / 4));
+    for (let k = 0; k <= n; k++) {
+      const t = k / n;
+      mark(e.a.x + (e.b.x - e.a.x) * t, e.a.z + (e.b.z - e.a.z) * t, FOREST_ROAD_MARGIN, FOREST_ROAD_MARGIN);
+    }
+  }
+  for (const b of collBoxes) if (b.top > b.bottom) mark(b.x, b.z, b.h + 3, b.h + 3);
+  for (const w of mapWater) mark(w.x, w.z, (w.w || 100) / 2 + 4, (w.d || 100) / 2 + 4);
+  for (const pk of mapParks) {   // 公園（閉じスプライン）内も立入禁止
+    const pts = pk.points.map((q) => ({ x: q[0], z: q[1] }));
+    let bx0 = Infinity, bx1 = -Infinity, bz0 = Infinity, bz1 = -Infinity;
+    for (const q of pts) { bx0 = Math.min(bx0, q.x); bx1 = Math.max(bx1, q.x); bz0 = Math.min(bz0, q.z); bz1 = Math.max(bz1, q.z); }
+    for (let cz = Math.max(0, Math.floor((bz0 + off) / OG)); cz <= Math.min(gw - 1, Math.floor((bz1 + off) / OG)); cz++) {
+      for (let cx = Math.max(0, Math.floor((bx0 + off) / OG)); cx <= Math.min(gw - 1, Math.floor((bx1 + off) / OG)); cx++) {
+        if (pointInPoly(cx * OG - off + OG / 2, cz * OG - off + OG / 2, pts)) occ[cz * gw + cx] = 1;
+      }
+    }
+  }
+  // パス1: 候補集め。map-editorの植生ペイントがあればそれに従い、なければ値ノイズで自動群生。
+  let cand = [];
+  if (mapForest) {   // ペイント密度(0-255)＝そのセルの本数の期待値。位置はセル内の完全ランダム＝格子感なし
+    const mf = mapForest, mres = mf.res, mcell = mf.cell;
+    const perCell = (mcell * mcell) / (FOREST_CELL * FOREST_CELL) * 1.15;   // 密度1.0でおおむね7m間隔相当の本数
+    for (let mz = 0; mz < mres; mz++) {
+      for (let mx = 0; mx < mres; mx++) {
+        const den = mf.data[mz * mres + mx] / 255;
+        if (den <= 0) continue;
+        const cx0 = mx * mcell - half, cz0 = mz * mcell - half;
+        // ノイズは濃淡だけ（下限0.45）: 塗った場所には必ず生える＝切れ間でセルごと消さない
+        const v = noise(cx0, cz0, 90) * 0.7 + noise(cx0 + 5555, cz0 - 2222, 28) * 0.3;
+        const clump = 0.45 + Math.max(0, Math.min(1, (v - 0.3) / 0.4)) * 1.05;
+        let n = perCell * den * clump;
+        while (n > 0) {
+          if (n < 1 && rnd() >= n) break;   // 端数は確率で1本
+          n -= 1;
+          const x = cx0 + rnd() * mcell, z = cz0 + rnd() * mcell;
+          if (x < -half + 6 || x > half - 6 || z < -half + 6 || z > half - 6) continue;
+          if (occ[Math.floor((z + off) / OG) * gw + Math.floor((x + off) / OG)]) continue;
+          cand.push(x, z);
+        }
+      }
+    }
+  } else for (const th of [0.56, 0.62, 0.68, 0.74, 0.8]) {
+    // 自動: 候補が上限を大きく超えるマップでは閾値を上げて「森の面積」を狭める＝密度は保つ
+    cand = [];
+    rs = 0xF07E57 >>> 0;   // 乱数を巻き戻す＝閾値だけの違いで決定的
+    for (let gz = -half + 6; gz < half - 6; gz += FOREST_CELL) {
+      for (let gx = -half + 6; gx < half - 6; gx += FOREST_CELL) {
+        const d = noise(gx, gz, 130) * 0.75 + noise(gx + 7777, gz - 3333, 34) * 0.25;   // 大きな塊＋細かいムラ
+        if (d < th) continue;
+        const x = gx + (rnd() - 0.5) * FOREST_CELL * 0.9, z = gz + (rnd() - 0.5) * FOREST_CELL * 0.9;
+        if (occ[Math.floor((z + off) / OG) * gw + Math.floor((x + off) / OG)]) continue;
+        cand.push(x, z);
+      }
+    }
+    if (cand.length / 2 <= FOREST_MAX * 1.5) break;
+  }
+  // パス2: 上限へ均等に間引き→高さ/斜面チェック→確定
+  const keep = Math.min(1, FOREST_MAX / Math.max(1, cand.length / 2));
+  const yOff = mapForest ? mapForest.yOff : -0.2;   // 接地位置はエディタの植生設定に従う（自動群生は従来通り沈める）
+  const spots = { L: [], S: [] };
+  for (let i = 0; i < cand.length; i += 2) {
+    if (rnd() > keep) continue;
+    const x = cand[i], z = cand[i + 1];
+    if (Math.abs(mapTerrain.heightAt(x + 3, z) - mapTerrain.heightAt(x - 3, z)) > 3.4) continue;   // 急斜面
+    if (Math.abs(mapTerrain.heightAt(x, z + 3) - mapTerrain.heightAt(x, z - 3)) > 3.4) continue;
+    // 接地=足元範囲の最高点（斜面で根元が埋まらない。エディタのプレビューと同じ基準）
+    const y = Math.max(
+      mapTerrain.heightAt(x, z),
+      mapTerrain.heightAt(x + 1.5, z), mapTerrain.heightAt(x - 1.5, z),
+      mapTerrain.heightAt(x, z + 1.5), mapTerrain.heightAt(x, z - 1.5),
+    );
+    (rnd() < 0.72 ? spots.L : spots.S).push({ x, y: y + yOff, z, ry: rnd() * Math.PI * 2, s: 0.75 + rnd() * 0.6 });
+  }
+  // チャンク分割してInstancedMesh化（カリング有効＝画面外は描かない）
+  const ta = treeAssets;
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
+  let nChunks = 0;
+  const build = (list, kind, asset, base, hBase) => {
+    if (!list.length) return;
+    if (!propFly[kind]) registerPropKind(kind, asset.g, asset.mat);   // 街路樹ゼロのマップでもプール確保
+    const byChunk = new Map();
+    for (const t of list) {
+      const key = Math.floor((t.x + half) / FOREST_CHUNK) + '_' + Math.floor((t.z + half) / FOREST_CHUNK);
+      let arr = byChunk.get(key);
+      if (!arr) byChunk.set(key, arr = []);
+      arr.push(t);
+    }
+    for (const arr of byChunk.values()) {
+      const mesh = new THREE.InstancedMesh(asset.g, asset.mat, arr.length);
+      for (let i = 0; i < arr.length; i++) {
+        const t = arr[i];
+        _p.set(t.x, t.y, t.z);
+        _q.setFromAxisAngle(_pfUp, t.ry);
+        _s.setScalar(base * t.s);
+        _m.compose(_p, _q, _s);
+        mesh.setMatrixAt(i, _m);
+        const h = hBase * t.s;
+        props.push({ kind, mesh, index: i, x: t.x, y: t.y, z: t.z, ry: t.ry, s: base * t.s, h, r: Math.max(1.5, h * 0.3), dead: false });
+      }
+      mesh.computeBoundingSphere();   // インスタンス全体の球＝これで視錐台カリングが効く
+      scene.add(mesh);
+      nChunks++;
+    }
+  };
+  if (custom) {
+    const tH = mapForest.treeH;
+    build(spots.L.concat(spots.S), 'forestM', { g: custom.g, mat: custom.mat }, tH / custom.h, tH);
+  } else {
+    build(spots.L, 'treeL', ta.tL, ta.sL, TREE_HEIGHT);
+    build(spots.S, 'treeS', ta.tS, ta.sS, TREE_HEIGHT * 0.6);
+  }
+  console.log('forest trees:', spots.L.length + spots.S.length, '/ chunks:', nChunks, custom ? '/ model: ' + mapForest.model : '');
+}
+
+// ── 公園: map-editorの閉じスプライン内を 生垣＋緑地＋噴水＋ランタン で埋める ──
+// 生垣は境界の弧長に沿って隙間なく敷き詰め、道路に最も近い1区画をゲートに置換。
+// ランタンは各制御点（少し内側）で夜に発光（街灯と同じ挙動）。全て破壊可能（propsに登録）。
+const PARK_HEDGE_H = 1.4;      // 生垣の高さ(m)
+const PARK_LANTERN_H = 2.4;    // ランタンの高さ(m)
+const PARK_FOUNTAIN_W = 4.5;   // 噴水の幅(m)
+const PARK_HEDGE_OVR = 1.1;    // 生垣のオーバーラップ倍率の既定（1.0=ぴったり。カーブ外側の楔を埋める分だけ少し重ねる）。map-editorのスライダで上書き可
+let parkGlowMat = null;
+function pointInPoly(px, pz, pts) {   // 偶奇判定
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x, zi = pts[i].z, xj = pts[j].x, zj = pts[j].z;
+    if ((zi > pz) !== (zj > pz) && px < (xj - xi) * (pz - zi) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+}
+async function buildParks() {
+  if (!mapTerrain || !mapParks.length) return;
+  const loader = new GLTFLoader();
+  const loadM = async (name) => {   // 底面0・XZ中心へ正規化
+    const gltf = await loader.loadAsync(new URL('../models/fantasy_GLB%20format/' + name + '.glb', location.href).href);
+    const a = bakeModel(gltf.scene);
+    const g = a.geometry.clone();
+    g.computeBoundingBox();
+    const b = g.boundingBox;
+    g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+    return { g, mat: a.material, size: b.getSize(new THREE.Vector3()) };
+  };
+  const [hedge, gate, fRound, fSquare, lantern] = await Promise.all([
+    loadM('hedge'), loadM('hedge-gate'), loadM('fountain-round-detail'), loadM('fountain-square-detail'), loadM('lantern'),
+  ]);
+  const alignX = (m) => {   // 長手方向をXへ（生垣/ゲートを進行方向に沿わせる）
+    if (m.size.z > m.size.x) {
+      m.g.rotateY(Math.PI / 2);
+      m.g.computeBoundingBox();
+      m.size = m.g.boundingBox.getSize(new THREE.Vector3());
+    }
+  };
+  alignX(hedge); alignX(gate);
+  const hs = PARK_HEDGE_H / Math.max(0.01, hedge.size.y);
+  const gs = PARK_HEDGE_H / Math.max(0.01, gate.size.y);
+  const ls = PARK_LANTERN_H / Math.max(0.01, lantern.size.y);
+  const hedgeLen = Math.max(0.5, hedge.size.x * hs);
+  const H = (x, z) => mapTerrain.heightAt(x, z);
+  const hedgeMats = [], gateMats = [], lantMats = [], fountMats = { R: [], S: [] }, glowPos = [];
+  const groundGeos = [];
+  for (const pk of mapParks) {
+    const ctrl = pk.points.map((q) => ({ x: q[0], z: q[1] }));
+    let cx = 0, cz = 0;
+    for (const q of ctrl) { cx += q.x; cz += q.z; }
+    cx /= ctrl.length; cz /= ctrl.length;
+    // 境界の密サンプル→弧長で等分割（生垣が隙間なく閉じる）
+    const dense = sampleRoadPoints(pk.points, true, 2);
+    dense.push({ x: dense[0].x, z: dense[0].z });   // 完全に閉じる
+    const arc = [0];
+    for (let i = 1; i < dense.length; i++) arc.push(arc[i - 1] + Math.hypot(dense[i].x - dense[i - 1].x, dense[i].z - dense[i - 1].z));
+    const L = arc[arc.length - 1];
+    if (L < hedgeLen * 3) continue;
+    const at = (d, out) => {   // 弧長d→位置＋接線
+      let i = 1;
+      while (i < arc.length - 1 && arc[i] < d) i++;
+      const t = (d - arc[i - 1]) / Math.max(0.001, arc[i] - arc[i - 1]);
+      out.x = dense[i - 1].x + (dense[i].x - dense[i - 1].x) * t;
+      out.z = dense[i - 1].z + (dense[i].z - dense[i - 1].z) * t;
+      out.tx = dense[i].x - dense[i - 1].x; out.tz = dense[i].z - dense[i - 1].z;
+      const tl = Math.hypot(out.tx, out.tz) || 1;
+      out.tx /= tl; out.tz /= tl;
+    };
+    const n = Math.max(3, Math.round(L / hedgeLen));
+    const segLen = L / n;
+    // ゲート位置＝道路に最も近い区画
+    const smp = {};
+    let gateIdx = 0, gateBest = Infinity;
+    for (let i = 0; i < n; i++) {
+      at((i + 0.5) * segLen, smp);
+      for (const e of activeEdges) {
+        const dx = smp.x - (e.a.x + e.b.x) / 2, dz = smp.z - (e.a.z + e.b.z) / 2;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < gateBest) { gateBest = d2; gateIdx = i; }
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      at((i + 0.5) * segLen, smp);
+      const it = { x: smp.x, y: H(smp.x, smp.z) - 0.03, z: smp.z, ry: Math.atan2(-smp.tz, smp.tx) };
+      // sx はジオメトリ単位からの完全なXスケール（hs で割った比率ではない＝以前は1/hs倍に縮んで隙間だらけだった）
+      if (i === gateIdx) { it.sx = segLen / Math.max(0.01, gate.size.x) * 1.04; gateMats.push(it); }
+      else { it.sx = segLen / Math.max(0.01, hedge.size.x) * (mapParkCfg.hedgeOvr || PARK_HEDGE_OVR); hedgeMats.push(it); }
+    }
+    // 緑地: 境界サンプルの多角形（earcut）。頂点を地形高さ+0.12へ
+    const shp = new THREE.Shape();
+    const ring = sampleRoadPoints(pk.points, true, 4);
+    shp.moveTo(ring[0].x, ring[0].z);
+    for (let i = 1; i < ring.length; i++) shp.lineTo(ring[i].x, ring[i].z);
+    const gg = new THREE.ShapeGeometry(shp);
+    const posA = gg.attributes.position;
+    const nrm = new Float32Array(posA.count * 3);
+    for (let i = 0; i < posA.count; i++) {
+      const gx = posA.getX(i), gz = posA.getY(i);
+      posA.setXYZ(i, gx, H(gx, gz) + 0.12, gz);
+      nrm[i * 3 + 1] = 1;
+    }
+    gg.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+    groundGeos.push(gg);
+    // 噴水（中心）＋ランタン（各制御点の少し内側）
+    (pk.fountain === 'square' ? fountMats.S : fountMats.R).push({ x: cx, y: H(cx, cz), z: cz, ry: 0 });
+    for (const q of ctrl) {
+      const dx = cx - q.x, dz = cz - q.z;
+      const dl = Math.hypot(dx, dz) || 1;
+      const lx = q.x + dx / dl * 1.4, lz = q.z + dz / dl * 1.4;
+      const ly = H(lx, lz);
+      lantMats.push({ x: lx, y: ly, z: lz, ry: Math.atan2(dx, dz) });
+      glowPos.push(lx, ly + lantern.size.y * ls * 0.82, lz);
+    }
+  }
+  // 緑地メッシュ（全公園まとめて）
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x4e8f3e, roughness: 0.95, side: THREE.DoubleSide });
+  for (const gg of groundGeos) scene.add(new THREE.Mesh(gg, groundMat));
+  // ランタンの発光球（街灯と同じ: 夜だけ加算発光）
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
+  let parkGlowMesh = null;
+  if (glowPos.length) {
+    parkGlowMat = new THREE.MeshBasicMaterial({ color: 0xffd890, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+    parkGlowMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.32, 6, 5), parkGlowMat, glowPos.length / 3);
+    parkGlowMesh.frustumCulled = false;
+    for (let i = 0; i < glowPos.length / 3; i++) {
+      _m.makeTranslation(glowPos[i * 3], glowPos[i * 3 + 1], glowPos[i * 3 + 2]);
+      parkGlowMesh.setMatrixAt(i, _m);
+    }
+    scene.add(parkGlowMesh);
+  }
+  lantMats.forEach((it, i) => { it.glowIndex = i; it.glowMesh = parkGlowMesh; });
+  // インスタンス配置＋破壊登録（種類ごとに1メッシュ）
+  const addKind = (kind, asset, mats, sy, propH, mkScale) => {
+    if (!mats.length) return;
+    registerPropKind(kind, asset.g, asset.mat);
+    const mesh = new THREE.InstancedMesh(asset.g, asset.mat, mats.length);
+    mesh.frustumCulled = false;
+    for (let i = 0; i < mats.length; i++) {
+      const it = mats[i];
+      _p.set(it.x, it.y, it.z);
+      _q.setFromAxisAngle(_pfUp, it.ry);
+      mkScale(it, _s);
+      _m.compose(_p, _q, _s);
+      mesh.setMatrixAt(i, _m);
+      const pr = { kind, mesh, index: i, x: it.x, y: it.y, z: it.z, ry: it.ry, s: sy, h: propH, r: Math.max(1.4, propH * 0.5), dead: false };
+      if (it.glowIndex != null) { pr.glowIndex = it.glowIndex; pr.glowMesh = it.glowMesh; }
+      props.push(pr);
+    }
+    scene.add(mesh);
+  };
+  addKind('hedge', hedge, hedgeMats, hs, PARK_HEDGE_H, (it, sv) => sv.set(it.sx, hs, hs));
+  addKind('hedgeGate', gate, gateMats, gs, PARK_HEDGE_H, (it, sv) => sv.set(it.sx, gs, gs));
+  const fr = PARK_FOUNTAIN_W / Math.max(0.01, Math.max(fRound.size.x, fRound.size.z));
+  const fsq = PARK_FOUNTAIN_W / Math.max(0.01, Math.max(fSquare.size.x, fSquare.size.z));
+  addKind('fountainR', fRound, fountMats.R, fr, fRound.size.y * fr, (it, sv) => sv.setScalar(fr));
+  addKind('fountainS', fSquare, fountMats.S, fsq, fSquare.size.y * fsq, (it, sv) => sv.setScalar(fsq));
+  addKind('lantern', lantern, lantMats, ls, PARK_LANTERN_H, (it, sv) => sv.setScalar(ls));
+  console.log('parks:', mapParks.length, '/ hedges:', hedgeMats.length, '/ lanterns:', lantMats.length);
+}
+
+// ── 破壊可能な道路小物（信号/街灯/街路樹）: 攻撃が当たると吹っ飛ぶ ─────
+// 元のInstancedMeshのインスタンスをスケール0で消し、同じジオメトリ/材質の小プールで
+// 物理飛翔（初速=攻撃威力比例・回転・バウンド→沈んで消滅）を演じる。
+const props = [];                // {kind, mesh, index, x, y, z, ry, s, h, r, dead, glowIndex?, bulbStart?}
+let streetGlowMesh = null;       // 街灯の発光球（破壊時に一緒に消す）
+const PROP_FLY_MAX = 20;         // 種類ごとの同時飛翔数（超えたら古いものを再利用）
+const PROP_FLY_LIFE = 6.5;       // 飛翔→着地→沈んで消えるまでの秒数
+const propFly = {};              // kind -> {mesh, slots, idx}
+const _pfM = new THREE.Matrix4(), _pfS = new THREE.Vector3();
+const _pfDq = new THREE.Quaternion(), _pfUp = new THREE.Vector3(0, 1, 0);
+function registerPropKind(kind, geo, mat) {
+  if (propFly[kind]) {   // 再構築時: 古いプールと登録を捨てる
+    scene.remove(propFly[kind].mesh);
+    for (let i = props.length - 1; i >= 0; i--) if (props[i].kind === kind) props.splice(i, 1);
+  }
+  const mesh = new THREE.InstancedMesh(geo, mat, PROP_FLY_MAX);
+  mesh.frustumCulled = false;
+  _pfM.makeScale(0, 0, 0);
+  const slots = [];
+  for (let i = 0; i < PROP_FLY_MAX; i++) {
+    mesh.setMatrixAt(i, _pfM);
+    slots.push({ active: false, pos: new THREE.Vector3(), vel: new THREE.Vector3(), q: new THREE.Quaternion(), axis: new THREE.Vector3(1, 0, 0), spin: 0, s: 1, gy: 0, t: 0, bounces: 0 });
+  }
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(mesh);   // 最初からシーンに置く＝パイプラインを事前コンパイル（初回ヒット時のカクつき回避）
+  propFly[kind] = { mesh, slots, idx: 0 };
+}
+function smashProp(p, dx, dz, power = 1) {   // (dx,dz)=吹っ飛ぶ水平方向（内部で正規化）
+  if (p.dead) return;
+  p.dead = true;
+  _pfM.makeScale(0, 0, 0);
+  p.mesh.setMatrixAt(p.index, _pfM);
+  p.mesh.instanceMatrix.needsUpdate = true;
+  const _gm = p.glowMesh || streetGlowMesh;
+  if (p.glowIndex != null && _gm) { _gm.setMatrixAt(p.glowIndex, _pfM); _gm.instanceMatrix.needsUpdate = true; }
+  if (p.bulbStart != null && signalMesh) {
+    for (let k = 0; k < 3; k++) signalMesh.setMatrixAt(p.bulbStart + k, _pfM);
+    signalMesh.instanceMatrix.needsUpdate = true;
+  }
+  const F = propFly[p.kind];
+  if (!F) return;
+  const sl = F.slots[F.idx]; F.idx = (F.idx + 1) % PROP_FLY_MAX;
+  const dl = Math.hypot(dx, dz);
+  const nx = dl > 0.001 ? dx / dl : Math.cos(p.ry), nz = dl > 0.001 ? dz / dl : Math.sin(p.ry);
+  const v = (7 + 6 * power) * (0.85 + Math.random() * 0.3);   // 初速=威力比例
+  sl.active = true; sl.t = 0; sl.bounces = 0; sl.s = p.s; sl.gy = p.y;
+  sl.pos.set(p.x, p.y + 0.1, p.z);
+  sl.q.setFromAxisAngle(_pfUp, p.ry);
+  sl.vel.set(nx * v, 4.5 + 3 * power, nz * v);
+  sl.axis.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+  sl.spin = (2.5 + Math.random() * 3.5) * (0.7 + 0.4 * power);
+}
+const _propC = new THREE.Vector3();
+function rayNearestProp(o, d, maxT) {   // 最手前の1本（縦長なので中腹の球で近似）
+  let best = null, bestT = Infinity;
+  for (const p of props) {
+    if (p.dead) continue;
+    _propC.set(p.x, p.y + p.h * 0.55, p.z);
+    const t = rayHitSphere(o, d, _propC, p.r, maxT);
+    if (t < bestT) { bestT = t; best = p; }
+  }
+  return best ? { prop: best, t: bestT } : null;
+}
+function raySmashProps(o, d, maxT, power) {   // 貫通系: 射線上の全部をなぎ倒す
+  for (const p of props) {
+    if (p.dead) continue;
+    _propC.set(p.x, p.y + p.h * 0.55, p.z);
+    if (rayHitSphere(o, d, _propC, p.r, maxT) < Infinity) smashProp(p, d.x, d.z, power);
+  }
+}
+function blastPropsAt(point, radius, power) {   // 着弾点の巻き込み（放射状に飛ぶ）
+  const r2 = radius * radius;
+  for (const p of props) {
+    if (p.dead) continue;
+    const dx = p.x - point.x, dz = p.z - point.z;
+    if (dx * dx + dz * dz > r2) continue;
+    if (Math.abs(p.y - point.y) > p.h + radius) continue;   // ビル屋上着弾など高さ違いは除外
+    smashProp(p, dx, dz, power);
+  }
+}
+function updatePropFly(dt) {
+  for (const kind in propFly) {
+    const F = propFly[kind];
+    let dirty = false;
+    for (let i = 0; i < F.slots.length; i++) {
+      const sl = F.slots[i];
+      if (!sl.active) continue;
+      sl.t += dt;
+      dirty = true;
+      if (sl.t > PROP_FLY_LIFE) {
+        sl.active = false;
+        _pfM.makeScale(0, 0, 0);
+        F.mesh.setMatrixAt(i, _pfM);
+        continue;
+      }
+      sl.vel.y -= 22 * dt;
+      sl.pos.addScaledVector(sl.vel, dt);
+      if (sl.pos.y < sl.gy && sl.vel.y < 0) {   // 元の接地高さでバウンド（近傍に落ちる前提の近似）
+        sl.pos.y = sl.gy;
+        if (sl.bounces++ < 2) { sl.vel.y *= -0.35; sl.vel.x *= 0.5; sl.vel.z *= 0.5; sl.spin *= 0.5; }
+        else { sl.vel.set(0, 0, 0); sl.spin = 0; }
+      }
+      if (sl.t > PROP_FLY_LIFE - 1.3) sl.pos.y -= dt * 1.5;   // 最後は地面へ沈んで消える
+      if (sl.spin > 0) { _pfDq.setFromAxisAngle(sl.axis, sl.spin * dt); sl.q.premultiply(_pfDq); }
+      _pfS.setScalar(sl.s);
+      _pfM.compose(sl.pos, sl.q, _pfS);
+      F.mesh.setMatrixAt(i, _pfM);
+    }
+    if (dirty) F.mesh.instanceMatrix.needsUpdate = true;
+  }
 }
 
 function drawRoadLines() {
@@ -1364,6 +1929,7 @@ function setupControls() {
       if (player.eating || !player.charging) { player.charging = false; return; }
       player.charging = false;
       if (player.chargeT < TAP_THRESHOLD) normalShot();
+      else if (player.chargeT >= ULT_CHARGE_TIME - 0.01) fireUltimate();   // ゲージ満タン＝電撃乱射
       else fireLargeBeam();   // チャージ解放＝5秒貫通ビーム
     } else if (e.button === 2) releaseGrab();   // 離すと投擲（tps-flight同様の振り回し投げ）
   });
@@ -1465,7 +2031,11 @@ function setupTouchControls(cv) {
         else if (player.charging) {                             // チャージ解放
           player.charging = false;
           $('touch-charge').style.display = 'none';
-          if (!player.eating) { if (player.chargeT < TAP_THRESHOLD) normalShot(); else fireLargeBeam(); }
+          if (!player.eating) {
+            if (player.chargeT < TAP_THRESHOLD) normalShot();
+            else if (player.chargeT >= ULT_CHARGE_TIME - 0.01) fireUltimate();
+            else fireLargeBeam();
+          }
         } else if (!holdFired && moved < 18 && !player.eating) normalShot();   // 短タップ=通常ビーム
         touchGrabbed = false; holdFired = false;
       }
@@ -1476,7 +2046,7 @@ function setupTouchControls(cv) {
   // 長押し判定は移動が無くても発火させる（ポーリング）
   setInterval(() => {
     if (lookId != null && !holdFired && moved < 18 && performance.now() - downT >= TOUCH_HOLD * 1000) holdCheck();
-    if (player.charging) $('touch-charge').textContent = `チャージ ${(Math.min(player.chargeT / MAX_CHARGE_TIME, 1) * 100) | 0}%`;
+    if (player.charging) $('touch-charge').textContent = player.chargeT >= ULT_CHARGE_TIME - 0.01 ? 'MAX!! 離して乱射' : `チャージ ${(Math.min(player.chargeT / ULT_CHARGE_TIME, 1) * 100) | 0}%`;
     else $('touch-charge').style.display = 'none';   // トーテム分岐などでチャージが解除された場合も消す
     const be = $('btn-enter');
     if (be) be.style.display = entryPrompt ? 'flex' : 'none';   // 入退室ボタンはプロンプトが出ている時だけ
@@ -1748,7 +2318,8 @@ function groundCollide() {
 // HP制: 小さな住宅=少HP / 中層=中HP / 高層=大HP。被弾後は自壊（毎秒スローでHP減＋徐々に傾く＋上から溶け始め）
 const CARVE_MAX = 6, CARVE_RADIUS = 7, SHOOT_RANGE = 450, DIE_DUR = 1.7;
 const BLD_HP = { house: 2, mid: 5, tower: 9 };   // 建物HP（ダメージ: 通常弾=1, 雷=2.5, 貫通ビーム=0.55/tick）
-const BLD_DECAY_TIME = 40;   // 被弾後、放置してもこの秒数で自壊しきる
+const BLD_DECAY_TIME = 28;   // 被弾後、放置してもこの秒数で自壊しきる（基準値）
+const BLD_DECAY_ACCEL = 6;   // ダメージが進むほど自壊が加速する係数（progの2乗に掛ける）
 const BLD_MAX_TILT = 0.14;   // 自壊進行での最大傾き(rad)
 const dyingList = [];        // 崩壊アニメ中の rec（建物レコードの carve に紐付く）
 const damagedList = [];      // 被弾済み（自壊進行中）の rec
@@ -1797,11 +2368,11 @@ function makeCarveMaterial(srcMat, baseY, height) {
   return { mat: nm, uCenters, uRadii, uKill, uKillOn, uBaseY, uHeight };
 }
 
-function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT) {
+function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT, fxScale = 1) {
   const rec0 = (instMesh.userData.slots || [])[instanceId];   // LOD振り分けの slot から建物レコードへ逆引き（近/遠どちらの命中でも同じレコード）
   const md = instMesh.userData.md;
   if (!rec0 || !md || rec0.dead) return;
-  if (rec0.carve) { applyCarve(rec0.carve, point, dmg); return; }
+  if (rec0.carve) { applyCarve(rec0.carve, point, dmg, fxScale); return; }
   const m = rec0.m;
   const _p2 = new THREE.Vector3(), _q2 = new THREE.Quaternion(), _s2 = new THREE.Vector3();
   m.decompose(_p2, _q2, _s2);
@@ -1828,15 +2399,16 @@ function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT) {
   std.userData.rec = rec;
   rec0.carve = rec;
   damagedList.push(rec);   // 以後、自壊（スロー減衰＋傾き）が進行
-  applyCarve(rec, point, dmg);
+  applyCarve(rec, point, dmg, fxScale);
 }
-function applyCarve(rec, point, dmg = DMG_SHOT) {   // 命中点にカーブ球を追加＋HPダメージ。HP0で崩壊
+function applyCarve(rec, point, dmg = DMG_SHOT, fxScale = 1) {   // 命中点にカーブ球を追加＋HPダメージ。HP0で崩壊
   if (rec.dying) return;
   const i = Math.min(rec.hits, CARVE_MAX - 1);
   rec.uCenters[i].value.copy(point);
   rec.uRadii[i].value = (rec.carveR || CARVE_RADIUS) * (0.9 + Math.random() * 0.35);
   rec.hits++;
-  spawnImpactFx(point);   // 着弾点に炎＋煙
+  spawnImpactFx(point, fxScale);   // 着弾点に炎＋煙
+  spawnDebrisBurst(point, 'bld', dmg < 1 ? 0.5 : 1);   // がれき＋棒材（ラージのtickは少量ずつ=連続的）
   applyBldDamage(rec, dmg);
 }
 function applyBldDamage(rec, dmg) {
@@ -1871,9 +2443,9 @@ function rayHitSphere(o, d, center, radius, maxT) {   // レイ上の命中距�
   const perp2 = _rayToC.lengthSq() - t * t;
   return perp2 <= radius * radius ? t : Infinity;
 }
-function applyHitToBuilding(hit, dmg) {
-  if (hit.object.isInstancedMesh && hit.instanceId != null) damageBuilding(hit.object, hit.instanceId, hit.point, dmg);
-  else if (hit.object.userData && hit.object.userData.rec) applyCarve(hit.object.userData.rec, hit.point, dmg);
+function applyHitToBuilding(hit, dmg, fxScale = 1) {
+  if (hit.object.isInstancedMesh && hit.instanceId != null) damageBuilding(hit.object, hit.instanceId, hit.point, dmg, fxScale);
+  else if (hit.object.userData && hit.object.userData.rec) applyCarve(hit.object.userData.rec, hit.point, dmg, fxScale);
 }
 function hitCarBeam(car) {
   const ti = thrownCars.indexOf(car); if (ti >= 0) thrownCars.splice(ti, 1);
@@ -1902,15 +2474,24 @@ function fireBeam(bldDmg, kenDmg, colorHex, thick) {
   }
   const gndHit = (groundGroup && groundGroup.children.length) ? _shootRay.intersectObject(groundGroup, true)[0] : null;
   const gndT = gndHit ? gndHit.distance : Infinity;   // 地形も遮蔽（着弾のみ・ダメージなし）
-  const minT = Math.min(bldT, carT, kenT, gndT);
+  const pr = rayNearestProp(_muzzle, _camDir, SHOOT_RANGE);   // 信号/街灯/街路樹
+  const propT = pr ? pr.t : Infinity;
+  const minT = Math.min(bldT, carT, kenT, gndT, propT);
   const end = _muzzle.clone().addScaledVector(_camDir, minT === Infinity ? SHOOT_RANGE : minT);
   attackAim.copy(end); attackAimActive = true;   // FXビームの到達点＝この実着弾点
   spawnBeam(_vk.set(player.pos.x, player.pos.y + 1.2, player.pos.z), end, minT !== Infinity, colorHex, thick);
   if (minT === Infinity) return;
-  if (minT === bldT) applyHitToBuilding(hits[0], bldDmg);
+  if (minT === propT) { smashProp(pr.prop, _camDir.x, _camDir.z, bldDmg); spawnImpactFx(end, 1); }
+  else if (minT === bldT) applyHitToBuilding(hits[0], bldDmg);
   else if (minT === carT) hitCarBeam(carBest);
   else if (minT === kenT) hitKenBeam(kenBest, kenDmg);
-  // 地形着弾はダメージなし（spawnBeam 側で炎煙のみ）
+  else if (minT === gndT) {   // 地形着弾: 岩の吹き上げ＋火柱＋焦げ跡。道路上なら穴＋アスファルト片
+    const onRoad = roadTopAt(end.x, end.z) != null;
+    spawnDebrisBurst(end, onRoad ? 'road' : 'ground', thick ? 1.4 : 1);
+    spawnFirePillar(end, thick ? 1.5 : 1);
+    spawnScorch(end, thick ? 3.6 : 2.6);
+    if (onRoad) spawnRoadCarve(end, thick ? 2.8 : 2.1);
+  }
 }
 function snapYawToView() { player.yaw = camYaw; }   // 発射時に一回だけ体を視点方向へ
 function normalShot() {
@@ -1921,11 +2502,158 @@ function normalShot() {
   triggerOneShot('shot');
   fireBeam(DMG_SHOT, KEN_DMG_SHOT, 0xffb040, false);
 }
+let pendingSuper = 0;   // スーパービームの発射待ち（タイムラインFX開始に同期）
 function superShot() {
   snapYawToView();
   triggerOneShot('lightning');
-  fireBeam(DMG_LIGHTNING, KEN_DMG_LIGHTNING, 0x9fd8ff, true);
+  // 発射タイミング＝lightningタイムラインの最初のeffectトラック開始フレーム
+  const st = player.states.lightning;
+  const trk = st?.timeline?.tracks?.find((t) => t.kind === 'effect');
+  const f = trk ? (trk.start ?? trk.frame ?? 0) : 8;
+  pendingSuper = st ? Math.max(0.02, (f - st.trimIn) / st.fps / (st.speed || 1)) : 0.25;
 }
+// スーパービーム実発射: 貫通（射線上の建物全部・車・ken）＋着弾FXは3倍
+function fireSuperPierce() {
+  if (!player.ready || !cityRoot) return;
+  camera.getWorldDirection(_camDir);
+  camera.getWorldPosition(_muzzle);
+  _shootRay.set(_muzzle, _camDir);
+  _shootRay.far = SHOOT_RANGE;
+  const gndHit = (groundGroup && groundGroup.children.length) ? _shootRay.intersectObject(groundGroup, true)[0] : null;
+  const endT = Math.min(gndHit ? gndHit.distance : Infinity, SHOOT_RANGE);
+  const end = _muzzle.clone().addScaledVector(_camDir, endT);
+  attackAim.copy(end);
+  attackAimActive = true;
+  spawnBeam(_vk.set(player.pos.x, player.pos.y + 1.2, player.pos.z), end, false, 0x9fd8ff, true);
+  _shootRay.far = endT;
+  const hits = _shootRay.intersectObjects(cityDamaged ? [cityRoot, cityDamaged] : [cityRoot], true);
+  for (let i = 0; i < Math.min(hits.length, 8); i++) applyHitToBuilding(hits[i], DMG_LIGHTNING, 3);   // 貫通・各命中点3倍FX
+  raySmashProps(_muzzle, _camDir, endT, 2.2);   // 射線上の信号/街灯/街路樹もなぎ倒す
+  for (const car of cars) {
+    if (car.dead || car.grabbed || car.tornado) continue;
+    if (rayHitSphere(_muzzle, _camDir, car.mesh.position, 2.4, endT) < Infinity) hitCarBeam(car);
+  }
+  for (const m of kens) {
+    if (m.dissolving || m.eating || m.grabbed || m.tornado) continue;
+    kenCenter(m, _vk);
+    if (rayHitSphere(_muzzle, _camDir, _vk, 0.85, endT) < Infinity) hitKenBeam(m, KEN_DMG_LIGHTNING);
+  }
+  if (gndHit && endT < SHOOT_RANGE) {   // 地面到達: 3倍の着弾FX＋大きめの岩/火柱/焦げ
+    spawnImpactFx(end, 3);
+    const onRoad = roadTopAt(end.x, end.z) != null;
+    spawnDebrisBurst(end, onRoad ? 'road' : 'ground', 2);
+    spawnFirePillar(end, 2.2);
+    spawnScorch(end, 4.5);
+    if (onRoad) spawnRoadCarve(end, 2.8);
+  } else if (hits.length) spawnImpactFx(end, 3);
+}
+// ── アルティメット: チャージゲージ満タン(4.5s)で解放＝電撃ビーム乱射（drain0→drain1再生）──
+// electric.png 4×4/18fps・帯幅2/2.5/3循環・ランダム経路(setPathMode)・視線コーンに拡散連射
+const ULT_CHARGE_TIME = 4.5, ULT_FIRE_DUR = 7.0, ULT_POOL = 10, ULT_SHOOT_INT = 0.07;
+const ULT_RING_MIN = 18, ULT_RING_MAX = 126, ULT_SKY_H = 80;   // 落雷リング半径と天の高さ
+const ULT_DMG_BLD = 1.5, ULT_DMG_KEN = 45, ULT_HIT_R = 3.2;  // 着弾点の巻き込み半径
+const ULT_WIDTHS = [6, 8, 10];   // 帯太さ（循環）
+const ult = { active: false, phase: 'intro', t: 0, shootT: 0, pool: [], idx: 0, prewarmT: 0, shotN: 0 };
+function initUltFx() {
+  if (ult.pool.length) return;
+  for (let i = 0; i < ULT_POOL; i++) {
+    const fx = createBeamFx({ style: 'jagged', width: 2, jitter: 0.5, freq: 14, scroll: 1.2, repeat: 3, emissive: 2.0, coreAmt: 0.5 });
+    fx.setTexture('../electric.png', 4, 4, 18);
+    fx.setPathMode(true);
+    // prewarm: 地下で一度描画してパイプラインをコンパイル→数秒後に消灯
+    fx.setEmitting(true);
+    const a = new THREE.Vector3(i * 4, -650, 0), b = new THREE.Vector3(i * 4 + 6, -650, 4);
+    fx.setPathPoints([a, a.clone().lerp(b, 0.5), b], camera.position, true);
+    scene.add(fx.object3D);
+    ult.pool.push({ fx, ttl: 0 });
+  }
+  ult.prewarmT = 2.5;
+}
+function fireUltimate() {
+  ult.active = true; ult.phase = 'intro'; ult.t = 0; ult.shootT = 0;
+  triggerOneShot('drain0');   // 導入モーション（この間は撃たない）→ drain1開始と同時に落雷開始
+}
+const _ultFrom = new THREE.Vector3(), _ultDir = new THREE.Vector3(), _ultEnd = new THREE.Vector3();
+const _ultMid = new THREE.Vector3(), _ultMid2 = new THREE.Vector3(), _ultSide = new THREE.Vector3();
+function fireUltBeam() {
+  const s = ult.pool[ult.idx];
+  ult.idx = (ult.idx + 1) % ULT_POOL;
+  // 落雷点＝プレイヤー周囲のリング内ランダム
+  const ang = Math.random() * Math.PI * 2;
+  const r = ULT_RING_MIN + Math.random() * (ULT_RING_MAX - ULT_RING_MIN);
+  const x = player.pos.x + Math.cos(ang) * r;
+  const z = player.pos.z + Math.sin(ang) * r;
+  const gy = groundYAt(x, z, player.pos.y);
+  _ultEnd.set(x, gy, z);
+  // 天から降らせる（起点は上空・少し横にずらして斜めの稲妻に）
+  _ultFrom.set(x + (Math.random() - 0.5) * 14, Math.max(gy, player.pos.y) + ULT_SKY_H, z + (Math.random() - 0.5) * 14);
+  _ultDir.copy(_ultEnd).sub(_ultFrom).normalize();
+  // 途中の建物に当たればそこで止めてダメージ
+  _shootRay.set(_ultFrom, _ultDir);
+  _shootRay.far = _ultFrom.distanceTo(_ultEnd) + 4;
+  const bHits = _shootRay.intersectObjects(cityDamaged ? [cityRoot, cityDamaged] : [cityRoot], true);
+  const hitBld = bHits.length > 0;
+  if (hitBld) _ultEnd.copy(bHits[0].point);
+  // ランダム経路: 中間2点を横方向へ大きく散らした落雷ジグザグ
+  const off = 4 + Math.random() * 8;
+  _ultMid.copy(_ultFrom).lerp(_ultEnd, 0.35);
+  _ultMid.x += (Math.random() - 0.5) * off; _ultMid.z += (Math.random() - 0.5) * off; _ultMid.y += (Math.random() - 0.5) * 3;
+  _ultMid2.copy(_ultFrom).lerp(_ultEnd, 0.7);
+  _ultMid2.x += (Math.random() - 0.5) * off; _ultMid2.z += (Math.random() - 0.5) * off; _ultMid2.y += (Math.random() - 0.5) * 3;
+  s.fx.setParam('width', ULT_WIDTHS[ult.shotN % ULT_WIDTHS.length]);
+  s.fx.setEmitting(true);
+  s.fx.setPathPoints([_ultFrom.clone(), _ultMid.clone(), _ultMid2.clone(), _ultEnd.clone()], camera.position, true);
+  s.ttl = 0.22;
+  ult.shotN++;
+  // ダメージ＋着弾演出（着弾FXはスーパービームと同じ3倍）
+  if (hitBld) applyHitToBuilding(bHits[0], ULT_DMG_BLD, 3);
+  else if (ult.shotN % 2 === 0) {
+    spawnImpactFx(_ultEnd, 3);
+    const onRoad = roadTopAt(_ultEnd.x, _ultEnd.z) != null;
+    spawnDebrisBurst(_ultEnd, onRoad ? 'road' : 'ground', 0.5);
+    spawnScorch(_ultEnd, 2.4);
+    if (onRoad) spawnRoadCarve(_ultEnd, 1.8);
+    if (ult.shotN % 4 === 0) spawnFirePillar(_ultEnd, 1.1);
+  }
+  for (const m of kens) {   // 着弾点の巻き込み（ken/車）
+    if (m.dissolving || m.eating || m.grabbed || m.tornado) continue;
+    kenCenter(m, _vk);
+    if (_vk.distanceTo(_ultEnd) < ULT_HIT_R) hitKenBeam(m, ULT_DMG_KEN);
+  }
+  for (const car of cars) {
+    if (car.dead || car.grabbed || car.tornado) continue;
+    if (car.mesh.position.distanceTo(_ultEnd) < ULT_HIT_R) hitCarBeam(car);
+  }
+  blastPropsAt(_ultEnd, ULT_HIT_R + 2, 2.2);   // 信号/街灯/街路樹は放射状に吹っ飛ぶ
+}
+function updateUltimate(dt) {
+  if (ult.prewarmT > 0) { ult.prewarmT -= dt; if (ult.prewarmT <= 0) for (const s of ult.pool) s.fx.setEmitting(false); }
+  for (const s of ult.pool) {
+    if (s.ttl > 0) { s.ttl -= dt; if (s.ttl <= 0) s.fx.setEmitting(false); }
+    s.fx.update(dt);
+  }
+  if (!ult.active) return;
+  if (ult.phase === 'intro') {   // drain0再生中は溜め＝撃たない
+    if (!player.oneShot) {       // drain0が終わった→drain1ループ開始＝乱射開始
+      player.oneShot = { name: 'drain1', until: ULT_FIRE_DUR + 0.2 };
+      ult.phase = 'fire';
+      ult.t = 0;
+      ult.shootT = 0;
+    }
+    return;
+  }
+  ult.t += dt;
+  ult.shootT -= dt;
+  while (ult.shootT <= 0 && ult.active) {
+    ult.shootT += ULT_SHOOT_INT;
+    fireUltBeam();
+  }
+  if (ult.t >= ULT_FIRE_DUR) {
+    ult.active = false;
+    if (player.oneShot?.name === 'drain1') player.oneShot.until = Math.min(player.oneShot.until, 0.15);   // すぐ通常状態へ
+  }
+}
+
 function fireLargeBeam() {
   triggerOneShot('large');
   if (player.oneShot) player.oneShot.until = LARGE_BEAM_DUR;   // 5秒間ポーズ保持しつつ照射
@@ -1943,6 +2671,11 @@ const _lbFrom = new THREE.Vector3(), _lbEnd = new THREE.Vector3();
 function updateAttacks(dt) {
   shotComboT += dt;
   if (shotComboT > SHOT_COMBO_WINDOW) shotComboN = 0;   // 連射が途切れたらコンボ解除
+  updateUltimate(dt);   // アルティメット（乱射＋プールprewarm消灯）
+  if (pendingSuper > 0) {   // スーパービーム: タイムラインFXの開始と同時に実発射
+    pendingSuper -= dt;
+    if (pendingSuper <= 0) fireSuperPierce();
+  }
   if (!largeBeam.active) return;
   largeBeam.t += dt; largeBeam.tickT -= dt;
   player.yaw = lerpAngle(player.yaw, camYaw, Math.min(1, 20 * dt));   // 発射中は体ごと視点方向へ追従
@@ -1962,9 +2695,17 @@ function updateAttacks(dt) {
   if (largeBeam.tickT <= 0) {   // 貫通ダメージ tick
     largeBeam.tickT = LARGE_BEAM_TICK;
     spawnImpactFx(_lbEnd);   // 到達点（地形/最遠）にも炎煙
+    if (gnd) {   // ラージ直撃中の地面: tick毎に岩＋火柱＝連続的に噴き上がる。焦げ跡と道路穴も掃引で残る
+      const onRoad = roadTopAt(_lbEnd.x, _lbEnd.z) != null;
+      spawnDebrisBurst(_lbEnd, onRoad ? 'road' : 'ground', 0.6);
+      spawnFirePillar(_lbEnd, 1.3);
+      spawnScorch(_lbEnd, 3.2);
+      if (onRoad) spawnRoadCarve(_lbEnd, 2.4);
+    }
     _shootRay.set(_muzzle, _camDir); _shootRay.far = endT;
     const hits = _shootRay.intersectObjects(cityDamaged ? [cityRoot, cityDamaged] : [cityRoot], true);
     for (let i = 0; i < Math.min(hits.length, 8); i++) applyHitToBuilding(hits[i], DMG_LARGE_TICK);   // 射線上の建物すべて（上限8）
+    raySmashProps(_muzzle, _camDir, endT, 1.4);   // 掃引中の信号/街灯/街路樹もなぎ倒す
     for (const car of cars) {
       if (car.dead || car.grabbed || car.tornado) continue;
       if (rayHitSphere(_muzzle, _camDir, car.mesh.position, 2.4, LARGE_BEAM_RANGE) < Infinity) hitCarBeam(car);
@@ -1999,7 +2740,9 @@ function updateDamage(dt) {
   // 被弾済み建物の自壊: 放置でもHPがスロー減衰→徐々に傾き＋上からうっすら溶け始める。追撃すれば即崩壊
   for (let k = damagedList.length - 1; k >= 0; k--) {
     const rec = damagedList[k];
-    rec.hp -= rec.decay * dt;
+    // ダメージが深いほど加速して倒れる（軽傷はゆっくり・重傷は一気に傾き崩壊へ）
+    const prog0 = 1 - rec.hp / rec.hpMax;
+    rec.hp -= rec.decay * (1 + BLD_DECAY_ACCEL * prog0 * prog0) * dt;
     if (rec.hp <= 0) { startCollapse(rec); continue; }   // startCollapse が damagedList から除去
     const prog = 1 - rec.hp / rec.hpMax;
     applyTilt(rec, tiltAngle(rec), rec.std.matrix); rec.std.matrixWorldNeedsUpdate = true;   // ゆっくり傾く
@@ -2130,6 +2873,175 @@ function spawnBreakFx(point) {
     const d = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.5, 1.0), new THREE.MeshBasicMaterial({ color: 0x2b2b30 }));
     d.position.copy(point); scene.add(d);
     carDebris.push({ obj: d, vel: new THREE.Vector3((Math.random() - 0.5) * 20, Math.random() * 14 + 5, (Math.random() - 0.5) * 20), t: 0 });
+  }
+}
+
+// ── 汎用破片（建物=がれき+棒 / 地面=岩の吹き上げ）＋火柱 ───────────────────
+// 車の破片と同じ軽量方式。ジオメトリ/マテリアルは共有＝WebGPUパイプラインは起動時にprewarm
+const debris = [];
+const DEBRIS_MAX = 190;
+const _debGeo = new THREE.BoxGeometry(1, 1, 1);
+const debMats = {
+  bldA: new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.95 }),   // コンクリ
+  bldB: new THREE.MeshStandardMaterial({ color: 0xcbc1b2, roughness: 0.95 }),   // 外壁
+  rod: new THREE.MeshStandardMaterial({ color: 0x565c64, roughness: 0.8 }),     // 鉄骨/柱
+  rock: new THREE.MeshStandardMaterial({ color: 0x6b5f52, roughness: 1.0 }),    // 岩
+  asphalt: new THREE.MeshStandardMaterial({ color: 0x3a3b40, roughness: 1.0 }), // アスファルト片
+};
+function spawnDebrisBurst(point, kind, scaleN = 1) {
+  const n = Math.max(1, Math.round((kind === 'bld' ? 10 : 7) * scaleN));
+  const gy = groundYAt(point.x, point.z, point.y);
+  for (let i = 0; i < n && debris.length < DEBRIS_MAX; i++) {
+    let mat, sx, sy, sz, vel;
+    if (kind === 'bld') {
+      const rod = i % 3 === 2;   // 1/3は棒状（鉄骨・柱材）
+      mat = rod ? debMats.rod : (i % 2 ? debMats.bldA : debMats.bldB);
+      if (rod) { sx = 0.22 + Math.random() * 0.18; sy = 2.2 + Math.random() * 2.4; sz = sx; }
+      else { const s = 0.9 + Math.random() * 1.4; sx = s; sy = s * (0.6 + Math.random() * 0.8); sz = s * (0.6 + Math.random() * 0.8); }
+      vel = new THREE.Vector3((Math.random() - 0.5) * 10, Math.random() * 5 + 1.5, (Math.random() - 0.5) * 10);   // がれき=散って落ちる
+    } else {
+      mat = kind === 'road' ? debMats.asphalt : debMats.rock;
+      const s = 0.35 + Math.random() * 0.75;
+      sx = s; sy = s * (0.7 + Math.random() * 0.7); sz = s * (0.7 + Math.random() * 0.7);
+      vel = new THREE.Vector3((Math.random() - 0.5) * 9, 9 + Math.random() * 9, (Math.random() - 0.5) * 9);   // 岩=上向きに吹き上がる
+    }
+    const d = new THREE.Mesh(_debGeo, mat);
+    d.scale.set(sx, sy, sz);
+    d.position.copy(point);
+    d.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    scene.add(d);
+    debris.push({ obj: d, vel, avx: (Math.random() - 0.5) * 9, avz: (Math.random() - 0.5) * 9, t: 0, dur: 1.5 + Math.random() * 0.8, gy });
+  }
+}
+function updateDebris(dt) {
+  for (let k = debris.length - 1; k >= 0; k--) {
+    const d = debris[k];
+    d.t += dt;
+    d.vel.y -= 26 * dt;
+    d.obj.position.addScaledVector(d.vel, dt);
+    d.obj.rotation.x += d.avx * dt;
+    d.obj.rotation.z += d.avz * dt;
+    if (d.obj.position.y < d.gy + 0.12 && d.vel.y < 0) {   // 接地: 小バウンド＋減衰
+      d.obj.position.y = d.gy + 0.12;
+      d.vel.y *= -0.25;
+      d.vel.x *= 0.5; d.vel.z *= 0.5;
+      d.avx *= 0.4; d.avz *= 0.4;
+    }
+    if (d.dur - d.t < 0.3) d.obj.scale.multiplyScalar(Math.max(0, 1 - dt * 4));   // 消え際は縮む
+    if (d.t > d.dur) { scene.remove(d.obj); debris.splice(k, 1); }
+  }
+}
+// 火柱: プール4本（マテリアル個別opacityのためWebGPUの遅延コンパイルを避けてプール化）
+const FIRE_POOL = 4;
+const firePillars = [];
+function initDebrisFx() {
+  if (firePillars.length) return;
+  // 縦グラデの炎テクスチャ（下=濃橙→上=透明）
+  const cv = document.createElement('canvas');
+  cv.width = 32; cv.height = 128;
+  const ctx = cv.getContext('2d');
+  const g = ctx.createLinearGradient(0, 128, 0, 0);
+  g.addColorStop(0, 'rgba(255,190,80,0.95)');
+  g.addColorStop(0.45, 'rgba(255,120,30,0.7)');
+  g.addColorStop(1, 'rgba(255,60,10,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 32, 128);
+  const tex = new THREE.CanvasTexture(cv);
+  const geo = new THREE.CylinderGeometry(0.55, 0.95, 1, 10, 1, true);
+  geo.translate(0, 0.5, 0);   // 底面原点＝上に伸びる
+  for (let i = 0; i < FIRE_POOL; i++) {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+    m.position.set(0, -600, 0);
+    m.frustumCulled = false;   // 起動時からパイプラインをコンパイルさせる（初弾ヒッチ防止）
+    scene.add(m);
+    firePillars.push({ obj: m, t: 1e9, dur: 0.7, gy: -600, scale: 1 });
+  }
+  // 破片マテリアルのprewarm（画面外の常時描画ダミー）
+  for (const mat of Object.values(debMats)) {
+    const d = new THREE.Mesh(_debGeo, mat);
+    d.position.set(0, -600, 0);
+    d.frustumCulled = false;
+    scene.add(d);
+  }
+  initScorch();   // 焦げ跡デカール（プール＋prewarm）
+}
+// ── 焦げ跡デカール（地面/路面共通・プール40枚を古い順にリサイクル＝残り続けるが数は一定）──
+const DECAL_MAX = 40;
+const decals = { pool: [], idx: 0, last: new THREE.Vector3(1e9, 0, 1e9) };
+function initScorch() {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const ctx = cv.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 6, 64, 64, 62);
+  g.addColorStop(0, 'rgba(12,10,8,0.92)');
+  g.addColorStop(0.55, 'rgba(20,16,12,0.75)');
+  g.addColorStop(1, 'rgba(20,16,12,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 90; i++) {   // 縁を斑に汚す
+    const a = Math.random() * Math.PI * 2, r = 38 + Math.random() * 24;
+    ctx.fillStyle = `rgba(15,12,10,${0.25 * Math.random()})`;
+    ctx.beginPath();
+    ctx.arc(64 + Math.cos(a) * r * 0.9, 64 + Math.sin(a) * r * 0.9, 4 + Math.random() * 9, 0, 7);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  const geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+  for (let i = 0; i < DECAL_MAX; i++) {
+    const m = new THREE.Mesh(geo, mat);
+    m.visible = false;
+    m.renderOrder = 2;
+    scene.add(m);
+    decals.pool.push(m);
+  }
+  const dummy = new THREE.Mesh(geo, mat);   // prewarm用（常時描画・画面外）
+  dummy.position.set(0, -600, 0);
+  dummy.frustumCulled = false;
+  scene.add(dummy);
+}
+function spawnScorch(point, size = 2.6) {
+  if (!decals.pool.length) return;
+  if (point.distanceTo(decals.last) < 1.2) return;   // 同一点への連打は1枚（ラージ照射の使い潰し防止）
+  decals.last.copy(point);
+  const m = decals.pool[decals.idx];
+  decals.idx = (decals.idx + 1) % DECAL_MAX;
+  const y = groundYAt(point.x, point.z, point.y);   // 路面対応済み＝道路の上にも正しく乗る
+  m.position.set(point.x, y + 0.045, point.z);
+  m.rotation.y = Math.random() * Math.PI * 2;
+  const s = size * (0.85 + Math.random() * 0.4);
+  m.scale.set(s, 1, s);
+  m.visible = true;
+}
+// ── 道路の穴: 道路材質をカーブ化し、着弾点にワールド座標の球を書く（CARVE_MAX個をリサイクル）──
+const roadCarveSets = [];
+let roadCarveIdx = 0, roadLightU = null;
+const _rcLast = new THREE.Vector3(1e9, 0, 1e9);
+function spawnRoadCarve(point, r = 2.2) {
+  if (!roadCarveSets.length) return;
+  if (point.distanceTo(_rcLast) < 1.5) return;
+  _rcLast.copy(point);
+  for (const s of roadCarveSets) {
+    s.uCenters[roadCarveIdx].value.copy(point);
+    s.uRadii[roadCarveIdx].value = r;
+  }
+  roadCarveIdx = (roadCarveIdx + 1) % CARVE_MAX;
+}
+function spawnFirePillar(point, scale = 1) {
+  if (!firePillars.length) return;
+  let p = firePillars.find((q) => q.t > q.dur) || firePillars.reduce((a, b) => (a.t > b.t ? a : b));
+  p.t = 0; p.dur = 0.7; p.scale = scale;
+  p.gy = point.y;
+  p.obj.position.set(point.x, point.y, point.z);
+}
+function updateFirePillars(dt) {
+  for (const p of firePillars) {
+    if (p.t > p.dur) { p.obj.material.opacity = 0; continue; }
+    p.t += dt;
+    const f = Math.min(1, p.t / p.dur);
+    const h = (1.5 + 7 * Math.min(1, f * 2.4)) * p.scale;   // 一気に立ち上がる火柱
+    p.obj.scale.set(p.scale * (1 + f * 0.5), h, p.scale * (1 + f * 0.5));
+    p.obj.material.opacity = 0.95 * (1 - f * f);
   }
 }
 
@@ -3301,6 +4213,34 @@ function dayLerp(prop, h) {
   _dcA.setHex(a[prop]); _dcB.setHex(b[prop]);
   return _dcOut.copy(_dcA).lerp(_dcB, t);
 }
+// ── 太陽と月のディスク（プレイヤー追従の遠景・fog非適用・日周に連動）──
+let sunDisc = null, moonDisc = null;
+const _sunHi = new THREE.Color(0xfff6d8), _sunLo = new THREE.Color(0xff8c3a);
+function initSunMoon() {
+  const mk = (colorHex, size) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(size, 20, 14),
+      new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0, fog: false, depthWrite: false }));
+    m.frustumCulled = false;
+    m.renderOrder = -2;   // 空の直後・雲や街より先
+    scene.add(m);
+    return m;
+  };
+  sunDisc = mk(0xfff6d8, 320);
+  moonDisc = mk(0xe8eef8, 230);
+}
+function updateSunMoon(sx, sy) {
+  const R = 8500;
+  if (sunDisc) {
+    sunDisc.position.set(player.pos.x + sx * R, player.pos.y + sy * R, player.pos.z + 0.35 * R);
+    sunDisc.material.opacity = THREE.MathUtils.clamp((sy + 0.05) / 0.1, 0, 1);
+    const low = THREE.MathUtils.clamp(1 - sy * 2.5, 0, 1);   // 低空ほど夕焼け色
+    sunDisc.material.color.copy(_sunHi).lerp(_sunLo, low);
+  }
+  if (moonDisc) {   // 月は太陽の反対側
+    moonDisc.position.set(player.pos.x - sx * R, player.pos.y - sy * R, player.pos.z - 0.3 * R);
+    moonDisc.material.opacity = THREE.MathUtils.clamp((-sy + 0.05) / 0.12, 0, 1) * 0.95;
+  }
+}
 function updateDayNight(dt) {
   gameHour = (gameHour + dt * timeScale * 24 / DAY_SECONDS) % 24;
   const ang = ((gameHour - 6) / 12) * Math.PI;   // 6時=日の出 / 18時=日の入り
@@ -3317,10 +4257,15 @@ function updateDayNight(dt) {
   if (dayRefs.fog) dayRefs.fog.color.copy(skyC);
   if (skyMesh) skyMesh.sunPosition.value.set(sx, sy, 0.35);
   else if (dayRefs.bg) dayRefs.bg.copy(skyC);
+  updateSunMoon(sx, sy);   // 太陽/月ディスクの位置・色・出没
+  scene.environmentIntensity = 0.22 + (1 - nightF) * 0.78;   // 環境マップ（光沢）は夜に絞る
+  if (charFill.key) { charFill.key.intensity = nightF * charLightCfg.dirI; charFill.rim.intensity = nightF * charLightCfg.ambI; }   // 夜だけキャラを持ち上げる（強さ/色はchar-light.json）
   if (neonMat) neonMat.opacity = nightF;                     // 屋上ランプは夜だけ
   if (carHeadMat) { carHeadMat.opacity = nightF; carTailMat.opacity = nightF; }
   if (streetGlowMat) streetGlowMat.opacity = nightF;   // 街灯も夜だけ
+  if (parkGlowMat) parkGlowMat.opacity = nightF;       // 公園ランタンも夜だけ
   if (windowGlowMat) windowGlowMat.opacity = nightF * 0.9;   // 窓の光漏れも夜だけ
+  if (roadLightU) roadLightU.value = 0.30 + (1 - nightF) * 0.75;   // 道路(カーブ材質=アンリット)の昼夜明度
   if (cloudMat) {   // 雲: 時刻で色（夕焼けは太陽色に染まる）と濃さを変え、ゆっくり流す
     cloudMat.color.copy(dayLerp('sunC', gameHour)).lerp(_dcWhite, 0.6);
     cloudMat.opacity = 0.85 - nightF * 0.55;
@@ -3368,6 +4313,7 @@ function buildClouds() {
 // ── ネオン/屋上ランプ: 高層=四隅・中層=中央1点を、全建物まとめて1つの Points で描画 ──
 // entry-editor で光点(light)マーカーを打ったモデルは、その位置・色を優先（全ティア有効）
 let neonMat = null, neonMesh = null, windowGlowMesh = null;
+let neonBlinks = [], neonTime = 0;   // entry-editorでblink(秒)を指定した光点の点滅管理
 const recLights = new Map();   // 建物rec -> {neon:[idx], glow:[idx]}（破壊時の消灯用）
 function recLightsOf(rec) {
   if (!recLights.has(rec)) recLights.set(rec, { neon: [], glow: [] });
@@ -3394,7 +4340,7 @@ function buildNeon() {
           if (L.color) c.set(L.color);
           else c.setHSL(Math.random() < 0.55 ? 0.0 : (Math.random() < 0.6 ? 0.6 : 0.09), 1.0, 0.55);
           recLightsOf(rec).neon.push(pos.length);
-          pos.push({ x: _v.x, y: _v.y, z: _v.z, r: c.r, g: c.g, b: c.b });
+          pos.push({ x: _v.x, y: _v.y, z: _v.z, r: c.r, g: c.g, b: c.b, blink: L.blink || 0 });
         }
         continue;
       }
@@ -3422,9 +4368,28 @@ function buildNeon() {
     mesh.setColorAt(i, _cc.setRGB(pos[i].r, pos[i].g, pos[i].b));
   }
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  // 点滅指定のある光点: 位相をばらして登録（同一モデルの全インスタンスが同期しないように）
+  neonBlinks = []; neonTime = 0;
+  for (let i = 0; i < pos.length; i++) {
+    if (pos[i].blink > 0) neonBlinks.push({ i, period: pos[i].blink, phase: Math.random() * pos[i].blink, r: pos[i].r, g: pos[i].g, b: pos[i].b });
+  }
+  if (neonBlinks.length && mesh.instanceColor) mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
   scene.add(mesh);
   neonMesh = mesh;
-  console.log('neon lamps:', pos.length);
+  console.log('neon lamps:', pos.length, neonBlinks.length ? `(点滅 ${neonBlinks.length})` : '');
+}
+const _neonC = new THREE.Color();
+let neonBlinkAcc = 0;
+function updateNeonBlink(dt) {   // サイン波のゆっくり明滅（30Hzに間引き）。昼は不可視＝更新しない
+  neonTime += dt;
+  neonBlinkAcc += dt;
+  if (!neonBlinks.length || !neonMesh || neonMat.opacity < 0.02 || neonBlinkAcc < 1 / 30) return;
+  neonBlinkAcc = 0;
+  for (const b of neonBlinks) {
+    const br = 0.5 - 0.5 * Math.cos(((neonTime + b.phase) / b.period) * Math.PI * 2);   // 0→1→0
+    neonMesh.setColorAt(b.i, _neonC.setRGB(b.r, b.g, b.b).multiplyScalar(0.04 + 0.96 * br));
+  }
+  if (neonMesh.instanceColor) neonMesh.instanceColor.needsUpdate = true;
 }
 
 // ── 窓の光漏れ: entry-editor の glow マーカー矩形を全建物インスタンスへ展開（夜だけ点灯）──
@@ -3873,7 +4838,11 @@ function tick() {
   updateAgentBodies(dt);  // 近傍の通勤者へ ken の身体を割当
   updateAgentEd(dt);      // 生活NPCエディタ（Mキー・開いている間だけ）
   updateSignals(dt);      // 信号の三色サイクル（実時間・昼夜問わず点灯）
+  updateNeonBlink(dt);    // 光点の点滅（entry-editorのblink指定）
   updateWater(dt);        // 水面: 法線スクロール＋距離LOD（マップモードのみ）
+  updateDebris(dt);       // 破片（がれき/岩）
+  updatePropFly(dt);      // 吹っ飛んだ信号/街灯/街路樹の飛翔
+  updateFirePillars(dt);  // 地面着弾の火柱
   updateWanted(dt);       // 手配度＋パトカー追跡＋サイレン
   if (speechUI) speechUI.update(dt, kenScreenPos);   // 頭上セリフバブル
   if (KENNEY_CITY) updateDamage(dt);

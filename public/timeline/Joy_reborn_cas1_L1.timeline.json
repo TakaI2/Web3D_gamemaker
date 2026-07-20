@@ -90,6 +90,7 @@
       "count": 24,
       "params": {
         "color": "#ffadad",
+        "width": 4,
         "emissive": 2.5,
         "jitter": 0.3,
         "freq": 15,

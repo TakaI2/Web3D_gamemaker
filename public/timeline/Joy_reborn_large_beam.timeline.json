@@ -4,8 +4,6 @@
   "durationFrames": 87,
   "trimIn": 0,
   "trimOut": 87,
-  "loopStart": 24,
-  "loopEnd": 44,
   "tracks": [
     {
       "kind": "effect",
@@ -26,24 +24,25 @@
       "count": 24,
       "params": {
         "color": "#ffbdbd",
+        "width": 0.8,
         "emissive": 1.7,
         "jitter": 0,
         "freq": 17,
         "scroll": 1.5,
         "repeat": 3.3,
-        "core": 2,
+        "core": 2.2,
         "tube": true,
         "tubeSheet": true,
-        "tubeRadius": 0.12,
+        "tubeRadius": 0.24,
         "tubeColor": "#ff5c5c",
-        "tubeEmissive": 2.6,
+        "tubeEmissive": 3.55,
         "tubeOpacity": 0.85,
-        "tubeScroll": 1.05,
-        "tubeAngle": 55,
+        "tubeScroll": 0.75,
+        "tubeAngle": 30,
         "tubeSpin": -1.1,
         "tubeTwist": 0,
-        "tubeFresnel": 1.6,
-        "tubeSoft": 0.3
+        "tubeFresnel": 1.9,
+        "tubeSoft": 0.44
       },
       "bone": "rightHand",
       "to": {
@@ -112,6 +111,8 @@
       "end": 49
     }
   ],
+  "loopStart": 24,
+  "loopEnd": 44,
   "speed": 2,
   "vrma": "attack_drain.vrma"
 }
