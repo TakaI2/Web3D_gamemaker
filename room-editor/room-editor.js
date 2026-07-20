@@ -433,7 +433,7 @@ async function playLifeAnim(name) {
     life.curAct = act;
   } catch (e) { setStatus(e.message); }
 }
-function lifeAnimFor(action) { return life.animMap[action] || ''; }
+function lifeAnimFor(action) { const v = life.animMap[action]; return typeof v === 'string' ? v : ''; }   // v2(オブジェクト)はlifeArrivedが直接扱う
 function showLifeLabel(text) { const el = $('life-label'); el.textContent = text; el.style.display = ''; }
 function hideLifeLabel() { $('life-label').style.display = 'none'; }
 function fmtClock(h) { const hh = Math.floor(h), mm = Math.floor((h - hh) * 60); return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`; }
@@ -441,10 +441,12 @@ function fmtClock(h) { const hh = Math.floor(h), mm = Math.floor((h - hh) * 60);
 function lifePlaceAt(p, ry) {   // 瞬間移動（スライダのシーク等）
   life.pos.set(p.x * TILE, 0, p.z * TILE);
   life.yF = p.level || 0;
+  life.anchorY = 0;
   life.path = null; life.onArrive = null;
   if (ry != null) { life.targetRy = ry; life.vrm.scene.rotation.y = ry; }
 }
 function lifeGoTo(spot, onArrive) {
+  life.anchorY = 0;
   const from = { x: life.pos.x / TILE, z: life.pos.z / TILE, level: Math.round(life.yF) };
   const path = findPath(life.data, from, spot);
   if (!path || !path.length) { lifePlaceAt(spot, spot.ry); if (onArrive) onArrive(); return; }
@@ -453,6 +455,22 @@ function lifeGoTo(spot, onArrive) {
   life.onArrive = onArrive || null;
 }
 function lifeArrived(entry, spot) {
+  const a = life.animMap[entry.action];
+  if (a && typeof a === 'object' && a.vrma && spot && spot.item) {
+    // 家具アニメ(v2): 家具の位置∘アンカーへスナップしてVRMA再生（furn-anim-editor製）
+    const it = spot.item;
+    const c = Math.cos(it.ry || 0), s = Math.sin(it.ry || 0);
+    const ax = a.anchor?.pos?.[0] || 0, ay = a.anchor?.pos?.[1] || 0, az = a.anchor?.pos?.[2] || 0;
+    life.pos.set(it.x * TILE + ax * c + az * s, 0, it.z * TILE - ax * s + az * c);
+    life.yF = it.level || 0;
+    life.anchorY = ay;
+    life.vrm.scene.rotation.y = (it.ry || 0) + (a.anchor?.ry || 0);
+    life.targetRy = null;
+    playLifeAnim(a.vrma);
+    showLifeLabel(entry.label);
+    return;
+  }
+  life.anchorY = 0;
   if (spot && spot.ry != null) life.targetRy = spot.ry;
   const anim = lifeAnimFor(entry.action);
   playLifeAnim(anim || lifeAnimFor('idle'));
@@ -546,7 +564,7 @@ function updateLife(dt) {
     while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
     life.vrm.scene.rotation.y += d * Math.min(1, 8 * dt);
   }
-  const y = life.yF * FLOOR_H + FLOOR_T;
+  const y = life.yF * FLOOR_H + FLOOR_T + (life.anchorY || 0);
   life.vrm.scene.position.set(life.pos.x, y, life.pos.z);
   life.mixer.update(dt);
   life.vrm.update(dt);
@@ -574,9 +592,11 @@ async function buildLifeAnimUI() {
     sel.style.width = '150px';
     sel.appendChild(new Option('（なし）', ''));
     for (const f of vrmas) sel.appendChild(new Option(f.replace(/\.vrma$/i, ''), f));
-    sel.value = life.animMap[a.key] || '';
+    const cur = life.animMap[a.key];
+    sel.value = (typeof cur === 'string' ? cur : cur?.vrma) || '';
     sel.addEventListener('change', () => {
-      life.animMap[a.key] = sel.value;
+      const old = life.animMap[a.key];
+      life.animMap[a.key] = (old && typeof old === 'object') ? { ...old, vrma: sel.value } : sel.value;   // v2はアンカーを温存
       if (life.on && life.entry && (life.entry.action === a.key || a.key === 'idle')) { life.curAnimName = '~'; lifeArrived(life.entry, null); }   // 即プレビュー反映
     });
     row.appendChild(sel);

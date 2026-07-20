@@ -76,15 +76,20 @@ export default defineConfig({
           req.on('data', (c) => { body += c; });
           req.on('end', () => {
             try {
-              const { dir, filename, content } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps' };
+              const { dir, filename, content, encoding } = JSON.parse(body);
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
               const outDir = path.join(pub, sub);
               fs.mkdirSync(outDir, { recursive: true });
-              const text = typeof content === 'string' ? content : JSON.stringify(content);
-              fs.writeFileSync(path.join(outDir, safe), text);
+              if (encoding === 'base64') {
+                // バイナリ保存（家具アニメエディタの .vrma 等）
+                fs.writeFileSync(path.join(outDir, safe), Buffer.from(String(content), 'base64'));
+              } else {
+                const text = typeof content === 'string' ? content : JSON.stringify(content);
+                fs.writeFileSync(path.join(outDir, safe), text);
+              }
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({ ok: true, path: `public/${sub}/${safe}` }));
             } catch (e) {
@@ -269,19 +274,20 @@ export default defineConfig({
           res.end(JSON.stringify(files));
         });
 
-        server.middlewares.use('/vrm/manifest.json', (_req, res) => {
+        // vrm/vrma 一覧（旧パスマウント式は base(/htdocs/3d_game/) 配下でマッチせず静的manifestに落ちていた）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/vrm/manifest.json')) return next();
           const dir = path.join(pub, 'vrm');
-          const files = fs.existsSync(dir)
-            ? fs.readdirSync(dir).filter((f) => f.endsWith('.vrm'))
-            : [];
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.vrm')) : [];
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
         });
-        server.middlewares.use('/vrma/manifest.json', (_req, res) => {
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/vrma/manifest.json')) return next();
           const dir = path.join(pub, 'vrma');
-          const files = fs.existsSync(dir)
-            ? fs.readdirSync(dir).filter((f) => f.endsWith('.vrma'))
-            : [];
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.vrma')) : [];
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
         });

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Anim Editor — VRMアニメーション編集</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #101522; color: #e6ecf5; font-family: system-ui, sans-serif; }
+    #app { position: fixed; inset: 0; }
+    #topbar { position: fixed; top: 8px; left: 8px; z-index: 20; }
+    #topbar a { background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
+    #status { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20; background: rgba(0,0,0,0.55); color: #cfe; padding: 6px 12px; border-radius: 4px; font-size: 12px; max-width: 56vw; }
+    #panel { position: fixed; top: 8px; right: 8px; z-index: 20; width: 256px; background: rgba(12,16,28,0.92); border: 1px solid #2a3756; border-radius: 8px; padding: 12px; font-size: 12px; display: flex; flex-direction: column; gap: 8px; max-height: calc(100% - 140px); overflow-y: auto; }
+    #panel h3 { margin: 0 0 2px; font-size: 13px; color: #9fd0ff; }
+    #panel label { display: flex; justify-content: space-between; align-items: center; gap: 6px; color: #aabbd0; }
+    #panel select, #panel input[type=text] { background: #1a2438; color: #e6ecf5; border: 1px solid #2a3756; border-radius: 4px; padding: 4px 6px; font-size: 12px; width: 100%; }
+    #panel button { background: #2b4a80; color: #fff; border: none; border-radius: 4px; padding: 7px 10px; font-size: 12px; cursor: pointer; }
+    #panel button:hover { background: #3a5fa0; }
+    #panel button.sub { background: #24314f; }
+    #panel button.on { background: #3f6f3f; }
+    .row { display: flex; gap: 6px; } .row > * { flex: 1; }
+    .val { color: #e6ecf5; min-width: 34px; text-align: right; }
+    /* タイムラインバー */
+    #tl { position: fixed; left: 8px; right: 280px; bottom: 8px; z-index: 20; background: rgba(12,16,28,0.92); border: 1px solid #2a3756; border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+    #tl-grip { height: 8px; margin: -4px 0 2px; cursor: ns-resize; border-radius: 4px; }
+    #tl-grip:hover { background: rgba(120,170,255,0.25); }
+    #tl-canvas { width: 100%; height: 64px; background: #0d0f22; border-radius: 6px; cursor: pointer; touch-action: none; display: block; }
+    #tl .row { align-items: center; }
+    #tl button { background: #2b4a80; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+    #tl button.sub { background: #24314f; }
+    #tl input[type=number] { width: 58px; background: #1a2438; color: #e6ecf5; border: 1px solid #2a3756; border-radius: 4px; padding: 3px 5px; font-size: 12px; }
+    #tl-info { color: #9ab; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="topbar"><a href="../hub/">← 一覧</a></div>
+  <div id="status">読み込み中…</div>
+  <div id="panel">
+    <h3>モデル</h3>
+    <select id="vrm-sel"></select>
+    <div class="row">
+      <button id="btn-vrm-load">読み込み</button>
+      <button id="btn-vrm-file" class="sub">ファイル…</button>
+      <button id="btn-flip" class="sub" title="モデルの向きを180°反転">反転</button>
+    </div>
+    <input type="file" id="vrm-file" accept=".vrm" style="display:none">
+    <h3>ポージング（IK）</h3>
+    <div class="row">
+      <button id="h-hips" class="on">腰</button>
+      <button id="h-head" class="sub">頭</button>
+      <button id="btn-joints" class="sub">関節FK</button>
+    </div>
+    <div class="row">
+      <button id="h-handL" class="sub">左手</button>
+      <button id="h-handR" class="sub">右手</button>
+    </div>
+    <div class="row">
+      <button id="h-footL" class="sub">左足</button>
+      <button id="h-footR" class="sub">右足</button>
+    </div>
+    <div class="row">
+      <button id="btn-mode" class="sub">移動⇄回転 (R)</button>
+      <button id="btn-reset" class="sub">ポーズ初期化</button>
+    </div>
+    <div style="font-size:10px;color:#667;">腰=手足ピン留めIK（下げると屈む）。関節FK=体の点をクリックして回転。</div>
+    <h3>キャラライト（夜の補助光）</h3>
+    <button id="btn-night" class="sub">🌙 夜プレビュー</button>
+    <label>前からの光 <input type="range" id="cl-dir" min="0" max="8" step="0.05" value="1.9"><span class="val" id="cl-dir-val">1.9</span></label>
+    <label>後ろの回り込み <input type="range" id="cl-amb" min="0" max="6" step="0.05" value="0.85"><span class="val" id="cl-amb-val">0.85</span></label>
+    <div class="row">
+      <label style="flex:1;">前の色 <input type="color" id="cl-dirc" value="#cfd8ff" style="width:44px;height:24px;padding:1px;"></label>
+      <label style="flex:1;">後ろの色 <input type="color" id="cl-ambc" value="#b8c4dd" style="width:44px;height:24px;padding:1px;"></label>
+    </div>
+    <button id="btn-cl-save">キャラライトを保存（CityFlyに反映）</button>
+    <div style="font-size:10px;color:#667;">CityFlyの夜間、キャラだけに当たる光の設定。夜プレビューで暗い環境を再現して調整できます。</div>
+    <h3>VRMA</h3>
+    <select id="vrma-sel"></select>
+    <button id="btn-vrma-import" class="sub">読み込んでキー化（8fps）</button>
+    <input type="text" id="save-name" placeholder="保存名 (例: sit_idle)">
+    <div class="row">
+      <button id="btn-save">サーバへ保存</button>
+      <button id="btn-dl" class="sub">DL</button>
+    </div>
+    <div style="font-size:10px;color:#667;">保存先: public/vrma/名前.vrma（全エディタ/ゲームで利用可）</div>
+  </div>
+  <div id="tl">
+    <div id="tl-grip" title="ドラッグでタイムラインを引き出す"></div>
+    <canvas id="tl-canvas"></canvas>
+    <div class="row">
+      <button id="btn-play">▶ 再生</button>
+      <button id="btn-key">◆ キー追加/更新 (K)</button>
+      <button id="btn-key-del" class="sub">キー削除</button>
+      <button id="btn-insert" class="sub" title="再生ヘッド以降のキーを後ろへずらして時間を空ける">⇥ 時間挿入 0.5s</button>
+      <label style="width:auto;color:#9ab;">ループ<input type="checkbox" id="cb-loop" checked></label>
+      <label style="width:auto;color:#9ab;">長さ<input type="number" id="tl-dur" min="0.5" max="120" step="0.5" value="4">秒</label>
+      <span id="tl-info">キー 0個 / 0.00s</span>
+    </div>
+    <div class="row">
+      <label style="width:auto;color:#9ab;">表情</label>
+      <select id="bs-sel" style="width:150px;background:#1a2438;color:#e6ecf5;border:1px solid #2a3756;border-radius:4px;padding:3px 5px;"></select>
+      <input type="range" id="bs-val" min="0" max="1" step="0.01" value="1" style="flex:1;">
+      <span id="bs-val-txt" style="color:#9ab;min-width:34px;">1.00</span>
+      <button id="btn-bs-key" class="sub">◆ 表情キー (E)</button>
+    </div>
+  </div>
+  <script type="module" src="./anim-editor.js"></script>
+</body>
+</html>

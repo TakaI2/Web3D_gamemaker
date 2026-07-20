@@ -92,6 +92,7 @@ export function createAnimEditorScene(
   // ルート移動中のIKピン留め用に、ドラッグ開始時点で捕捉した曲げ方向(pole)。
   // 解決のたびに再計算すると、humanoid.update() でほぼ直線に戻った腕から不正な pole が出て肘が飛ぶ。
   const pinnedPoles = new Map<IKTarget, THREE.Vector3 | null>();
+  const rootPins = new Map<IKTarget, THREE.Vector3>();   // ルート移動中の手足ピン（ボーンのワールド位置。トグルOFFの肢にも常に効く）
   let activeIKTarget: IKTarget | null = null;
   let ikGizmoMode: IKGizmoMode = 'translate';
   // IK の曲げ方向ヒント（掴んだ時点の肘/膝の向き）。逆曲がり防止用にソルバへ渡す。
@@ -134,14 +135,22 @@ export function createAnimEditorScene(
     tc.addEventListener('dragging-changed', (event) => {
       const dragging = (event as { value: boolean }).value;
       orbitController.setEnabled(!dragging);
-      // ルート移動の開始時に、現在の(posed)姿勢から各IKの曲げ方向を一度だけ捕捉して固定する。
-      if (dragging && activeSpecial === 'root') {
+      // ルート移動の開始時: 全手足のワールド位置と曲げ方向を捕捉（腰を動かすと屈む「腰IK」。トグルOFFの肢も対象）
+      if (dragging && activeSpecial === 'root' && vrm) {
         pinnedPoles.clear();
+        rootPins.clear();
         for (const target of ikHandles.keys()) {
-          if (ikEnabled.get(target)) pinnedPoles.set(target, poleFor(target));
+          const endBone = vrm.humanoid.getRawBoneNode(IK_CHAINS[target].end as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
+          if (!endBone) continue;
+          rootPins.set(target, endBone.getWorldPosition(new THREE.Vector3()));
+          pinnedPoles.set(target, poleFor(target));
         }
+      } else if (dragging && activeIKTarget !== null) {
+        // 手足IKもドラッグごとに曲げ方向を捕捉し直す（選択時のままだと直前の編集で古くなる）
+        captureActivePole(activeIKTarget);
       } else if (!dragging) {
         pinnedPoles.clear();
+        rootPins.clear();
       }
     });
 
@@ -171,13 +180,11 @@ export function createAnimEditorScene(
     vrm.humanoid.update();
     handle.onHipsMoved(nHips.position.clone());
 
-    // IKピン留め：有効な手足IKは末端ハンドルをワールド固定したまま、ルート移動後に関節を再解決。
+    // 腰IK：全手足をドラッグ開始時のワールド位置へピン留めしたまま関節を再解決（＝腰を下げると屈む）。
     vrm.scene.updateWorldMatrix(true, true);
-    for (const target of ikHandles.keys()) {
-      if (ikEnabled.get(target)) {
-        const pole = pinnedPoles.has(target) ? (pinnedPoles.get(target) ?? null) : poleFor(target);
-        solveLimbIK(target, pole);
-      }
+    for (const [target, pin] of rootPins) {
+      const pole = pinnedPoles.get(target) ?? null;
+      solveLimbIK(target, pole, pin);
     }
   }
 
@@ -273,18 +280,19 @@ export function createAnimEditorScene(
     tc.attach(h);
   }
 
-  // 2ボーンIKをハンドル位置へ解決し、root/mid 回転をキーフレーム化（onIKSolved）。
-  function solveLimbIK(target: IKTarget, pole: THREE.Vector3 | null): void {
+  // 2ボーンIKをハンドル位置（またはtargetPos指定）へ解決し、root/mid 回転をキーフレーム化（onIKSolved）。
+  function solveLimbIK(target: IKTarget, pole: THREE.Vector3 | null, targetPos?: THREE.Vector3): void {
     if (!vrm) return;
     const chainDef = IK_CHAINS[target];
     const handleMesh = ikHandles.get(target);
-    if (!handleMesh) return;
+    const goal = targetPos ?? handleMesh?.position;
+    if (!goal) return;
     const rootBone = vrm.humanoid.getRawBoneNode(chainDef.root as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
     const midBone  = vrm.humanoid.getRawBoneNode(chainDef.mid  as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
     const endBone  = vrm.humanoid.getRawBoneNode(chainDef.end  as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
     if (!rootBone || !midBone || !endBone) return;
     const chain: TwoBoneIKChain = { root: rootBone, mid: midBone, end: endBone, poleVector: pole ?? undefined };
-    const result = solveTwoBoneIK(chain, handleMesh.position);
+    const result = solveTwoBoneIK(chain, goal);
     rootBone.quaternion.copy(result.rootQuat);
     midBone.quaternion.copy(result.midQuat);
     handle.onIKSolved({
@@ -307,11 +315,25 @@ export function createAnimEditorScene(
     const mW = mb.getWorldPosition(new THREE.Vector3());
     const eW = eb.getWorldPosition(new THREE.Vector3());
     const dir = eW.clone().sub(rW);
-    if (dir.lengthSq() < 1e-8) return null;
+    if (dir.lengthSq() < 1e-8) return anatomicalPole(target);
     dir.normalize();
     const pole = mW.clone().sub(rW);
     pole.addScaledVector(dir, -pole.dot(dir));
-    return pole.lengthSq() > 1e-8 ? pole.normalize() : null;
+    // 伸び切り（張り出し2cm未満）は曲げ方向が定まらない → 解剖学的な既定へ
+    return pole.lengthSq() > 4e-4 ? pole.normalize() : anatomicalPole(target);
+  }
+
+  // 既定の曲げ方向: 膝=体の前 / 肘=体の後ろ。体の前方は左右脚ボーン位置から推定（VRM0/1・raw/正規化に依存しない）
+  function anatomicalPole(target: IKTarget): THREE.Vector3 | null {
+    if (!vrm) return null;
+    const l = vrm.humanoid.getRawBoneNode('leftUpperLeg' as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
+    const r = vrm.humanoid.getRawBoneNode('rightUpperLeg' as Parameters<typeof vrm.humanoid.getRawBoneNode>[0]) as THREE.Bone | null;
+    if (!l || !r) return null;
+    const side = l.getWorldPosition(new THREE.Vector3()).sub(r.getWorldPosition(new THREE.Vector3()));
+    const fwd = new THREE.Vector3().crossVectors(side, new THREE.Vector3(0, 1, 0));
+    if (fwd.lengthSq() < 1e-8) return null;
+    fwd.normalize();
+    return target.includes('Foot') ? fwd : fwd.negate();
   }
 
   function handleIKObjectChange(): void {
