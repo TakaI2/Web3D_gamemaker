@@ -10,7 +10,8 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const src  = path.join(root, 'plateau-fly');
-const dest = path.join(root, 'dist-cityfly');
+const MP_BUILD = process.env.MP === '1';   // MP=1 → マルチプレイ専用ビルド（別出力・ログイン画面つき）
+const dest = path.join(root, MP_BUILD ? 'dist-cityfly-mp' : 'dist-cityfly');
 const pub  = path.join(root, 'public');
 const DEFAULT_MAP = process.env.MAP || 'mytown';   // 既定マップ（MAP=名前 npm run build:cityfly で変更可）
 
@@ -19,9 +20,9 @@ fs.mkdirSync(dest, { recursive: true });
 
 // index.html: DEFAULT_MAP を注入してコピー
 const html = fs.readFileSync(path.join(src, 'index.html'), 'utf8')
-  .replace('<script type="module"', `<script>window.DEFAULT_MAP = '${DEFAULT_MAP}';</script>\n  <script type="module"`);
+  .replace('<script type="module"', `<script>window.DEFAULT_MAP = '${DEFAULT_MAP}';${MP_BUILD ? ' window.MP_BUILD = true;' : ''}</script>\n  <script type="module"`);
 fs.writeFileSync(path.join(dest, 'index.html'), html);
-console.log(`copied: index.html (DEFAULT_MAP=${DEFAULT_MAP})`);
+console.log(`copied: index.html (DEFAULT_MAP=${DEFAULT_MAP}${MP_BUILD ? ' / MPビルド' : ''})`);
 
 // plateau-fly.js: ローカル相対参照を dist 内ローカル（./）へ書き換え
 const jsSrc = fs.readFileSync(path.join(src, 'plateau-fly.js'), 'utf8')
@@ -57,7 +58,7 @@ if (fs.existsSync(mapsSrc)) {
 }
 
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js']) {
+for (const f of ['vrm-cloth.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js']) {
   const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8')
     .replace(/\.\.\/lib\//g, './')
     .replace(/\.\.\/speech\//g, './speech/');   // speech-set.js は import.meta.url 相対（distではlibがルート直下）
@@ -227,4 +228,5 @@ for (const f of roadFiles) fs.copyFileSync(path.join(roadSrc, f), path.join(road
 fs.writeFileSync(path.join(roadDest, 'manifest.json'), JSON.stringify(roadFiles));
 console.log(`copied: ${roadFiles.length} road tiles + static manifest.json`);
 
-console.log('\ndist-cityfly/ ready for deployment（既定マップ: ' + DEFAULT_MAP + '）');
+console.log('\n' + (MP_BUILD ? 'dist-cityfly-mp' : 'dist-cityfly') + '/ ready for deployment（既定マップ: ' + DEFAULT_MAP + '）');
+if (MP_BUILD) console.log('マルチプレイ配信:  node scripts/cityfly-server.mjs');

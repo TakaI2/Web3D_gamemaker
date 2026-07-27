@@ -61,6 +61,30 @@
   <div id="status">読み込み中…</div>
   <div id="crosshair"></div>
   <div id="gauge"><div id="gauge-fill"></div></div>
+  <div id="mp-hud" style="display:none;position:fixed;top:10px;left:10px;z-index:12;color:#fff;font:13px system-ui;text-shadow:0 1px 3px rgba(0,0,0,0.9);pointer-events:none;">
+    <div id="mp-count">オンライン: 1人</div>
+    <div style="width:180px;height:10px;background:rgba(0,0,0,0.5);border-radius:5px;margin-top:4px;overflow:hidden;">
+      <div id="mp-hp" style="width:100%;height:100%;background:#5f6;transition:width 0.15s;"></div>
+    </div>
+    <div id="mp-kills" style="font-size:11px;color:#cde;margin-top:2px;">撃墜: 0</div>
+    <div id="mp-feed" style="margin-top:6px;font-size:11px;color:#dfe;line-height:1.5;"></div>
+  </div>
+  <div id="mp-flash" style="pointer-events:none;position:fixed;inset:0;background:rgba(255,40,40,0.35);opacity:0;transition:opacity 0.35s;z-index:11;"></div>
+  <button id="mp-open-btn" style="display:none;position:fixed;top:10px;right:10px;z-index:12;background:rgba(20,40,70,0.78);border:1px solid rgba(120,170,255,0.5);color:#cfe;padding:7px 14px;border-radius:6px;font:13px system-ui;cursor:pointer;">🎮 マルチ参加</button>
+  <div id="mp-login" style="display:none;position:fixed;inset:0;z-index:30;background:rgba(6,10,20,0.55);align-items:center;justify-content:center;">
+    <div style="background:rgba(12,16,28,0.96);border:1px solid #2a3756;border-radius:10px;padding:22px 26px;width:300px;color:#e6ecf5;font:13px system-ui;">
+      <div style="font-size:16px;font-weight:bold;margin-bottom:10px;">🎮 マルチプレイに参加</div>
+      <div id="mp-login-status" style="font-size:12px;color:#9ab;margin-bottom:8px;min-height:16px;">サーバ確認中…</div>
+      <input id="mp-login-room" maxlength="24" placeholder="ルーム名（仲間と同じ名前に）" style="width:100%;box-sizing:border-box;padding:8px;background:#1a2438;border:1px solid #2a3756;border-radius:6px;color:#fff;font-size:14px;margin-bottom:8px;">
+      <div id="mp-login-rooms" style="font-size:11px;min-height:14px;margin-bottom:8px;"></div>
+      <input id="mp-login-name" maxlength="16" placeholder="名前を入力" style="width:100%;box-sizing:border-box;padding:8px;background:#1a2438;border:1px solid #2a3756;border-radius:6px;color:#fff;font-size:14px;margin-bottom:10px;">
+      <div style="display:flex;gap:8px;">
+        <button id="mp-login-join" style="flex:1;padding:9px 0;background:#2b6a4a;border:none;border-radius:6px;color:#fff;font-size:14px;cursor:pointer;">参加する</button>
+        <button id="mp-login-cancel" style="padding:9px 14px;background:#24314f;border:none;border-radius:6px;color:#ccc;font-size:13px;cursor:pointer;">閉じる</button>
+      </div>
+      <div style="font-size:10px;color:#667;margin-top:8px;">名前は次回も記憶されます。参加後はHPバーとキルログが左上に出ます。</div>
+    </div>
+  </div>
   <div id="hint">クリックで視点ロック / <b>WASD</b>移動・<b>Space/Shift</b>昇降・<b>ホイール</b>速度 / <b>左タップ</b>ビーム(3連目=雷) / <b>左長押し</b>空中=チャージビーム・接地=トーテム設置 / <b>E</b>建物に出入り / <b>T</b>時間早送り / <b>M</b>生活NPCエディタ / <b>右クリック</b>掴む(車・ken)→離して投擲 / 掴んだkenを地面に置くと捕食</div>
   <div id="attrib">建物: 3D都市モデル(PLATEAU)/国土交通省/Pacific Spatial Solutions（CC BY 4.0）｜ 地面: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル(航空写真)/国土地理院</a></div>
   <div id="loading">CityFly 読み込み中…</div>

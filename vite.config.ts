@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import basicSsl from '@vitejs/plugin-basic-ssl';
+import { WebSocketServer, WebSocket } from 'ws';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -40,6 +41,66 @@ export default defineConfig({
       // 開発サーバー: 動的に返す
       configureServer(server) {
         const pub = path.resolve(__dirname, 'public');
+
+        // ── CityFly マルチプレイ中継（wss同居: パス /cityfly-mp）──
+        // 単純リレー: 受けたメッセージに送信者idを付けて他の全員へ配る。状態は最新のみ保持（後から来た人の初期表示用）。
+        const mpWss = new WebSocketServer({ noServer: true });
+        const mpRooms = new Map<string, Map<WebSocket, { id: number, name: string, state: unknown }>>();
+        const MP_MAX = Number(process.env.MP_MAX) || 5;   // ルームごとの参加人数上限
+        let mpNextId = 1;
+        const mpRoomName = (req: { url?: string }) => {
+          try { return (new URL(req.url || '', 'http://x').searchParams.get('room') || 'lobby').trim().slice(0, 24) || 'lobby'; }
+          catch { return 'lobby'; }
+        };
+        mpWss.on('connection', (sock: WebSocket, req: { url?: string }) => {
+          const roomName = mpRoomName(req);
+          let room = mpRooms.get(roomName);
+          if (!room) mpRooms.set(roomName, room = new Map());
+          if (room.size >= MP_MAX) {   // このルームは満員
+            sock.send(JSON.stringify({ t: 'full', max: MP_MAX }));
+            sock.close();
+            return;
+          }
+          const roomcast = (obj: unknown, except?: WebSocket) => {
+            const str = JSON.stringify(obj);
+            for (const c of room!.keys()) if (c !== except && c.readyState === WebSocket.OPEN) c.send(str);
+          };
+          const rec = { id: mpNextId++, name: 'P' + mpNextId, state: null as unknown };
+          room.set(sock, rec);
+          sock.send(JSON.stringify({
+            t: 'welcome', id: rec.id,
+            players: [...room.values()].filter((pl) => pl.id !== rec.id).map((pl) => ({ id: pl.id, name: pl.name, state: pl.state })),
+          }));
+          roomcast({ t: 'join', id: rec.id, name: rec.name }, sock);
+          sock.on('message', (buf) => {
+            let m: Record<string, unknown>;
+            try { m = JSON.parse(buf.toString()); } catch { return; }
+            if (m.t === 'hello' && typeof m.name === 'string') {
+              rec.name = (m.name as string).slice(0, 16) || rec.name;
+              roomcast({ t: 'rename', id: rec.id, name: rec.name }, sock);
+              return;
+            }
+            m.id = rec.id;
+            if (m.t === 'state') rec.state = m;
+            roomcast(m, sock);
+          });
+          sock.on('close', () => {
+            room!.delete(sock);
+            if (!room!.size) mpRooms.delete(roomName);
+            roomcast({ t: 'leave', id: rec.id });
+          });
+          sock.on('error', () => { /* 切断は close に任せる */ });
+        });
+        server.httpServer?.on('upgrade', (req, socket, head) => {
+          if (!(req.url || '').includes('/cityfly-mp')) return;   // HMR等のupgradeはViteに任せる
+          mpWss.handleUpgrade(req, socket, head, (sock) => mpWss.emit('connection', sock, req));
+        });
+        // 参加前の人数確認用ステータスAPI（ルーム一覧つき）
+        server.middlewares.use((req, res, next) => {
+          if (!(req.url || '').split('?')[0].endsWith('/cityfly-mp-status')) return next();
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ max: MP_MAX, rooms: [...mpRooms.entries()].map(([name, m]) => ({ name, players: m.size })) }));
+        });
 
         // basic-ssl の TLS ソケットで、クライアント切断(ECONNRESET)が「未処理 error イベント」となり
         // dev サーバのプロセスごと落ちるのを防ぐ。ソケット単位の error は握りつぶす（接続断は無害）。

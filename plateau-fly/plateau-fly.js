@@ -13,6 +13,7 @@ import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixi
 import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
+import { createCityflyMp } from '../lib/cityfly-mp.js';
 import { createMeshFx } from '../lib/fx-mesh.js';
 import { createBeamFx } from '../lib/fx-beam.js';
 import { createTornado } from '../lib/fx-tornado.js';
@@ -199,6 +200,17 @@ async function init() {
   });
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
   loadPlayer().then(() => prepareBiteAssets()).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
+  try {
+    // マルチプレイはMP専用ビルド(window.MP_BUILD)か ?mp=1 のときだけ有効化（通常のCityFlyはシングル専用のまま）
+    const mpAvailable = MP_ON || !!window.MP_BUILD;
+    if (mpAvailable) {
+      setupMpLoginUI();
+      const ob = $('mp-open-btn');
+      if (ob) ob.style.display = '';
+      if (MP_NAME_PARAM) initMultiplayer();   // ?name= 付きなら即参加
+      else mpShowLogin();                     // それ以外はログイン画面を開く
+    }
+  } catch (e) { console.warn('マルチプレイ初期化失敗:', e); }
   setupControls();
   window.addEventListener('resize', onResize);
   renderer.setAnimationLoop(tick);
@@ -418,6 +430,276 @@ function stripRootMotion(clip) {
   }
 }
 function lerpAngle(a, b, t) { let d = b - a; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return a + d * t; }
+
+// ── マルチプレイ（?mp=1 で参戦。開発サーバ同居のWSリレー /cityfly-mp）────────────
+// 同期: 位置/向き15Hz＋射撃/命中イベント。命中判定は撃った側（リレーの単純さ優先＝LAN対戦想定）。
+const _mpQ = new URLSearchParams(location.search);
+const MP_ON = _mpQ.get('mp') === '1';                    // ?mp=1 = 起動時に参加（name無しならログイン画面）
+const MP_NAME_PARAM = (_mpQ.get('name') || '').slice(0, 16);
+let MP_NAME = MP_NAME_PARAM || localStorage.getItem('cityfly-mp-name') || '';
+let MP_ROOM = (_mpQ.get('room') || localStorage.getItem('cityfly-mp-room') || 'lobby').trim().slice(0, 24) || 'lobby';
+const MP_SEND_HZ = 15, MP_LERP_DELAY = 0.12;   // 送信頻度と補間遅延（この分だけ過去を描く＝カクつかない）
+const MP_DMG = { beam: 15, super: 40, large: 6, ult: 30 };
+let mp = null, mpSendAcc = 0, mpMyHp = 100, mpKills = 0, mpInvulnT = 0, mpRenderingRemote = false;
+const mpAvatars = new Map();   // id -> { id, name, group, vrm, mixer, snaps, yaw, hp }
+let mpBundleP = null;          // プレイヤーVRMバンドルの共有fetch
+const _mpV1 = new THREE.Vector3(), _mpV2 = new THREE.Vector3(), _mpV3 = new THREE.Vector3();
+
+function mpHud(msg) {
+  const feed = $('mp-feed');
+  if (!feed) return;
+  const div = document.createElement('div');
+  div.textContent = msg;
+  feed.prepend(div);
+  while (feed.children.length > 5) feed.lastChild.remove();
+  setTimeout(() => { if (div.parentNode) div.remove(); }, 7000);
+}
+function mpHudCount() {
+  const el = $('mp-count');
+  if (el) el.textContent = `ルーム「${MP_ROOM}」: ${mpAvatars.size + 1}人`;
+  const k = $('mp-kills');
+  if (k) k.textContent = `撃墜: ${mpKills}`;
+}
+function mpHudHp() {
+  const bar = $('mp-hp');
+  if (!bar) return;
+  bar.style.width = mpMyHp + '%';
+  bar.style.background = mpMyHp > 50 ? '#5f6' : mpMyHp > 25 ? '#fc4' : '#f55';
+}
+function mpFlash() {
+  const f = $('mp-flash');
+  if (!f) return;
+  f.style.opacity = '1';
+  setTimeout(() => { f.style.opacity = '0'; }, 80);
+}
+function mpCenterOf(h, out) {
+  out.copy(h.group.position);
+  out.y += 1.0;
+  return out;
+}
+async function mpSpawnAvatar(id, name, st) {
+  if (mpAvatars.has(id)) return;
+  const holder = { id, name, group: new THREE.Group(), vrm: null, mixer: null, snaps: [], yaw: 0, hp: 100 };
+  mpAvatars.set(id, holder);
+  scene.add(holder.group);
+  if (st?.p) holder.group.position.set(st.p[0], st.p[1], st.p[2]);
+  try {
+    mpBundleP = mpBundleP || fetch('../npc/' + PLAYER_NPC).then((r) => r.json());
+    const bundle = await mpBundleP;
+    const loader = new GLTFLoader();
+    loader.register((pl) => new VRMLoaderPlugin(pl, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(pl, { materialType: MToonNodeMaterial }) }));
+    const gltf = await loader.loadAsync(URL.createObjectURL(dataURIToBlob(bundle.vrm)));
+    if (!mpAvatars.has(id)) return;   // 読込中に退出
+    const vrm = gltf.userData.vrm;
+    holder.vrm = vrm;
+    vrm.scene.rotation.y = FACE_OFFSET;
+    holder.group.add(vrm.scene);
+    holder.mixer = new THREE.AnimationMixer(vrm.scene);
+    try {   // 飛行アイドルをループ再生
+      const tl = await (await fetch('../timeline/Joy_reborn_Fly_idle.timeline.json')).json();
+      const vres = await fetch('../vrma/' + encodeURIComponent(tl.vrma));
+      const al = new GLTFLoader();
+      al.register((pl) => new VRMAnimationLoaderPlugin(pl));
+      const ag = await al.loadAsync(URL.createObjectURL(await vres.blob()));
+      const clip = createVRMAnimationClip(ag.userData.vrmAnimations[0], vrm);
+      stripRootMotion(clip);
+      holder.mixer.clipAction(clip).play();
+    } catch (e) { console.warn('[mp] リモートアニメ読込失敗', e); }
+    // 頭上ネーム
+    const cv = document.createElement('canvas');
+    cv.width = 256; cv.height = 64;
+    const cx = cv.getContext('2d');
+    cx.font = 'bold 34px system-ui';
+    cx.textAlign = 'center';
+    cx.strokeStyle = 'rgba(0,0,0,0.85)';
+    cx.lineWidth = 6;
+    cx.fillStyle = '#fff';
+    cx.strokeText(name, 128, 44);
+    cx.fillText(name, 128, 44);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthTest: false }));
+    sp.scale.set(1.7, 0.42, 1);
+    sp.position.y = 2.15;
+    sp.renderOrder = 20;
+    holder.group.add(sp);
+  } catch (e) { console.warn('[mp] リモートVRM読込失敗', e); }
+}
+function mpRemoveAvatar(id) {
+  const h = mpAvatars.get(id);
+  if (!h) return;
+  mpAvatars.delete(id);
+  scene.remove(h.group);
+}
+function mpTakeDamage(dmg, fromId) {
+  if (mpInvulnT > 0) return;
+  mpMyHp = Math.max(0, mpMyHp - dmg);
+  mpHudHp();
+  mpFlash();
+  if (mpMyHp <= 0) {
+    mp.sendDie(fromId);
+    try { spawnImpactFx(_mpV1.set(player.pos.x, player.pos.y + 1, player.pos.z), 3); } catch { /* FX未準備 */ }
+    player.pos.set((Math.random() - 0.5) * 400, 130 + Math.random() * 80, (Math.random() - 0.5) * 400);
+    if (player.vel) player.vel.set(0, 0, 0);
+    mpMyHp = 100;
+    mpInvulnT = 2.5;
+    mpHudHp();
+    mpHud('撃墜された！リスポーン');
+  } else {
+    mp.sendHp(mpMyHp);
+  }
+}
+// ── ログイン画面（🎮ボタン→名前入力→参加。参加前に現在人数を表示・満員なら参加不可）──
+let mpStatusTimer = null;
+async function mpPollStatus() {
+  const el = $('mp-login-status'), btn = $('mp-login-join'), list = $('mp-login-rooms');
+  if (!el) return;
+  try {
+    const st = await (await fetch('/cityfly-mp-status')).json();
+    const roomName = (($('mp-login-room')?.value) || 'lobby').trim().slice(0, 24) || 'lobby';
+    const n = st.rooms?.find((r) => r.name === roomName)?.players ?? 0;
+    const full = n >= st.max;
+    el.textContent = full
+      ? `ルーム「${roomName}」は満員（${n}/${st.max}人）`
+      : `ルーム「${roomName}」: 現在 ${n}/${st.max} 人`;
+    el.style.color = full ? '#f88' : '#9fd0a0';
+    if (btn) btn.disabled = full;
+    if (list) {   // 稼働中ルーム一覧（クリックで入力欄へ）
+      list.innerHTML = '';
+      const rooms = (st.rooms || []).filter((r) => r.players > 0);
+      if (rooms.length) {
+        const lbl = document.createElement('span');
+        lbl.textContent = '稼働中: ';
+        lbl.style.color = '#889';
+        list.appendChild(lbl);
+        for (const r of rooms) {
+          const a = document.createElement('span');
+          a.textContent = `${r.name}(${r.players}/${st.max})`;
+          a.style.cssText = 'color:#8fd0ff;cursor:pointer;margin-right:8px;text-decoration:underline;';
+          a.onclick = () => { $('mp-login-room').value = r.name; mpPollStatus(); };
+          list.appendChild(a);
+        }
+      }
+    }
+  } catch {
+    el.textContent = 'サーバに接続できません（シングルプレイは可能）';
+    el.style.color = '#f88';
+    if (btn) btn.disabled = true;
+  }
+}
+function mpShowLogin() {
+  const ov = $('mp-login');
+  if (!ov || mp) return;
+  ov.style.display = 'flex';
+  const rin = $('mp-login-room');
+  if (rin) rin.value = MP_ROOM;
+  const inp = $('mp-login-name');
+  inp.value = MP_NAME;
+  inp.focus();
+  mpPollStatus();
+  clearInterval(mpStatusTimer);
+  mpStatusTimer = setInterval(mpPollStatus, 2000);
+}
+function mpHideLogin() {
+  const ov = $('mp-login');
+  if (ov) ov.style.display = 'none';
+  clearInterval(mpStatusTimer);
+  mpStatusTimer = null;
+}
+function mpJoinFromLogin() {
+  const name = ($('mp-login-name')?.value || '').trim().slice(0, 16);
+  if (!name) { const inp = $('mp-login-name'); inp.placeholder = '名前を入力してください'; inp.focus(); return; }
+  MP_NAME = name;
+  MP_ROOM = (($('mp-login-room')?.value) || 'lobby').trim().slice(0, 24) || 'lobby';
+  localStorage.setItem('cityfly-mp-name', name);
+  localStorage.setItem('cityfly-mp-room', MP_ROOM);
+  mpHideLogin();
+  initMultiplayer();
+}
+function setupMpLoginUI() {
+  const btn = $('mp-open-btn');
+  if (btn) btn.addEventListener('click', mpShowLogin);
+  $('mp-login-join')?.addEventListener('click', mpJoinFromLogin);
+  $('mp-login-cancel')?.addEventListener('click', mpHideLogin);
+  $('mp-login-name')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') mpJoinFromLogin(); e.stopPropagation(); });
+  $('mp-login-room')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') mpJoinFromLogin(); e.stopPropagation(); });
+  $('mp-login-room')?.addEventListener('input', () => mpPollStatus());
+}
+
+function initMultiplayer() {
+  if (mp) return;
+  const openBtn = $('mp-open-btn');
+  if (openBtn) openBtn.style.display = 'none';   // 参加後はボタン非表示
+  const hud = $('mp-hud');
+  if (hud) hud.style.display = '';
+  mpHudHp();
+  mpHudCount();
+  const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/cityfly-mp';
+  mp = createCityflyMp({ url: wsUrl, name: MP_NAME, room: MP_ROOM, handlers: {
+    connect: () => { mpHud('サーバに接続しました'); mpHudCount(); },
+    disconnect: () => mpHud('切断（再接続待ち…）'),
+    join: (id, name, st) => { mpSpawnAvatar(id, name, st); mpHud(`${name} が参加`); mpHudCount(); },
+    rename: (id, name) => { const h = mpAvatars.get(id); if (h) h.name = name; },
+    leave: (id) => {
+      const h = mpAvatars.get(id);
+      if (h) mpHud(`${h.name} が退出`);
+      mpRemoveAvatar(id);
+      mpHudCount();
+    },
+    state: (id, m) => {
+      const h = mpAvatars.get(id);
+      if (!h || !m.p) return;
+      h.snaps.push({ t: performance.now() / 1000, p: m.p, yaw: m.yaw ?? h.yaw });
+      if (h.snaps.length > 30) h.snaps.shift();
+    },
+    shot: (id, m) => {   // リモートの射撃を描画（spawnBeamの再送ループはフラグで防止）
+      if (!m.from || !m.to) return;
+      mpRenderingRemote = true;
+      try { spawnBeam(_mpV1.fromArray(m.from), _mpV2.fromArray(m.to), true, m.c ?? 0xffb040, !!m.thick); }
+      finally { mpRenderingRemote = false; }
+    },
+    hit: (m) => { if (mp && m.target === mp.id) mpTakeDamage(m.dmg || 10, m.id); },
+    hp: (id, hp) => { const h = mpAvatars.get(id); if (h) h.hp = hp; },
+    die: (id, by) => {
+      const h = mpAvatars.get(id);
+      if (h) { try { spawnImpactFx(mpCenterOf(h, _mpV1), 3); } catch { /* noop */ } }
+      const byName = (mp && by === mp.id) ? MP_NAME : (mpAvatars.get(by)?.name ?? '?');
+      mpHud(`${h?.name ?? '?'} 撃墜 (by ${byName})`);
+      if (mp && by === mp.id) { mpKills++; mpHudCount(); }
+    },
+    full: (max) => mpHud(`サーバ満員（${max}人上限）。空き待ちで再試行します…`),
+  } });
+}
+function mpUpdate(dt) {
+  if (!mp) return;
+  mpInvulnT = Math.max(0, mpInvulnT - dt);
+  mpSendAcc += dt;
+  if (mpSendAcc >= 1 / MP_SEND_HZ && player.ready) {
+    mpSendAcc = 0;
+    mp.sendState({
+      p: [+player.pos.x.toFixed(2), +player.pos.y.toFixed(2), +player.pos.z.toFixed(2)],
+      yaw: +player.yaw.toFixed(3),
+    });
+  }
+  // リモートの補間（MP_LERP_DELAYぶん過去のスナップショット間をlerp）
+  const now = performance.now() / 1000 - MP_LERP_DELAY;
+  for (const h of mpAvatars.values()) {
+    const sn = h.snaps;
+    if (!sn.length) continue;
+    let i = sn.length - 1;
+    while (i > 0 && sn[i - 1].t > now) i--;
+    const a = sn[Math.max(0, i - 1)], b = sn[i];
+    const span = Math.max(1e-3, b.t - a.t);
+    const f = Math.max(0, Math.min(1, (now - a.t) / span));
+    h.group.position.set(
+      a.p[0] + (b.p[0] - a.p[0]) * f,
+      a.p[1] + (b.p[1] - a.p[1]) * f,
+      a.p[2] + (b.p[2] - a.p[2]) * f,
+    );
+    h.yaw = lerpAngle(a.yaw, b.yaw, f);
+    h.group.rotation.y = h.yaw;
+    if (h.vrm) h.vrm.update(dt);
+    if (h.mixer) h.mixer.update(dt);
+  }
+}
 function clampSpeed(v, max) { const s = v.length(); if (s > max) v.multiplyScalar(max / s); }
 
 async function loadPlayer() {
@@ -2476,12 +2758,20 @@ function fireBeam(bldDmg, kenDmg, colorHex, thick) {
   const gndT = gndHit ? gndHit.distance : Infinity;   // 地形も遮蔽（着弾のみ・ダメージなし）
   const pr = rayNearestProp(_muzzle, _camDir, SHOOT_RANGE);   // 信号/街灯/街路樹
   const propT = pr ? pr.t : Infinity;
-  const minT = Math.min(bldT, carT, kenT, gndT, propT);
+  let mpBest = null, mpT = Infinity;   // マルチプレイ: リモート機
+  if (mp) {
+    for (const h of mpAvatars.values()) {
+      const t = rayHitSphere(_muzzle, _camDir, mpCenterOf(h, _mpV3), 1.1, SHOOT_RANGE);
+      if (t < mpT) { mpT = t; mpBest = h; }
+    }
+  }
+  const minT = Math.min(bldT, carT, kenT, gndT, propT, mpT);
   const end = _muzzle.clone().addScaledVector(_camDir, minT === Infinity ? SHOOT_RANGE : minT);
   attackAim.copy(end); attackAimActive = true;   // FXビームの到達点＝この実着弾点
   spawnBeam(_vk.set(player.pos.x, player.pos.y + 1.2, player.pos.z), end, minT !== Infinity, colorHex, thick);
   if (minT === Infinity) return;
-  if (minT === propT) { smashProp(pr.prop, _camDir.x, _camDir.z, bldDmg); spawnImpactFx(end, 1); }
+  if (minT === mpT) { mp.sendHit(mpBest.id, MP_DMG.beam, 'beam'); spawnImpactFx(end, 1); }
+  else if (minT === propT) { smashProp(pr.prop, _camDir.x, _camDir.z, bldDmg); spawnImpactFx(end, 1); }
   else if (minT === bldT) applyHitToBuilding(hits[0], bldDmg);
   else if (minT === carT) hitCarBeam(carBest);
   else if (minT === kenT) hitKenBeam(kenBest, kenDmg);
@@ -2529,6 +2819,14 @@ function fireSuperPierce() {
   const hits = _shootRay.intersectObjects(cityDamaged ? [cityRoot, cityDamaged] : [cityRoot], true);
   for (let i = 0; i < Math.min(hits.length, 8); i++) applyHitToBuilding(hits[i], DMG_LIGHTNING, 3);   // 貫通・各命中点3倍FX
   raySmashProps(_muzzle, _camDir, endT, 2.2);   // 射線上の信号/街灯/街路樹もなぎ倒す
+  if (mp) {
+    for (const h of mpAvatars.values()) {
+      if (rayHitSphere(_muzzle, _camDir, mpCenterOf(h, _mpV3), 1.1, endT) < Infinity) {
+        mp.sendHit(h.id, MP_DMG.super, 'super');
+        spawnImpactFx(mpCenterOf(h, _mpV3), 3);
+      }
+    }
+  }
   for (const car of cars) {
     if (car.dead || car.grabbed || car.tornado) continue;
     if (rayHitSphere(_muzzle, _camDir, car.mesh.position, 2.4, endT) < Infinity) hitCarBeam(car);
@@ -2625,6 +2923,11 @@ function fireUltBeam() {
     if (car.mesh.position.distanceTo(_ultEnd) < ULT_HIT_R) hitCarBeam(car);
   }
   blastPropsAt(_ultEnd, ULT_HIT_R + 2, 2.2);   // 信号/街灯/街路樹は放射状に吹っ飛ぶ
+  if (mp) {
+    for (const h of mpAvatars.values()) {
+      if (mpCenterOf(h, _mpV3).distanceTo(_ultEnd) < ULT_HIT_R) mp.sendHit(h.id, MP_DMG.ult, 'ult');
+    }
+  }
 }
 function updateUltimate(dt) {
   if (ult.prewarmT > 0) { ult.prewarmT -= dt; if (ult.prewarmT <= 0) for (const s of ult.pool) s.fx.setEmitting(false); }
@@ -2706,6 +3009,11 @@ function updateAttacks(dt) {
     const hits = _shootRay.intersectObjects(cityDamaged ? [cityRoot, cityDamaged] : [cityRoot], true);
     for (let i = 0; i < Math.min(hits.length, 8); i++) applyHitToBuilding(hits[i], DMG_LARGE_TICK);   // 射線上の建物すべて（上限8）
     raySmashProps(_muzzle, _camDir, endT, 1.4);   // 掃引中の信号/街灯/街路樹もなぎ倒す
+    if (mp) {
+      for (const h of mpAvatars.values()) {
+        if (rayHitSphere(_muzzle, _camDir, mpCenterOf(h, _mpV3), 1.1, endT) < Infinity) mp.sendHit(h.id, MP_DMG.large, 'large');
+      }
+    }
     for (const car of cars) {
       if (car.dead || car.grabbed || car.tornado) continue;
       if (rayHitSphere(_muzzle, _camDir, car.mesh.position, 2.4, LARGE_BEAM_RANGE) < Infinity) hitCarBeam(car);
@@ -2720,6 +3028,9 @@ function updateAttacks(dt) {
 }
 
 function spawnBeam(from, to, impact, colorHex = 0xffb040, thick = false) {
+  if (mp && !mpRenderingRemote) {
+    mp.sendShot({ from: [from.x, from.y, from.z], to: [to.x, to.y, to.z], c: colorHex, thick: !!thick });
+  }
   const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([from.clone(), to.clone()]), new THREE.LineBasicMaterial({ color: colorHex, transparent: true }));
   scene.add(line); shotFx.push({ obj: line, t: 0, dur: thick ? 0.16 : 0.09, kind: 'beam' });
   if (thick) {   // スーパービームは筒を重ねて太く
@@ -4842,6 +5153,7 @@ function tick() {
   updateWater(dt);        // 水面: 法線スクロール＋距離LOD（マップモードのみ）
   updateDebris(dt);       // 破片（がれき/岩）
   updatePropFly(dt);      // 吹っ飛んだ信号/街灯/街路樹の飛翔
+  if (mp) mpUpdate(dt);   // マルチプレイ: 状態送信＋リモート補間
   updateFirePillars(dt);  // 地面着弾の火柱
   updateWanted(dt);       // 手配度＋パトカー追跡＋サイレン
   if (speechUI) speechUI.update(dt, kenScreenPos);   // 頭上セリフバブル
