@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>方式1: CPU Verlet — 布デモ</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a2e; font-family: system-ui, sans-serif; }
+    #app { position: fixed; inset: 0; }
+    #back { position: fixed; top: 10px; left: 10px; z-index: 10; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
+    #hud { position: fixed; top: 10px; right: 10px; z-index: 10; background: rgba(12,16,28,0.9); border: 1px solid #2a3756; border-radius: 8px; padding: 12px 14px; color: #e6ecf5; font-size: 13px; min-width: 190px; }
+    #hud-label { font-weight: bold; color: #9fd0ff; margin-bottom: 6px; }
+    #hud .row { display: flex; justify-content: space-between; margin: 4px 0; color: #cde; }
+    #hud label { display: block; margin-top: 8px; color: #9ab; font-size: 12px; }
+    #hud input[type=range] { width: 100%; }
+    #hud-fps { color: #8f8; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <a id="back" href="../cloth-compare/">← 比較トップ</a>
+  <div id="hud">
+    <div id="hud-label">—</div>
+    <div class="row"><span>FPS</span><span id="hud-fps">--</span></div>
+    <div class="row"><span>頂点数</span><span id="hud-verts">--</span></div>
+    <label>解像度 <span id="res-val">40×40</span></label>
+    <input type="range" id="res" min="16" max="100" step="4" value="40">
+    <label>風 <input type="range" id="wind" min="0" max="3" step="0.1" value="1"></label>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:8px;"><input type="checkbox" id="wire"> ワイヤーフレーム（メッシュ表示）</label>
+  </div>
+  <div id="err" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;max-height:45%;overflow:auto;background:rgba(40,0,0,0.92);color:#fbb;font:12px monospace;padding:14px;white-space:pre-wrap;"></div>
+  <script>
+    // モジュール/リソースの読み込み失敗を画面に出す（何が404かを特定するため）
+    window.addEventListener('error', function (e) {
+      var msg = e && e.message ? e.message : (e && e.target && (e.target.src || e.target.href) ? '読み込み失敗: ' + (e.target.src || e.target.href) : String(e));
+      var d = document.getElementById('err'); if (!d) return;
+      d.style.display = 'block';
+      var ln = document.createElement('div'); ln.textContent = '⚠ ' + msg; d.appendChild(ln);
+    }, true);
+    window.addEventListener('unhandledrejection', function (e) {
+      var d = document.getElementById('err'); if (!d) return;
+      d.style.display = 'block';
+      var ln = document.createElement('div'); ln.textContent = '⚠ ' + ((e.reason && e.reason.message) || e.reason); d.appendChild(ln);
+    });
+  </script>
+  <script type="module" src="./cloth-cpu.js"></script>
+</body>
+</html>

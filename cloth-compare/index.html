@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Cloth 方式比較（WebXR向け）</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; min-height: 100vh; background: #12162a; color: #e6ecf5; font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; }
+    .wrap { max-width: 720px; padding: 30px; }
+    h1 { font-size: 22px; color: #9fd0ff; }
+    p { line-height: 1.7; color: #b8c4dd; }
+    .cards { display: flex; gap: 16px; margin-top: 20px; flex-wrap: wrap; }
+    .card { flex: 1; min-width: 260px; background: rgba(20,28,48,0.9); border: 1px solid #2a3756; border-radius: 10px; padding: 18px; text-decoration: none; color: inherit; transition: border-color 0.2s; }
+    .card:hover { border-color: #6aa0ff; }
+    .card h2 { font-size: 16px; margin: 0 0 6px; color: #cfe; }
+    .card .tag { font-size: 11px; color: #7a8; }
+    .card p { font-size: 13px; margin: 8px 0 0; color: #9ab; }
+    .note { margin-top: 24px; font-size: 12px; color: #778; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Cloth シミュ 方式比較</h1>
+    <p>WebXRではWebGPUコンピュートが使えないため、CityFlyのマント布はそのままでは動きません。代替の2方式を<b>どちらもWebGL（WebGPU非依存）</b>で実装し、同じシーン・同じ素材・同じ物理モデルで比較できるようにしたものです。<br>
+    右上の<b>解像度スライダ</b>を上げて、<b>FPS</b>がどこまで持つかを両方で見比べてください。</p>
+    <div class="cards">
+      <a class="card" href="../cloth-cpu/">
+        <h2>方式1: CPU（JS Verlet）</h2>
+        <div class="tag">計算=CPU / 描画=WebGL</div>
+        <p>JSで毎フレーム物理計算。実装が簡単でGPU負荷ゼロ。XRではGPUが逼迫しがちなので、空いているCPUで回せる利点。頂点を増やすとFPSが落ちやすい。</p>
+      </a>
+      <a class="card" href="../cloth-webgl/">
+        <h2>方式2: WebGL2 GPGPU</h2>
+        <div class="tag">計算=GPU(FBO) / 描画=WebGL</div>
+        <p>位置をテクスチャに置きフラグメントシェーダで並列計算。高解像度でもFPSが落ちにくい＝細かいシワの上限が高い。ただしXRではGPU負荷を食う。実装はやや複雑。</p>
+      </a>
+    </div>
+    <div class="note">※ 物理モデル（正規化Verlet・Jacobiバネ・12近傍・スフィア衝突・上端ピン）と見た目（MeshPhysicalMaterial+sheen+HDR環境）は両版で完全に同一です。差が出るのは「同じFPSで到達できる頂点数」＝実効的なきめ細かさです。</div>
+  </div>
+</body>
+</html>
