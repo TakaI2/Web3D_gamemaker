@@ -29,7 +29,9 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
-      min-width: 190px;
+      width: 260px;
+      max-height: calc(100% - 24px);
+      overflow-y: auto;
     }
     #ui h3 { margin: 0 0 4px; font-size: 14px; color: #fff; }
     .ui-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -133,6 +135,46 @@
       </div>
       <button id="btn-load-cloth" style="padding:5px 0;background:rgba(120,170,255,0.18);border:1px solid rgba(120,170,255,0.45);color:#cfe;border-radius:4px;font-size:12px;cursor:pointer;">読み込む</button>
     </div>
+    <div class="ui-section">
+      <div class="ui-section-title" id="fbx-toggle">FBXマント取込 / ピン</div>
+      <div class="ui-section-body" id="fbx-body">
+        <button id="btn-fbx" style="width:100%;padding:6px 0;background:rgba(120,170,255,0.18);border:1px solid rgba(120,170,255,0.45);color:#cfe;border-radius:4px;font-size:12px;cursor:pointer;">📂 FBXファイルを開く…</button>
+        <input type="file" id="fbx-file" accept=".fbx" style="display:none">
+        <div class="ui-row">
+          <label>高さ(m)</label>
+          <input type="range" id="fbx-height" min="0.3" max="3" step="0.05" value="1.2">
+          <span class="val" id="fbx-height-val">1.20</span>
+        </div>
+        <div class="ui-row" style="gap:6px;">
+          <button id="btn-pin-edit" style="flex:1;padding:6px 0;background:rgba(255,255,255,0.07);border:1px solid rgba(255,180,60,0.5);color:#ccc;border-radius:4px;font-size:12px;cursor:pointer;">📌 ピン編集</button>
+          <button id="btn-pin-clear" style="flex:1;padding:6px 0;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.2);color:#ccc;border-radius:4px;font-size:12px;cursor:pointer;">ピン全解除</button>
+        </div>
+        <button id="btn-fbx-clear" style="width:100%;padding:5px 0;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.2);color:#ccc;border-radius:4px;font-size:12px;cursor:pointer;">手続き形状に戻す</button>
+        <button id="btn-vrm" style="width:100%;padding:6px 0;background:rgba(180,140,255,0.18);border:1px solid rgba(180,140,255,0.45);color:#dcf;border-radius:4px;font-size:12px;cursor:pointer;">🧍 VRM試着（サイズ合わせ）…</button>
+        <input type="file" id="vrm-file" accept=".vrm" style="display:none">
+        <div class="ui-row">
+          <label>VRM表示</label>
+          <input type="checkbox" id="vrm-visible" checked>
+        </div>
+        <div class="ui-row">
+          <label>上下位置</label>
+          <input type="range" id="vrm-y" min="-1" max="1" step="0.01" value="0">
+          <span class="val" id="vrm-y-val">0.00</span>
+        </div>
+        <div class="ui-row">
+          <label>左右位置</label>
+          <input type="range" id="vrm-x" min="-1" max="1" step="0.01" value="0">
+          <span class="val" id="vrm-x-val">0.00</span>
+        </div>
+        <div class="ui-row">
+          <label>前後位置</label>
+          <input type="range" id="vrm-z" min="-1" max="1" step="0.01" value="0">
+          <span class="val" id="vrm-z-val">0.00</span>
+        </div>
+        <div style="font-size:11px;color:#889;line-height:1.5;">取込直後は停止状態。📌で頂点をクリックして固定→▶再開で垂れ下がる。ピン編集は手続き形状でも使える。</div>
+      </div>
+    </div>
+
     <div class="ui-row">
       <label>Stiffness</label>
       <input type="range" id="stiffness" min="0.1" max="0.5" step="0.01" value="0.2">
@@ -177,12 +219,38 @@
             <option value="rect">四角 (Rect)</option>
             <option value="trapezoid">台形 (Cape)</option>
             <option value="semicircle">半円 (Semicircle)</option>
+            <option value="circle">円・中心穴あき (Circle)</option>
           </select>
         </div>
         <div class="ui-row">
-          <label>上端幅</label>
-          <input type="range" id="shape-top-width" min="0.2" max="3.0" step="0.05" value="1.0">
+          <label id="shape-top-width-label">上端幅</label>
+          <input type="range" id="shape-top-width" min="0.2" max="4.0" step="0.05" value="1.0">
           <span class="val" id="shape-top-width-val">1.00</span>
+        </div>
+        <div class="ui-row" id="row-hole" style="display:none">
+          <label>穴の直径</label>
+          <input type="range" id="shape-hole" min="0.05" max="2.0" step="0.05" value="0.3">
+          <span class="val" id="shape-hole-val">0.30</span>
+        </div>
+        <div class="ui-row" id="row-hole-ratio" style="display:none">
+          <label>穴の縦横比</label>
+          <input type="range" id="shape-hole-ratio" min="0.4" max="1.8" step="0.05" value="1.0">
+          <span class="val" id="shape-hole-ratio-val">1.00</span>
+        </div>
+        <div class="ui-row" id="row-slit-n" style="display:none">
+          <label>スリット数</label>
+          <input type="range" id="shape-slit-n" min="0" max="4" step="1" value="0">
+          <span class="val" id="shape-slit-n-val">0</span>
+        </div>
+        <div class="ui-row" id="row-slit-depth" style="display:none">
+          <label>スリット深さ</label>
+          <input type="range" id="shape-slit-depth" min="0.1" max="0.9" step="0.05" value="0.5">
+          <span class="val" id="shape-slit-depth-val">0.50</span>
+        </div>
+        <div class="ui-row" id="row-slit-rot" style="display:none">
+          <label>スリット回転</label>
+          <input type="range" id="shape-slit-rot" min="0" max="360" step="5" value="0">
+          <span class="val" id="shape-slit-rot-val">0°</span>
         </div>
         <div class="ui-row" id="row-bottom-width" style="display:none">
           <label>下端幅</label>
@@ -199,7 +267,7 @@
           <input type="range" id="shape-height" min="0.3" max="3.0" step="0.05" value="1.0">
           <span class="val" id="shape-height-val">1.00</span>
         </div>
-        <div class="ui-row">
+        <div class="ui-row" id="row-pin-count">
           <label>ピン数</label>
           <input type="range" id="shape-pin-count" min="2" max="20" step="1" value="7">
           <span class="val" id="shape-pin-count-val">7</span>
@@ -208,6 +276,59 @@
           <label>上端曲率</label>
           <input type="range" id="shape-top-curve" min="-1.0" max="1.0" step="0.05" value="0.0">
           <span class="val" id="shape-top-curve-val">0.00</span>
+        </div>
+        <div class="ui-row" id="row-top-ratio" style="display:none">
+          <label>上端縦横比</label>
+          <input type="range" id="shape-top-ratio" min="0.4" max="1.8" step="0.05" value="1.0">
+          <span class="val" id="shape-top-ratio-val">1.00</span>
+        </div>
+        <div class="ui-row" id="row-top-row-sel" style="display:none">
+          <label>編集する段</label>
+          <select id="top-row-sel" style="flex:1;background:#222;color:#ddd;border:1px solid #555;border-radius:3px;padding:2px 4px;font-size:12px;">
+            <option value="0">上端（1段目・衿つき）</option>
+            <option value="1">第2上端</option>
+            <option value="2">第3上端</option>
+          </select>
+        </div>
+        <div class="ui-row" id="row-rot-x" style="display:none">
+          <label>回転X(前後傾き)</label>
+          <input type="range" id="shape-rot-x" min="-60" max="60" step="5" value="0">
+          <span class="val" id="shape-rot-x-val">0°</span>
+        </div>
+        <div class="ui-row" id="row-rot-y" style="display:none">
+          <label>回転Y(水平)</label>
+          <input type="range" id="shape-rot-y" min="-180" max="180" step="5" value="0">
+          <span class="val" id="shape-rot-y-val">0°</span>
+        </div>
+        <div class="ui-row" id="row-rot-z" style="display:none">
+          <label>回転Z(左右傾き)</label>
+          <input type="range" id="shape-rot-z" min="-60" max="60" step="5" value="0">
+          <span class="val" id="shape-rot-z-val">0°</span>
+        </div>
+        <div class="ui-row" id="row-row-dy" style="display:none">
+          <label>上下(m)</label>
+          <input type="range" id="shape-row-dy" min="-0.3" max="0.3" step="0.01" value="0">
+          <span class="val" id="shape-row-dy-val">0.00</span>
+        </div>
+        <div class="ui-row" id="row-row-dz" style="display:none">
+          <label>前後(m)</label>
+          <input type="range" id="shape-row-dz" min="-0.3" max="0.3" step="0.01" value="0">
+          <span class="val" id="shape-row-dz-val">0.00</span>
+        </div>
+        <div class="ui-row" id="row-row-pin" style="display:none">
+          <label>この段を固定</label>
+          <input type="checkbox" id="top-row-pin">
+        </div>
+        <div class="ui-row" id="row-top-shape" style="display:none">
+          <label>上面スプライン</label>
+          <input type="checkbox" id="top-shape-on">
+        </div>
+        <div id="top-shape-box" style="display:none;flex-direction:column;gap:4px;">
+          <canvas id="top-shape-cv" width="226" height="190" style="background:#12142a;border-radius:4px;cursor:crosshair;touch-action:none;width:100%;"></canvas>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button id="top-shape-reset" style="padding:4px 10px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.2);color:#ccc;border-radius:4px;font-size:11px;cursor:pointer;">リセット</button>
+            <span style="font-size:10px;color:#889;">上から見た襟ぐり。右半分をドラッグ（左右対称）。青点=前後中心</span>
+          </div>
         </div>
         <div class="ui-row">
           <label>裾ギザギザ</label>
@@ -282,6 +403,32 @@
             <label>上端カーブ</label>
             <input type="range" id="collar-curve" min="-1.0" max="1.0" step="0.05" value="0.0">
             <span class="val" id="collar-curve-val">0.00</span>
+          </div>
+          <div class="ui-row">
+            <label>襟の角度</label>
+            <input type="range" id="collar-angle" min="-45" max="90" step="5" value="0">
+            <span class="val" id="collar-angle-val">0°</span>
+          </div>
+          <div class="ui-row">
+            <label>折り返し</label>
+            <input type="range" id="collar-fold" min="0" max="1" step="0.05" value="0.0">
+            <span class="val" id="collar-fold-val">0.00</span>
+          </div>
+          <div class="ui-row">
+            <label>前細り</label>
+            <input type="range" id="collar-taper" min="0" max="1" step="0.05" value="0.0">
+            <span class="val" id="collar-taper-val">0.00</span>
+          </div>
+          <div class="ui-row">
+            <label>スプライン編集</label>
+            <input type="checkbox" id="collar-spline">
+          </div>
+          <div id="collar-spline-box" style="display:none;flex-direction:column;gap:4px;">
+            <canvas id="collar-spline-cv" width="226" height="150" style="background:#12142a;border-radius:4px;cursor:crosshair;touch-action:none;width:100%;"></canvas>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <button id="collar-spline-reset" style="padding:4px 10px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.2);color:#ccc;border-radius:4px;font-size:11px;cursor:pointer;">リセット</button>
+              <span style="font-size:10px;color:#889;">横=外向き / 縦=高さ。●をドラッグ（灰色=付け根固定）</span>
+            </div>
           </div>
         </div>
       </div>

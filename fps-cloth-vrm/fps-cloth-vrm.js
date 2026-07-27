@@ -6,7 +6,7 @@ import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import {
   Fn, If, Return,
   instancedArray, instanceIndex, uniform,
-  select, attribute, Loop, float, vec3,
+  select, attribute, Loop, float, vec3, clamp,
   triNoise3D, time, frontFacing,
   cross, transformNormalToView,
 } from 'https://esm.sh/three@0.184.0/tsl';
@@ -41,7 +41,7 @@ let desiredNPCTotal  = 10;     // スライダで指定された目標体数（N
 let spawnLoopRunning = false;  // 追加生成ループの多重起動ガード
 
 // ── 布シミュ定数 ──────────────────────────────────────────────
-const MAX_COLLIDERS = 8;
+const MAX_COLLIDERS = 24;
 
 // ── シーングローバル ─────────────────────────────────────────
 let renderer, scene, camera;
@@ -90,7 +90,7 @@ let floorYUniform;       // 布の床当たり判定の床 Y（ステージ床 =
 
 // ── コライダー ───────────────────────────────────────────────
 const colliders       = [];
-const colliderDataArr = new Float32Array(MAX_COLLIDERS * 4);
+const colliderDataArr = new Float32Array(MAX_COLLIDERS * 8);   // 1個 = vec4×2 [A,r][B,type]
 let colliderCountUniform = null;
 let colliderDataBuffer   = null;
 // 読み込んだ cloth.json のコライダー設定 [{ boneName, r, offset:[x,y,z] }]
@@ -563,6 +563,61 @@ const BONE_COLLIDER_DEFS = [
   { bone: 'upperChest',    r: 0.13 },
 ];
 
+// 腕・脚はボーン軸の筒（カプセル）: cloth-editor / cloth-preview と同一定義
+const BONE_CAPSULE_DEFS = [
+  { bone: 'leftUpperArm',  bone2: 'leftLowerArm',  r: 0.050 },
+  { bone: 'leftLowerArm',  bone2: 'leftHand',      r: 0.042 },
+  { bone: 'rightUpperArm', bone2: 'rightLowerArm', r: 0.050 },
+  { bone: 'rightLowerArm', bone2: 'rightHand',     r: 0.042 },
+  { bone: 'leftUpperLeg',  bone2: 'leftLowerLeg',  r: 0.090 },
+  { bone: 'leftLowerLeg',  bone2: 'leftFoot',      r: 0.065 },
+  { bone: 'rightUpperLeg', bone2: 'rightLowerLeg', r: 0.090 },
+  { bone: 'rightLowerLeg', bone2: 'rightFoot',     r: 0.065 },
+];
+
+// カプセル端点: ボーン2点＋オフセット→軸シフト/伸縮を適用
+const _capB = new THREE.Vector3();
+const _capAxis = new THREE.Vector3();
+function computeCapsuleEnds(c) {
+  c.boneNode.getWorldPosition(_colliderTmp);
+  c.boneNode.getWorldQuaternion(_colliderQuat);
+  _colliderTmp.add(_colliderOff.copy(c.localOffset).applyQuaternion(_colliderQuat));
+  c.boneNode2.getWorldPosition(_capB);
+  c.boneNode2.getWorldQuaternion(_colliderQuat);
+  _capB.add(_colliderOff.copy(c.localOffset2).applyQuaternion(_colliderQuat));
+  _capAxis.copy(_capB).sub(_colliderTmp);
+  const L = _capAxis.length() || 1e-6;
+  _capAxis.divideScalar(L);
+  const sh = c.axShift || 0, ex = (c.axLen || 0) / 2;
+  _colliderTmp.addScaledVector(_capAxis, sh - ex);
+  _capB.addScaledVector(_capAxis, sh + ex);
+  const moved = c.x !== _colliderTmp.x || c.y !== _colliderTmp.y || c.z !== _colliderTmp.z
+    || c.x2 !== _capB.x || c.y2 !== _capB.y || c.z2 !== _capB.z;
+  c.x = _colliderTmp.x; c.y = _colliderTmp.y; c.z = _colliderTmp.z;
+  c.x2 = _capB.x; c.y2 = _capB.y; c.z2 = _capB.z;
+  return moved;
+}
+// カプセルコライダー生成（球リストへ追記する共通処理）
+function appendCapsuleColliders(vrm, list, saved) {
+  for (const def of BONE_CAPSULE_DEFS) {
+    if (list.length >= MAX_COLLIDERS) break;
+    const n1 = vrm.humanoid?.getNormalizedBoneNode(def.bone);
+    const n2 = vrm.humanoid?.getNormalizedBoneNode(def.bone2);
+    if (!n1 || !n2) continue;
+    const sv = saved?.find(x => x.type === 'capsule' && x.boneName === def.bone && x.boneName2 === def.bone2);
+    const c = {
+      type: 'capsule', x: 0, y: 0, z: 0, x2: 0, y2: 0, z2: 0,
+      r: sv ? sv.r : def.r,
+      boneNode: n1, boneNode2: n2, boneName: def.bone, boneName2: def.bone2,
+      localOffset:  (sv && sv.offset)  ? new THREE.Vector3(...sv.offset)  : new THREE.Vector3(),
+      localOffset2: (sv && sv.offset2) ? new THREE.Vector3(...sv.offset2) : new THREE.Vector3(),
+      axShift: sv?.axShift || 0, axLen: sv?.axLen || 0,
+    };
+    computeCapsuleEnds(c);
+    list.push(c);
+  }
+}
+
 function buildCollidersFromVRM(vrm) {
   clearColliders();
   const tmp  = new THREE.Vector3();
@@ -580,11 +635,12 @@ function buildCollidersFromVRM(vrm) {
     addCollider(world.x, world.y, world.z, r, node, def.bone, localOffset);
     if (colliders.length >= MAX_COLLIDERS) break;
   }
+  appendCapsuleColliders(vrm, colliders, savedColliderData);
   syncColliderDataArr();
 }
 
 function addCollider(x, y, z, r, boneNode = null, boneName = null, localOffset = null) {
-  colliders.push({ x, y, z, r, boneNode, boneName, localOffset: localOffset ?? new THREE.Vector3() });
+  colliders.push({ type: 'sphere', x, y, z, r, boneNode, boneName, localOffset: localOffset ?? new THREE.Vector3() });
 }
 
 function clearColliders() {
@@ -596,10 +652,17 @@ function fillColliderArr(colliderList, arr) {
   arr.fill(0);
   for (let i = 0; i < colliderList.length; i++) {
     const c = colliderList[i];
-    arr[i*4]   = c.x;
-    arr[i*4+1] = c.y;
-    arr[i*4+2] = c.z;
-    arr[i*4+3] = c.r;
+    const o = i * 8;
+    arr[o]   = c.x;
+    arr[o+1] = c.y;
+    arr[o+2] = c.z;
+    arr[o+3] = c.r;
+    if (c.type === 'capsule') {
+      arr[o+4] = c.x2;
+      arr[o+5] = c.y2;
+      arr[o+6] = c.z2;
+      arr[o+7] = 1;
+    }
   }
 }
 
@@ -617,6 +680,10 @@ function updateBoneColliders() {
   let changed = false;
   for (const c of colliders) {
     if (!c.boneNode) continue;
+    if (c.type === 'capsule' && c.boneNode2) {
+      if (computeCapsuleEnds(c)) changed = true;
+      continue;
+    }
     c.boneNode.getWorldPosition(_colliderTmp);
     c.boneNode.getWorldQuaternion(_colliderQuat);
     _colliderTmp.add(_colliderOff.copy(c.localOffset).applyQuaternion(_colliderQuat));
@@ -921,16 +988,23 @@ function buildSimulation(analysis, ctx) {
     const windForce = noise.mul(windUniform);
     force.z.subAssign(windForce);
 
+    // コライダー衝突（球＋カプセル）。カプセル=A-B線分への最近点から押し出し（球はtype=0→最近点=A）
     Loop({ start: 0, end: colliderCountUniform, type: 'int', condition: '<' }, ({ i }) => {
-      const col      = colliderDataBuffer.element(i).toVar('col');
-      const colPos   = col.xyz.toVar('colPos');
-      const colR     = col.w.toVar('colR');
-      const toVertex = position.add(force).sub(colPos).toVar('toVtx');
+      const colA = colliderDataBuffer.element(i.mul(2)).toVar('colA');
+      const colB = colliderDataBuffer.element(i.mul(2).add(1)).toVar('colB');
+      const pNow = position.add(force).toVar('colPNow');
+      const ab   = colB.xyz.sub(colA.xyz).toVar('colAB');
+      const segT = select(
+        colB.w.greaterThan(0.5),
+        clamp(pNow.sub(colA.xyz).dot(ab).div(ab.dot(ab).max(0.000001)), 0.0, 1.0),
+        float(0),
+      ).toVar('colSegT');
+      const closest  = colA.xyz.add(ab.mul(segT)).toVar('colClosest');
+      const toVertex = pNow.sub(closest).toVar('toVtx');
       const dist     = toVertex.length().toVar('cvDist');
-      const pen      = colR.sub(dist);
+      const pen      = colA.w.sub(dist);
       If(pen.greaterThan(0.0), () => {
-        const pushDir = toVertex.div(dist.max(0.0001));
-        force.addAssign(pushDir.mul(pen).mul(1.2));
+        force.addAssign(toVertex.div(dist.max(0.0001)).mul(pen).mul(1.2));
       });
     });
 
@@ -1624,9 +1698,10 @@ function buildCollidersForNPC(n) {
     const r           = saved ? saved.r : def.r;
     const localOffset = (saved && saved.offset) ? new THREE.Vector3(...saved.offset) : new THREE.Vector3();
     const world = tmp.clone().add(localOffset.clone().applyQuaternion(quat));
-    n.colliders.push({ x: world.x, y: world.y, z: world.z, r, boneNode: node, boneName: def.bone, localOffset });
+    n.colliders.push({ type: 'sphere', x: world.x, y: world.y, z: world.z, r, boneNode: node, boneName: def.bone, localOffset });
     if (n.colliders.length >= MAX_COLLIDERS) break;
   }
+  appendCapsuleColliders(n.vrm, n.colliders, n.savedColliderData);
   fillColliderArr(n.colliders, n.colliderDataArr);
 }
 
@@ -1660,6 +1735,10 @@ function updateBoneCollidersForNPC(n) {
   let changed = false;
   for (const c of n.colliders) {
     if (!c.boneNode) continue;
+    if (c.type === 'capsule' && c.boneNode2) {
+      if (computeCapsuleEnds(c)) changed = true;
+      continue;
+    }
     c.boneNode.getWorldPosition(_colliderTmp);
     c.boneNode.getWorldQuaternion(_colliderQuat);
     _colliderTmp.add(_colliderOff.copy(c.localOffset).applyQuaternion(_colliderQuat));
@@ -1737,7 +1816,7 @@ async function createCrowdNPC(bundle, position) {
     leftGripSet:    new Set(cloth.leftGripIndices  ?? []),
     rightGripSet:   new Set(cloth.rightGripIndices ?? []),
     colliders:      [],
-    colliderDataArr: new Float32Array(MAX_COLLIDERS * 4),
+    colliderDataArr: new Float32Array(MAX_COLLIDERS * 8),
     savedColliderData: cloth.colliders ?? null,
     simData:        null,
   };

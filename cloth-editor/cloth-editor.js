@@ -5,7 +5,7 @@ import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import {
   Fn, If, Return,
   instancedArray, instanceIndex, uniform,
-  select, attribute, Loop, float, vec3,
+  select, attribute, Loop, float, vec3, clamp,
   triNoise3D, time, frontFacing,
   cross, transformNormalToView,
 } from 'https://esm.sh/three@0.184.0/tsl';
@@ -70,12 +70,12 @@ let stiffnessUniform;
 let dampeningUniform;
 let windUniform;
 
-// ── コライダー（球）────────────────────────────────────────────
-const MAX_COLLIDERS = 16;
-// colliders[i] = { x, y, z, r, boneNode, boneName, localOffset, helperMesh }
+// ── コライダー（球＋カプセル）──────────────────────────────────
+const MAX_COLLIDERS = 24;
+// colliders[i] = { type:'sphere'|'capsule', x,y,z, [x2,y2,z2], r, boneNode, [boneNode2], boneName, [boneName2], localOffset, [localOffset2], helperMesh }
 const colliders = [];
-// GPU へ渡す Float32Array: [x,y,z,r, x,y,z,r, ...]  MAX_COLLIDERS 個
-const colliderDataArr = new Float32Array(MAX_COLLIDERS * 4);
+// GPU へ渡す Float32Array: コライダー1個 = vec4×2 [Ax,Ay,Az,r] [Bx,By,Bz,type(0=球,1=カプセル)]
+const colliderDataArr = new Float32Array(MAX_COLLIDERS * 8);
 let   colliderCountUniform = null;  // buildSimulation 後に使用可
 let   colliderDataBuffer   = null;  // instancedArray
 // 読み込んだ cloth.json のコライダー設定 [{ boneName, r, offset:[x,y,z] }]。VRM読込時に半径・オフセットを復元する。
@@ -90,13 +90,37 @@ let selectedGroupId = null;     // 編集対象グループ id（頂点クリッ
 let gripEditMode = false;       // 頂点割当モード（ON中はマント頂点クリックで選択グループへ割当）
 let _gidCounter = 0;
 const GRIP_PALETTE = [0x44aaff, 0xff6644, 0x33ddbb, 0xffcc33, 0xcc66ff, 0x66ff88, 0xff66aa, 0x88ccff];
-const GRIP_BONES = ['leftHand', 'rightHand', 'leftLowerArm', 'rightLowerArm', 'leftUpperArm', 'rightUpperArm', 'head', 'chest', 'hips'];
+const GRIP_BONES = ['leftHand', 'rightHand', 'leftLowerArm', 'rightLowerArm', 'leftUpperArm', 'rightUpperArm', 'head', 'chest', 'hips', 'leftBreast', 'rightBreast'];
 const DEFAULT_GROUPS = [
   { name: 'L手', bone: 'leftHand' }, { name: 'R手', bone: 'rightHand' },
   { name: 'L肘', bone: 'leftLowerArm' }, { name: 'R肘', bone: 'rightLowerArm' },
 ];
 // テスト用キー: 押下中、bone一致の全グループを active
 const GRIP_KEY_BONE = { KeyL: 'leftHand', KeyR: 'rightHand', KeyK: 'leftLowerArm', KeyE: 'rightLowerArm' };
+
+// グリップ用ボーン解決。leftBreast/rightBreast は humanoid 標準外の擬似名＝
+// シーン内のバスト系ボーン（VRoidの J_Sec_L_Bust1 等）を名前パターンで検索して割り当てる
+function resolveGripBone(vrm, boneName) {
+  if (!vrm) return null;
+  if (boneName === 'leftBreast' || boneName === 'rightBreast') {
+    const wantLeft = boneName === 'leftBreast';
+    let best = null, bestDepth = Infinity;
+    vrm.scene.traverse((o) => {
+      const n = (o.name || '').toLowerCase();
+      if (!/(bust|breast|boob|mune|oppai|chichi)/.test(n)) return;
+      const isL = /(^|[^a-z])l([^a-z]|$)|left/.test(n);
+      const isR = /(^|[^a-z])r([^a-z]|$)|right/.test(n);
+      if (wantLeft ? (!isL || (isR && !isL)) : (!isR || (isL && !isR))) return;
+      let d = 0;
+      for (let pn = o.parent; pn; pn = pn.parent) d++;
+      if (d < bestDepth) { best = o; bestDepth = d; }   // 最も根本のバストボーン（Bust1優先）
+    });
+    if (!best) console.warn(`[grip] ${boneName}: バスト系ボーンが見つかりません（このモデルは非搭載かも）`);
+    else console.log(`[grip] ${boneName} → "${best.name}"`);
+    return best;
+  }
+  return vrm.humanoid?.getNormalizedBoneNode(boneName) ?? null;
+}
 
 function makeGroup(name, bone, color) {
   return {
@@ -215,12 +239,20 @@ const BONE_COLLIDER_DEFS = [
   { bone: 'leftShoulder',  r: 0.07 },
   { bone: 'rightShoulder', r: 0.07 },
   { bone: 'upperChest',    r: 0.13 },
-  { bone: 'leftUpperLeg',  r: 0.09 },
-  { bone: 'rightUpperLeg', r: 0.09 },
-  { bone: 'leftLowerLeg',  r: 0.07 },
-  { bone: 'rightLowerLeg', r: 0.07 },
   { bone: 'leftFoot',      r: 0.06 },
   { bone: 'rightFoot',     r: 0.06 },
+];
+
+// 腕・脚はボーン軸に沿った筒（カプセル）: bone→bone2 の線分＋半径。マントを掴んだ時の突き抜け対策
+const BONE_CAPSULE_DEFS = [
+  { bone: 'leftUpperArm',  bone2: 'leftLowerArm',  r: 0.050 },
+  { bone: 'leftLowerArm',  bone2: 'leftHand',      r: 0.042 },
+  { bone: 'rightUpperArm', bone2: 'rightLowerArm', r: 0.050 },
+  { bone: 'rightLowerArm', bone2: 'rightHand',     r: 0.042 },
+  { bone: 'leftUpperLeg',  bone2: 'leftLowerLeg',  r: 0.090 },
+  { bone: 'leftLowerLeg',  bone2: 'leftFoot',      r: 0.065 },
+  { bone: 'rightUpperLeg', bone2: 'rightLowerLeg', r: 0.090 },
+  { bone: 'rightLowerLeg', bone2: 'rightFoot',     r: 0.065 },
 ];
 
 // コライダーの表示名（どの部位かを分かりやすく）。boneName から引く。
@@ -229,6 +261,7 @@ const COLLIDER_LABELS = {
   leftShoulder: '左肩', rightShoulder: '右肩',
   leftUpperLeg: '左もも', rightUpperLeg: '右もも', leftLowerLeg: '左すね', rightLowerLeg: '右すね',
   leftFoot: '左足', rightFoot: '右足',
+  leftUpperArm: '左上腕', rightUpperArm: '右上腕', leftLowerArm: '左前腕', rightLowerArm: '右前腕',
 };
 const colliderLabel = (c, i) => (c.boneName && COLLIDER_LABELS[c.boneName]) || c.boneName || `球${i + 1}`;
 
@@ -249,8 +282,67 @@ function buildCollidersFromVRM(vrm) {
     addCollider(world.x, world.y, world.z, r, node, def.bone, localOffset);
     if (colliders.length >= MAX_COLLIDERS) break;
   }
+  for (const def of BONE_CAPSULE_DEFS) {
+    if (colliders.length >= MAX_COLLIDERS) break;
+    const n1 = vrm.humanoid?.getNormalizedBoneNode(def.bone);
+    const n2 = vrm.humanoid?.getNormalizedBoneNode(def.bone2);
+    if (!n1 || !n2) continue;
+    const saved = savedColliderData?.find(sv => sv.type === 'capsule' && sv.boneName === def.bone && sv.boneName2 === def.bone2);
+    const r    = saved ? saved.r : def.r;
+    const off1 = (saved && saved.offset)  ? new THREE.Vector3(...saved.offset)  : new THREE.Vector3();
+    const off2 = (saved && saved.offset2) ? new THREE.Vector3(...saved.offset2) : new THREE.Vector3();
+    addCapsuleCollider(n1, n2, def.bone, def.bone2, r, off1, off2, saved?.axShift || 0, saved?.axLen || 0);
+  }
   updateColliderUI();
   syncColliderDataArr();
+}
+
+// カプセルヘルパの向き・スケール（単位円筒→A-B線分に沿わせる）
+const _capDir = new THREE.Vector3(), _capMid = new THREE.Vector3(), _capUp = new THREE.Vector3(0, 1, 0);
+function orientCapsuleHelper(c) {
+  _capDir.set(c.x2 - c.x, c.y2 - c.y, c.z2 - c.z);
+  const len = _capDir.length() || 0.001;
+  _capMid.set((c.x + c.x2) / 2, (c.y + c.y2) / 2, (c.z + c.z2) / 2);
+  c.helperMesh.position.copy(_capMid);
+  c.helperMesh.quaternion.setFromUnitVectors(_capUp, _capDir.normalize());
+  c.helperMesh.scale.set(c.r, len, c.r);
+}
+// カプセル端点の計算: ボーン位置＋オフセット → 軸方向のシフト(axShift)と伸縮(axLen)を適用
+const _capA = new THREE.Vector3(), _capB = new THREE.Vector3(), _capQ = new THREE.Quaternion(), _capOff = new THREE.Vector3(), _capAxis = new THREE.Vector3();
+function computeCapsuleEnds(c) {
+  c.boneNode.getWorldPosition(_capA);
+  c.boneNode.getWorldQuaternion(_capQ);
+  _capA.add(_capOff.copy(c.localOffset).applyQuaternion(_capQ));
+  c.boneNode2.getWorldPosition(_capB);
+  c.boneNode2.getWorldQuaternion(_capQ);
+  _capB.add(_capOff.copy(c.localOffset2).applyQuaternion(_capQ));
+  _capAxis.copy(_capB).sub(_capA);
+  const L = _capAxis.length() || 1e-6;
+  _capAxis.divideScalar(L);
+  const sh = c.axShift || 0, ex = (c.axLen || 0) / 2;
+  _capA.addScaledVector(_capAxis, sh - ex);
+  _capB.addScaledVector(_capAxis, sh + ex);
+  const moved = c.x !== _capA.x || c.y !== _capA.y || c.z !== _capA.z
+    || c.x2 !== _capB.x || c.y2 !== _capB.y || c.z2 !== _capB.z;
+  c.x = _capA.x; c.y = _capA.y; c.z = _capA.z;
+  c.x2 = _capB.x; c.y2 = _capB.y; c.z2 = _capB.z;
+  return moved;
+}
+function addCapsuleCollider(node1, node2, boneName, boneName2, r, off1, off2, axShift = 0, axLen = 0) {
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(1, 1, 1, 10, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0x66ddaa, wireframe: true, transparent: true, opacity: 0.3 }),
+  );
+  mesh.renderOrder = 5;
+  scene.add(mesh);
+  const c = {
+    type: 'capsule', x: 0, y: 0, z: 0, x2: 0, y2: 0, z2: 0, r,
+    boneNode: node1, boneNode2: node2, boneName, boneName2,
+    localOffset: off1, localOffset2: off2, axShift, axLen, helperMesh: mesh,
+  };
+  computeCapsuleEnds(c);
+  colliders.push(c);
+  orientCapsuleHelper(c);
 }
 
 function addCollider(x, y, z, r, boneNode = null, boneName = null, localOffset = null) {
@@ -263,7 +355,7 @@ function addCollider(x, y, z, r, boneNode = null, boneName = null, localOffset =
   mesh.scale.setScalar(r);
   mesh.renderOrder = 5;
   scene.add(mesh);
-  colliders.push({ x, y, z, r, boneNode, boneName, localOffset: localOffset ?? new THREE.Vector3(), helperMesh: mesh });
+  colliders.push({ type: 'sphere', x, y, z, r, boneNode, boneName, localOffset: localOffset ?? new THREE.Vector3(), helperMesh: mesh });
 }
 
 function clearColliders() {
@@ -279,10 +371,17 @@ function syncColliderDataArr() {
   colliderDataArr.fill(0);
   for (let i = 0; i < colliders.length; i++) {
     const c = colliders[i];
-    colliderDataArr[i*4]     = c.x;
-    colliderDataArr[i*4 + 1] = c.y;
-    colliderDataArr[i*4 + 2] = c.z;
-    colliderDataArr[i*4 + 3] = c.r;
+    const o = i * 8;
+    colliderDataArr[o]     = c.x;
+    colliderDataArr[o + 1] = c.y;
+    colliderDataArr[o + 2] = c.z;
+    colliderDataArr[o + 3] = c.r;
+    if (c.type === 'capsule') {
+      colliderDataArr[o + 4] = c.x2;
+      colliderDataArr[o + 5] = c.y2;
+      colliderDataArr[o + 6] = c.z2;
+      colliderDataArr[o + 7] = 1;
+    }
   }
   // GPU バッファへ書き戻し（シミュ実行中も即反映）
   if (colliderDataBuffer) {
@@ -295,6 +394,7 @@ function syncColliderDataArr() {
 function updateColliderHelper(idx) {
   const c = colliders[idx];
   if (!c) return;
+  if (c.type === 'capsule') { orientCapsuleHelper(c); return; }
   c.helperMesh.position.set(c.x, c.y, c.z);
   c.helperMesh.scale.setScalar(c.r);
 }
@@ -311,6 +411,19 @@ function updateColliderUI() {
   colliders.forEach((c, i) => {
     const row = document.createElement('div');
     row.className = 'collider-row';
+    if (c.type === 'capsule') {   // 筒: 半径＋長さ伸縮＋軸沿い位置（位置はボーン2本に追従）
+      row.innerHTML = `
+        <span class="c-label">${colliderLabel(c, i)}(筒)</span>
+        <label style="font-size:10px;color:#888;">R</label>
+        <input type="number" class="c-input" data-idx="${i}" data-key="r" value="${c.r.toFixed(3)}" step="0.005" min="0.01">
+        <label style="font-size:10px;color:#888;" title="長さの伸縮(m)。両端に半分ずつ">長</label>
+        <input type="number" class="c-input" data-idx="${i}" data-key="axLen" value="${(c.axLen || 0).toFixed(3)}" step="0.01">
+        <label style="font-size:10px;color:#888;" title="軸に沿った位置シフト(m)。+=子ボーン側">位</label>
+        <input type="number" class="c-input" data-idx="${i}" data-key="axShift" value="${(c.axShift || 0).toFixed(3)}" step="0.01">
+      `;
+      list.appendChild(row);
+      return;
+    }
     row.innerHTML = `
       <span class="c-label">${colliderLabel(c, i)}</span>
       <label style="font-size:10px;color:#888;">X</label>
@@ -332,6 +445,7 @@ function updateColliderUI() {
     const key = el.dataset.key;
     const c   = colliders[idx];
     c[key] = parseFloat(el.value);
+    if (c.type === 'capsule') { computeCapsuleEnds(c); updateColliderHelper(idx); syncColliderDataArr(); return; }
     // 位置(X/Y/Z)編集時は、絶対座標からボーンローカルオフセットを再計算して永続化
     // （毎フレームの updateBoneColliders がオフセットを保ったままボーン追従する）
     if (key !== 'r' && c.boneNode) {
@@ -373,7 +487,7 @@ function initHandGrabPoints(vrm) {
   ensureDefaultGroups();
   let found = 0;
   for (const g of gripGroups) {
-    g.boneNode = vrm.humanoid?.getNormalizedBoneNode(g.bone) ?? null;
+    g.boneNode = resolveGripBone(vrm, g.bone);
     if (g.boneNode) { found++; if (!g.markerMesh) _createGroupMarker(g); }
   }
   if (found > 0) document.getElementById('hand-grab-section').style.display = '';
@@ -454,7 +568,14 @@ function updateGripCounts() {
     const bsel = document.createElement('select');
     bsel.style.cssText = 'background:#1a1a2e;color:#bbd;border:1px solid #444;border-radius:3px;font-size:9px;max-width:64px;';
     for (const b of GRIP_BONES) { const o = document.createElement('option'); o.value = b; o.textContent = b.replace(/^(left|right)/, (m) => m === 'left' ? 'L.' : 'R.'); if (b === g.bone) o.selected = true; bsel.appendChild(o); }
-    bsel.onchange = () => { g.bone = bsel.value; if (currentVRM) { g.boneNode = currentVRM.humanoid?.getNormalizedBoneNode(g.bone) ?? null; if (g.boneNode && !g.markerMesh) _createGroupMarker(g); } };
+    bsel.onchange = () => {
+      g.bone = bsel.value;
+      if (currentVRM) {
+        g.boneNode = resolveGripBone(currentVRM, g.bone);
+        if (g.boneNode && !g.markerMesh) _createGroupMarker(g);
+        if (!g.boneNode && /Breast$/.test(g.bone)) showToast('胸ボーンが見つかりません（バスト系ボーン非搭載のモデル）', 'warn');
+      }
+    };
     // 頂点数
     const cnt = document.createElement('span');
     cnt.textContent = String(gripCountOf(g.id)); cnt.title = '頂点数';
@@ -476,7 +597,7 @@ function updateGripCounts() {
 
 function addGripGroup() {
   const g = makeGroup(`グループ${gripGroups.length + 1}`, 'leftHand');
-  if (currentVRM) { g.boneNode = currentVRM.humanoid?.getNormalizedBoneNode(g.bone) ?? null; if (g.boneNode) _createGroupMarker(g); }
+  if (currentVRM) { g.boneNode = resolveGripBone(currentVRM, g.bone); if (g.boneNode) _createGroupMarker(g); }
   gripGroups.push(g);
   selectedGroupId = g.id;
   updateGripCounts(); _syncHgpOffsetUI();
@@ -501,15 +622,26 @@ function updateBoneColliders() {
   let changed = false;
   for (const c of colliders) {
     if (!c.boneNode) continue;
+    let moved = false;
+    if (c.type === 'capsule' && c.boneNode2) {
+      if (computeCapsuleEnds(c)) { orientCapsuleHelper(c); changed = true; }
+      continue;
+    }
     c.boneNode.getWorldPosition(_colliderTmp);
     c.boneNode.getWorldQuaternion(_colliderQuat);
     _colliderTmp.add(_colliderOff.copy(c.localOffset).applyQuaternion(_colliderQuat));
-    if (c.x === _colliderTmp.x && c.y === _colliderTmp.y && c.z === _colliderTmp.z) continue;
-    c.x = _colliderTmp.x;
-    c.y = _colliderTmp.y;
-    c.z = _colliderTmp.z;
-    c.helperMesh.position.copy(_colliderTmp);
-    changed = true;
+    if (c.x !== _colliderTmp.x || c.y !== _colliderTmp.y || c.z !== _colliderTmp.z) {
+      c.x = _colliderTmp.x;
+      c.y = _colliderTmp.y;
+      c.z = _colliderTmp.z;
+      moved = true;
+    }
+    if (c.type === 'capsule' && c.boneNode2) {
+      if (computeCapsuleEnds(c)) { orientCapsuleHelper(c); moved = true; }
+    } else if (moved) {
+      c.helperMesh.position.set(c.x, c.y, c.z);
+    }
+    if (moved) changed = true;
   }
   if (changed) syncColliderDataArr();
 }
@@ -618,7 +750,7 @@ function loadMantleJSON(json) {
   gripMap.clear();
   for (const g of gripGroups) _disposeGroupMarker(g);
   gripGroups = [];
-  const _bindBone = (g) => { if (currentVRM) { g.boneNode = currentVRM.humanoid?.getNormalizedBoneNode(g.bone) ?? null; if (g.boneNode) _createGroupMarker(g); } };
+  const _bindBone = (g) => { if (currentVRM) { g.boneNode = resolveGripBone(currentVRM, g.bone); if (g.boneNode) _createGroupMarker(g); } };
   if (Array.isArray(json.gripGroups) && json.gripGroups.length) {
     for (const gd of json.gripGroups) {
       const g = makeGroup(gd.name || gd.bone, gd.bone, typeof gd.color === 'number' ? gd.color : undefined);
@@ -859,6 +991,39 @@ function toggleAnchor(idx) {
   _updateMarkerVisual(idx);
 }
 
+// 現在のピン（cloth.jsonのpinnedIndices）を、選択中ボーンのアンカーへ一括設定
+function anchorsFromPins() {
+  if (!currentVRM) { showToast('先にVRMを読み込んでください', 'warn'); return; }
+  if (!pinnedSet.size) { showToast('ピンがありません（読み込んだcloth.jsonにpinnedIndicesが必要）', 'warn'); return; }
+  const boneName = document.getElementById('anchor-bone-select').value;
+  if (!boneName) { showToast('アンカー先のボーンを選択してください', 'warn'); return; }
+  const boneNode = currentVRM.humanoid?.getNormalizedBoneNode(boneName);
+  if (!boneNode) { showToast(`ボーン "${boneName}" が見つかりません`, 'warn'); return; }
+  let snapshot;
+  if (mantleData && mantleOrigPos) {
+    snapshot = applyMantleTransform(mantleOrigPos, mantleData.vertexCount, mantleTransform);
+  } else if (analysisData) {
+    snapshot = analysisData.positions;
+  } else { showToast('布データがありません', 'warn'); return; }
+  const bonePos  = new THREE.Vector3();
+  const boneQuat = new THREE.Quaternion();
+  boneNode.getWorldPosition(bonePos);
+  boneNode.getWorldQuaternion(boneQuat);
+  const inv = boneQuat.clone().invert();
+  let n = 0;
+  for (const idx of pinnedSet) {
+    const localOffset = new THREE.Vector3(
+      snapshot[idx*3]   - bonePos.x,
+      snapshot[idx*3+1] - bonePos.y,
+      snapshot[idx*3+2] - bonePos.z,
+    ).applyQuaternion(inv);
+    anchorMap.set(idx, { boneName, boneNode, localOffset });
+    _updateMarkerVisual(idx);
+    n++;
+  }
+  showToast(`ピン${n}個を「${boneName}」のアンカーに設定しました`);
+}
+
 function clearAnchorMap() {
   anchorMap.clear();
   for (let i = 0; i < markerMeshes.length; i++) _updateMarkerVisual(i);
@@ -1068,14 +1233,21 @@ function buildSimulation(analysis) {
     const windForce = noise.mul(windUniform);
     force.z.subAssign(windForce);
 
-    // 球コライダー衝突
+    // コライダー衝突（球＋カプセル）。カプセル=A-B線分への最近点から押し出し（球はtype=0→最近点=A）
     Loop({ start: 0, end: colliderCountUniform, type: 'int', condition: '<' }, ({ i }) => {
-      const col      = colliderDataBuffer.element(i).toVar('col');
-      const colPos   = col.xyz.toVar('colPos');
-      const colR     = col.w.toVar('colR');
-      const toVertex = position.add(force).sub(colPos).toVar('toVtx');
+      const colA = colliderDataBuffer.element(i.mul(2)).toVar('colA');
+      const colB = colliderDataBuffer.element(i.mul(2).add(1)).toVar('colB');
+      const pNow = position.add(force).toVar('colPNow');
+      const ab   = colB.xyz.sub(colA.xyz).toVar('colAB');
+      const segT = select(
+        colB.w.greaterThan(0.5),
+        clamp(pNow.sub(colA.xyz).dot(ab).div(ab.dot(ab).max(0.000001)), 0.0, 1.0),
+        float(0),
+      ).toVar('colSegT');
+      const closest  = colA.xyz.add(ab.mul(segT)).toVar('colClosest');
+      const toVertex = pNow.sub(closest).toVar('toVtx');
       const dist     = toVertex.length().toVar('cvDist');
-      const penetration = colR.sub(dist);
+      const penetration = colA.w.sub(dist);
       If(penetration.greaterThan(0.0), () => {
         const pushDir = toVertex.div(dist.max(0.0001));
         force.addAssign(pushDir.mul(penetration).mul(1.2));
@@ -1503,10 +1675,17 @@ function buildMantleExport() {
   const leftGripIndices  = unionByBone('leftHand');
   const rightGripIndices = unionByBone('rightHand');
   const handGrabOffsets  = { left: firstOff('leftHand'), right: firstOff('rightHand') };
-  // 球コライダー：ボーン相対オフセット + 半径で保存（ボーン名で再バインドするため絶対座標は保存しない）
+  // コライダー：ボーン相対オフセット + 半径で保存（ボーン名で再バインド。カプセルは両端ボーン）
   const colliderData = colliders
     .filter(c => c.boneName)
-    .map(c => ({ boneName: c.boneName, r: c.r, offset: [c.localOffset.x, c.localOffset.y, c.localOffset.z] }));
+    .map(c => c.type === 'capsule'
+      ? {
+        type: 'capsule', boneName: c.boneName, boneName2: c.boneName2, r: c.r,
+        offset: [c.localOffset.x, c.localOffset.y, c.localOffset.z],
+        offset2: [c.localOffset2.x, c.localOffset2.y, c.localOffset2.z],
+        axShift: c.axShift || 0, axLen: c.axLen || 0,
+      }
+      : { boneName: c.boneName, r: c.r, offset: [c.localOffset.x, c.localOffset.y, c.localOffset.z] });
   return {
     ...mantleData,
     gripGroups: gripGroupsOut,
@@ -1893,6 +2072,65 @@ function setupUI() {
   });
   document.getElementById('btn-vrm-load').addEventListener('click', () => fileInput.click());
 
+  // ---- プロジェクト内フォルダ参照（public/vrm・public/npc・public/cloth） ----
+  const fillSelect = async (url, selId, stripExt) => {
+    try {
+      const files = await (await fetch(url)).json();
+      const sel = document.getElementById(selId);
+      sel.innerHTML = '<option value="">-- 選択 --</option>';
+      for (const f of files) {
+        const o = document.createElement('option');
+        o.value = f;
+        o.textContent = f.replace(stripExt, '');
+        sel.appendChild(o);
+      }
+    } catch { /* 開発サーバ以外 */ }
+  };
+  fillSelect('../vrm/manifest.json', 'vrm-sel', /\.vrm$/i);
+  fillSelect('../npc/manifest.json', 'npc-sel', /\.npc\.json$/i);
+  fillSelect('../cloth/manifest.json', 'mantle-sel', /\.cloth\.json$/i);
+
+  document.getElementById('btn-vrm-sel-load').addEventListener('click', async () => {
+    const f = document.getElementById('vrm-sel').value;
+    if (!f) { showToast('VRMを選択してください', 'warn'); return; }
+    showToast('読み込み中...');
+    try {
+      const blob = await (await fetch('../vrm/' + encodeURIComponent(f))).blob();
+      const file = new File([blob], f);
+      const meshes = await loadVRM(file);
+      currentVRMFile = file;
+      updateMeshList();
+      _populateAnchorBoneDropdown(currentVRM);
+      document.getElementById('npc-export-section').style.display = '';
+      showToast(`VRM 読み込み完了 (${meshes.length} メッシュ)`);
+    } catch (err) {
+      showToast(`読み込み失敗: ${err.message}`, 'error');
+      console.error(err);
+    }
+  });
+  document.getElementById('btn-npc-sel-load').addEventListener('click', async () => {
+    const f = document.getElementById('npc-sel').value;
+    if (!f) { showToast('NPCバンドルを選択してください', 'warn'); return; }
+    try {
+      const bundle = await (await fetch('../npc/' + encodeURIComponent(f))).json();
+      loadedNpcName = f.replace(/\.npc\.json$/i, '');
+      await importNPCBundle(bundle);
+    } catch (err) {
+      showToast(`NPC読み込み失敗: ${err.message}`, 'error');
+      console.error(err);
+    }
+  });
+  document.getElementById('btn-mantle-sel-load').addEventListener('click', async () => {
+    const f = document.getElementById('mantle-sel').value;
+    if (!f) { showToast('マントを選択してください', 'warn'); return; }
+    try {
+      loadMantleJSON(await (await fetch('../cloth/' + encodeURIComponent(f))).json());
+    } catch (err) {
+      showToast(`マント読み込み失敗: ${err.message}`, 'error');
+      console.error(err);
+    }
+  });
+
   // NPCバンドル(.npc.json) 再インポート
   const importNpcInput = document.getElementById('import-npc-file');
   importNpcInput.addEventListener('change', async e => {
@@ -1976,6 +2214,7 @@ function setupUI() {
   });
 
   // ボーンアンカーUI
+  document.getElementById('btn-anchor-from-pins').addEventListener('click', anchorsFromPins);
   document.getElementById('btn-anchor-mode').addEventListener('click', () => {
     const sel = document.getElementById('anchor-bone-select');
     if (!sel.value) { showToast('ボーンを選択してください', 'warn'); return; }

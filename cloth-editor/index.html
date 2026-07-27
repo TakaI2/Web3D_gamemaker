@@ -330,9 +330,17 @@
 
     <div class="p-section">
       <div class="p-section-title">VRM モデル</div>
-      <button id="btn-vrm-load">VRM を読み込む</button>
+      <div style="display:flex;gap:4px;margin-bottom:4px;">
+        <select id="vrm-sel" style="flex:1;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;"></select>
+        <button class="btn-sm" id="btn-vrm-sel-load" style="flex-shrink:0;">読込</button>
+      </div>
+      <button id="btn-vrm-load" class="btn-sm" style="width:100%;">ファイルから読み込む…</button>
       <input type="file" id="vrm-file" accept=".vrm" style="display:none">
-      <button id="btn-import-npc" class="btn-sm" style="width:100%;margin-top:5px;background:rgba(80,120,200,0.22);border-color:rgba(110,170,255,0.45);color:#bdf;">NPCバンドル (.npc.json) を再インポート</button>
+      <div style="display:flex;gap:4px;margin-top:8px;">
+        <select id="npc-sel" style="flex:1;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;"></select>
+        <button class="btn-sm" id="btn-npc-sel-load" style="flex-shrink:0;background:rgba(80,120,200,0.22);border-color:rgba(110,170,255,0.45);color:#bdf;">読込</button>
+      </div>
+      <button id="btn-import-npc" class="btn-sm" style="width:100%;margin-top:4px;background:rgba(80,120,200,0.22);border-color:rgba(110,170,255,0.45);color:#bdf;">NPCバンドルをファイルから…</button>
       <input type="file" id="import-npc-file" accept=".json" style="display:none">
     </div>
 
@@ -394,6 +402,7 @@
           <button class="btn-sm" id="btn-anchor-mode">アンカー編集 OFF</button>
           <button class="btn-sm" id="btn-anchor-clear">全解除</button>
         </div>
+        <button class="btn-sm" id="btn-anchor-from-pins" style="width:100%;margin-top:4px;" title="cloth.jsonのpinnedIndices（ピン頂点）を、選択中ボーンのアンカーへ一括設定">📌 現在のピンをアンカーに一括設定</button>
         <div style="margin-top:4px;font-size:10px;color:#556;line-height:1.4;">
           マゼンタ = ボーン追従アンカー<br>
           クリックで頂点を割り当て・解除
@@ -419,7 +428,11 @@
 
     <div class="p-section">
       <div class="p-section-title">マント読み込み</div>
-      <button id="btn-mantle-load" class="btn-sm" style="width:100%;margin-bottom:4px;">マント (.cloth.json) を読み込む</button>
+      <div style="display:flex;gap:4px;margin-bottom:4px;">
+        <select id="mantle-sel" style="flex:1;background:#1a1a2e;color:#ccc;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;"></select>
+        <button class="btn-sm" id="btn-mantle-sel-load" style="flex-shrink:0;">読込</button>
+      </div>
+      <button id="btn-mantle-load" class="btn-sm" style="width:100%;margin-bottom:4px;">ファイルから読み込む…</button>
       <input type="file" id="mantle-file" accept=".json" style="display:none">
       <button class="btn-sm" id="btn-mantle-clear" style="width:100%;display:none;">マントを削除</button>
     </div>

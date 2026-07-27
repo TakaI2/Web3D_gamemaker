@@ -216,11 +216,12 @@ function downloadVrma() {
   a.click();
 }
 async function importVrma() {
-  if (!vrm) return;
+  if (!vrm) { setStatus('先にVRMモデルを読み込んでください'); return; }
   const file = $('vrma-sel').value;
-  if (!file) return;
+  if (!file) { setStatus('VRMAを選択してください（一覧が空の場合はサーバ起動を確認してリロード）'); return; }
   setStatus('VRMA読込中…');
   const res = await fetch('../vrma/' + encodeURIComponent(file));
+  if (!res.ok) throw new Error('取得失敗 HTTP ' + res.status + '（サーバ起動を確認）');
   const al = new GLTFLoader();
   al.register((p) => new VRMAnimationLoaderPlugin(p));
   const ag = await al.loadAsync(URL.createObjectURL(await res.blob()));
