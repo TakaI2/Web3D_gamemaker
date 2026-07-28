@@ -1056,6 +1056,24 @@ function updatePinTargets() {
   simData.bonePinTargetBuffer.value.needsUpdate = true;
 }
 
+// マント位置(editorTransform)を変えたら、アンカーの吸着先(localOffset)も新しい位置へ再計算する。
+// これをしないと updatePinTargets が旧オフセット＝元の位置へ頂点を引き戻し、シミュで位置が戻る。
+const _reBonePos = new THREE.Vector3(), _reBoneQuat = new THREE.Quaternion();
+function reprojectAnchorsToTransform() {
+  if (!anchorMap.size || !mantleData || !mantleOrigPos) return;
+  const snap = applyMantleTransform(mantleOrigPos, mantleData.vertexCount, mantleTransform);
+  for (const [idx, a] of anchorMap) {
+    if (!a.boneNode) continue;
+    a.boneNode.getWorldPosition(_reBonePos);
+    a.boneNode.getWorldQuaternion(_reBoneQuat);
+    a.localOffset = new THREE.Vector3(
+      snap[idx * 3]     - _reBonePos.x,
+      snap[idx * 3 + 1] - _reBonePos.y,
+      snap[idx * 3 + 2] - _reBonePos.z,
+    ).applyQuaternion(_reBoneQuat.invert());
+  }
+}
+
 function disposeMarkers() {
   if (!markerGroup) return;
   scene.remove(markerGroup);
@@ -2021,6 +2039,7 @@ function startSim() {
     return;
   }
   if (simRunning) return;
+  if (mantleData) reprojectAnchorsToTransform();   // 開始直前の姿勢でアンカー吸着先を確定（位置調整が戻らない）
   const analysis = mantleData ? _buildMantleAnalysis() : analysisData;
   simData    = buildSimulation(analysis);
   simRunning = true;
@@ -2279,6 +2298,7 @@ function setupUI() {
       mantleTransform[key] = v;
       sl.value   = Math.max(parseFloat(sl.min), Math.min(parseFloat(sl.max), v));
       num.value  = slFmt(v);
+      reprojectAnchorsToTransform();   // アンカーの吸着先も新位置へ追従（シミュで戻らないように）
       if (!simRunning) updateMantleMarkers();
     };
 

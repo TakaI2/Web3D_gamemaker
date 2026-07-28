@@ -14,6 +14,9 @@
     #hud-label { font-weight: bold; color: #9fd0ff; margin-bottom: 6px; }
     #hud .row { display: flex; justify-content: space-between; margin: 4px 0; color: #cde; }
     #hud-fps { color: #8f8; font-family: monospace; }
+    #hud .sl { display: block; margin: 5px 0; color: #bcd; font-size: 12px; }
+    #hud .sl input { width: 100%; }
+    #hud .sl span { color: #7fd7ff; font-family: monospace; float: right; }
   </style>
 </head>
 <body>
@@ -21,9 +24,25 @@
   <a id="back" href="../hub/">← 一覧</a>
   <div id="status">読み込み中…</div>
   <div id="hud">
-    <div id="hud-label">megu（マント=CPUクロス）</div>
+    <div id="hud-label">マント付きNPC ARエディタ</div>
     <div class="row"><span>FPS</span><span id="hud-fps">--</span></div>
     <div class="row"><span>マント</span><span id="hud-verts">--</span></div>
+    <label style="display:block;margin-top:8px;color:#9ab;">表示NPC
+      <select id="npc-sel" style="width:100%;margin-top:3px;padding:4px;background:#1a2438;border:1px solid #2a3756;border-radius:4px;color:#fff;">
+        <option value="megu">megu</option><option value="lily">lily</option><option value="ayu">ayu</option>
+        <option value="eri">eri</option><option value="Joy_reborn">Joy_reborn</option><option value="JOY_vamp">JOY_vamp</option><option value="ken">ken（マント無）</option>
+      </select>
+    </label>
+    <label style="display:block;margin-top:6px;color:#9ab;">演技（アニメ）
+      <select id="perf-sel" style="width:100%;margin-top:3px;padding:4px;background:#1a2438;border:1px solid #2a3756;border-radius:4px;color:#fff;"></select>
+    </label>
+    <div style="margin-top:8px;border-top:1px solid #2a3756;padding-top:6px;color:#9fd0ff;font-size:12px;">マント素材</div>
+    <label class="sl">粗さ <span id="val-rough">0.45</span><input type="range" id="sl-rough" min="0" max="1" step="0.01" value="0.45"></label>
+    <label class="sl">光沢 <span id="val-sheen">1.00</span><input type="range" id="sl-sheen" min="0" max="1" step="0.05" value="1"></label>
+    <label class="sl">透明度 <span id="val-opac">1.00</span><input type="range" id="sl-opac" min="0.2" max="1" step="0.05" value="1"></label>
+    <label class="sl">環境光 <span id="val-env">1.00</span><input type="range" id="sl-env" min="0" max="2" step="0.05" value="1"></label>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:6px;"><input type="checkbox" id="cb-cape" checked> マント表示</label>
+    <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="cb-wire"> ワイヤーフレーム</label>
   </div>
   <div id="err" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;max-height:45%;overflow:auto;background:rgba(40,0,0,0.92);color:#fbb;font:12px monospace;padding:14px;white-space:pre-wrap;"></div>
   <script>

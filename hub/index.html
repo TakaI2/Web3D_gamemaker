@@ -29,6 +29,7 @@
     .tag { display:inline-block; font-size:10px; padding:1px 7px; border-radius:10px; margin-left:6px; vertical-align:middle; }
     .tag.game { background:#2e5a3a; color:#aef0c0; }
     .tag.editor { background:#3a3060; color:#d0bfff; }
+    .tag.ar { background:#1f4d5c; color:#9fe6ff; }
     footer { margin-top: 36px; color: #6a7c96; font-size: 11px; }
   </style>
 </head>
@@ -52,6 +53,7 @@
   <div class="grid">
     <a class="card" href="../character-editor/"><div class="name">Character Editor <span class="tag editor">EDITOR</span></div><div class="desc">VRM NPC のステート（通常/警戒/攻撃/ダウン/復帰）に表情・視線・行動を設定し .npc.json として書き出す。</div></a>
     <a class="card" href="../cloth-editor/"><div class="name">Cloth Editor <span class="tag editor">EDITOR</span></div><div class="desc">VRMにマント等の布を着せ、ピン/コライダー/手グリップを設定して書き出す。</div></a>
+    <a class="card" href="../cloth-npc/"><div class="name">AR NPC Cloth <span class="tag ar">AR</span><span class="tag editor">EDITOR</span></div><div class="desc">マント付きVRM NPC(megu/lily/ayu/eri/Joy/ken)をWebXR(AR/VR)で表示。マントはCPU布シミュで揺れ、床に等身大で立つ。目の前のカートでNPC切替・素材(粗さ/光沢/透明/環境光)をライブ調整、手/コントローラで操作＆カート移動。</div></a>
     <a class="card" href="../fx-editor/"><div class="name">FX Editor <span class="tag editor">EDITOR</span></div><div class="desc">地面＋壁の小部屋でNPCのtimeline(VRMA)を再生し、任意フレームにエフェクト(炎/煙/火花/竜巻/自作)を配置。発生位置をギズモで移動/回転、bloom、timeline.json に埋め込み保存。</div></a>
     <a class="card" href="../fx-builder/"><div class="name">FX Builder <span class="tag editor">EDITOR</span></div><div class="desc">基本図形＋テクスチャ＋色/加算合成/UVスクロール/ねじれ/自転/脈動 のレイヤーを重ねて発光VFXのプリセットを作成。粒子レイヤーも混在可。public/fx に保存し FX Editor で使える。</div></a>
     <a class="card" href="../bite-editor/"><div class="name">Bite Editor <span class="tag editor">EDITOR</span></div><div class="desc">プレイヤーVRM＋NPCを並べ、噛む側/噛まれる側のVRMAを同時再生。口アンカーと噛みつき点をギズモで合わせ、Snapで「どんな体勢でも同じ首に噛みつく」アラインを調整。bite.json に保存。</div></a>

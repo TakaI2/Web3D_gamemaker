@@ -466,6 +466,25 @@ function updatePinTargets() {
   simData.bonePinTargetBuffer.value.needsUpdate = true;
 }
 
+// アンカーの吸着先(localOffset)を、現在の変換(editorTransform)＋現在のボーン姿勢で作り直す。
+// simは読み込み時(rest姿勢)に構築されるが、その後VRMAで姿勢が変わるため、開始直前にこれを呼ぶ。
+// これをしないと開始時にアンカーが「現在姿勢の旧オフセット位置」へ飛び、設定位置からずれる。
+const _reBonePos = new THREE.Vector3(), _reBoneQuat = new THREE.Quaternion();
+function reprojectAnchorsToTransform() {
+  if (!anchorMap.size || !mantleData || !mantleOrigPos) return;
+  const snap = applyMantleTransform(mantleOrigPos, mantleData.vertexCount, mantleTransform);
+  for (const [idx, a] of anchorMap) {
+    if (!a.boneNode) continue;
+    a.boneNode.getWorldPosition(_reBonePos);
+    a.boneNode.getWorldQuaternion(_reBoneQuat);
+    a.localOffset = new THREE.Vector3(
+      snap[idx * 3]     - _reBonePos.x,
+      snap[idx * 3 + 1] - _reBonePos.y,
+      snap[idx * 3 + 2] - _reBonePos.z,
+    ).applyQuaternion(_reBoneQuat.invert());
+  }
+}
+
 // ============================================================
 // Mantle Loader
 // ============================================================
@@ -853,6 +872,7 @@ function startSim() {
   if (simRunning)  return;
   // 読み込み時に既に buildSimulation 済みなので再ビルド不要
   if (!simData) simData = buildSimulation(_buildMantleAnalysis());
+  reprojectAnchorsToTransform();   // 開始直前の姿勢でアンカー吸着先を確定（設定位置からずれない）
   simRunning = true;
   document.getElementById('btn-sim-start').disabled = true;
   document.getElementById('btn-sim-stop').disabled  = false;

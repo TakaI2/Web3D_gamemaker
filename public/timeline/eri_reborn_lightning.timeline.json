@@ -1,0 +1,67 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 60,
+  "trimIn": 0,
+  "trimOut": 60,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g7",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 16
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g8",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 16
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g11",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 6
+        },
+        {
+          "start": 6,
+          "end": 17
+        },
+        {
+          "start": 18,
+          "end": 30
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g12",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 7
+        },
+        {
+          "start": 6,
+          "end": 17
+        },
+        {
+          "start": 18,
+          "end": 30
+        }
+      ]
+    }
+  ],
+  "speed": 0.75,
+  "vrma": "attack04.vrma"
+}

@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "fps": 30,
+  "durationFrames": 317,
+  "trimIn": 0,
+  "trimOut": 317,
+  "tracks": [
+    {
+      "kind": "grip",
+      "groupId": "g11",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 212
+        }
+      ]
+    },
+    {
+      "kind": "grip",
+      "groupId": "g12",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 213
+        }
+      ]
+    }
+  ],
+  "vrma": "model_walk.vrma"
+}
