@@ -14,7 +14,7 @@ import { createARCart } from '../lib/ar-cart.js';
 
 const $ = (id) => document.getElementById(id);
 const setStatus = (m) => { const e = $('status'); if (e) e.textContent = m; };
-const NPCS = ['megu', 'lily', 'ayu', 'eri', 'Joy_reborn', 'JOY_vamp', 'ken'];   // clothの有無は読み込み後に判定
+const NPCS = ['JOY_vamp'];   // このエディタは JOY_vamp 専用
 let npcIdx = 0;
 
 // ── レンダラ / シーン / XR ──
@@ -131,16 +131,24 @@ function updateHandGrab() {
 
 // ── AR: 背景オフ＋モデルを目の前へ、カート表示 ──
 let npcRoot = null, cart = null;
+let baseYaw = 0; const modelPose = { yaw: 0, x: 0, z: 0 };   // ユーザー配置調整（向き°/左右/前後）
 let xrModelZ = 0;   // XR中のモデル前方位置（AR=1.6m, VR=2.2m）。ユーザーは床原点にいるので前へ置かないと重なる
 renderer.xr.addEventListener('sessionstart', () => {
   const s = renderer.xr.getSession();
   const ar = s && s.environmentBlendMode && s.environmentBlendMode !== 'opaque';
   scene.background = ar ? null : BG;   // AR=透過 / VR=背景色
   xrModelZ = ar ? -1.6 : -2.2;
-  if (npcRoot) npcRoot.position.set(0, 0, xrModelZ);
+  applyModelPose();
   if (cart) cart.group.visible = true;
 });
-renderer.xr.addEventListener('sessionend', () => { scene.background = BG; xrModelZ = 0; if (npcRoot) npcRoot.position.set(0, 0, 0); if (cart) cart.group.visible = false; });
+renderer.xr.addEventListener('sessionend', () => { scene.background = BG; xrModelZ = 0; applyModelPose(); if (cart) cart.group.visible = false; });
+
+function applyModelPose() {
+  if (!npcRoot) return;
+  const baseZ = renderer.xr.isPresenting ? xrModelZ : 0;
+  npcRoot.position.set(modelPose.x, 0, baseZ + modelPose.z);
+  npcRoot.rotation.y = baseYaw + modelPose.yaw * Math.PI / 180;
+}
 
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
@@ -166,42 +174,48 @@ async function fetchVRMABlobUrl(name) {
   }
   return null;
 }
+// timeline.json を dist(./timeline) または dev(../timeline) から取得（JSONとしてパースできたものを採用）
+async function fetchTimeline(name) {
+  for (const url of [`./timeline/${name}`, `../timeline/${name}`]) {
+    try { return JSON.parse(await (await fetch(url)).text()); } catch { /* 次 */ }
+  }
+  return null;
+}
 
-// NPCが演じるアニメ（どのVRMにも適用できる汎用VRMA）。'default'は各npc.jsonの埋込vrma
+// JOY_vamp用の演技（eri_タイムライン。VRMA＋マント掴み(グリップ)を含む）
 const PERFORMANCES = [
-  { id: 'default', label: 'デフォルト' },
-  { id: 'idle', label: 'アイドル', vrma: 'idle.vrma' },
-  { id: 'walk', label: '歩き', vrma: 'model_walk.vrma' },
-  { id: 'turn', label: 'ターン', vrma: 'VRMA_01.vrma' },
-  { id: 'fly', label: '浮遊', vrma: 'Joy_Fly_down.vrma' },
-  { id: 'fly_f', label: '前進飛行', vrma: 'move_Flying_front.vrma' },
-  { id: 'attack1', label: '攻撃', vrma: 'attack01.vrma' },
-  { id: 'totem', label: 'トーテム', vrma: 'attack02.vrma' },
-  { id: 'thunder', label: '雷撃', vrma: 'attack04.vrma' },
-  { id: 'wrap', label: 'ラップ', vrma: 'wrap.vrma' },
+  { id: 'idle', label: 'アイドル', tl: 'eri_Fly_idle.timeline.json' },
+  { id: 'walk', label: '歩き', tl: 'eri_model_walk.timeline.json' },
+  { id: 'turn', label: 'ターン', tl: 'eri_turn.timeline.json' },
+  { id: 'flyL', label: '左移動', tl: 'eri_Fly_L.timeline.json' },
+  { id: 'flyR', label: '右移動', tl: 'eri_Fly_R.timeline.json' },
+  { id: 'lightning', label: '雷撃', tl: 'eri_reborn_lightning.timeline.json' },
+  { id: 'wrap', label: 'ラップ(マント掴み)', tl: 'eri_wrap.timeline.json' },
 ];
 let perfIdx = 0, curBundle = null;
 
-// 現在のVRMに、選択中の演技(VRMA)を適用して再生
+// 選択中の演技（eri_タイムライン）を適用：VRMA再生＋マントのグリップ範囲を設定
 async function applyPerformance() {
   if (!vrm) return;
   if (mixer) mixer.stopAllAction();
   mixer = null; action = null;
   const perf = PERFORMANCES[perfIdx];
   try {
-    let blobUrl = null;
-    if (perf.id === 'default') { if (curBundle?.vrma) blobUrl = URL.createObjectURL(dataURIToBlob(curBundle.vrma)); }
-    else blobUrl = await fetchVRMABlobUrl(perf.vrma);
-    if (!blobUrl) { durF = 1; return; }   // アニメ無し（静止）
-    const al = new GLTFLoader(); al.register((p) => new VRMAnimationLoaderPlugin(p));
-    const ag = await al.loadAsync(blobUrl);
-    const anims = ag.userData.vrmAnimations;
-    if (anims && anims.length) {
-      const clip = createVRMAnimationClip(anims[0], vrm);
-      mixer = new THREE.AnimationMixer(vrm.scene);
-      action = mixer.clipAction(clip); action.reset(); action.play();
-      tlFps = 30; durF = Math.max(1, Math.round(clip.duration * 30));
+    const tl = await fetchTimeline(perf.tl);
+    if (!tl) { durF = 1; if (cape) cape.setTimeline(null); return; }
+    const blobUrl = tl.vrma ? await fetchVRMABlobUrl(tl.vrma) : null;
+    if (blobUrl) {
+      const al = new GLTFLoader(); al.register((p) => new VRMAnimationLoaderPlugin(p));
+      const ag = await al.loadAsync(blobUrl);
+      const anims = ag.userData.vrmAnimations;
+      if (anims && anims.length) {
+        const clip = createVRMAnimationClip(anims[0], vrm);
+        mixer = new THREE.AnimationMixer(vrm.scene);
+        action = mixer.clipAction(clip); action.reset(); action.play();
+      }
     }
+    tlFps = tl.fps || 30; durF = tl.durationFrames || 300;
+    if (cape) cape.setTimeline(tl);   // マント掴み（グリップ範囲）を更新
   } catch (e) { console.warn('演技の読み込み失敗:', perf.id, e); }
 }
 
@@ -212,6 +226,51 @@ let capeVisible = true, wireOn = false;
 // ── NPC読み込み（差し替え） ──
 let vrm = null, mixer = null, action = null, cape = null, tlFps = 30, durF = 300, loading = false;
 let hipsNode = null; const hipsRest = new THREE.Vector3();   // ルートモーション除去（その場で演技）
+
+// ── プレイヤーを見る（視線=vrm.lookAt / 首・頭=ボーンをyawで自然に） ──
+const lookTarget = new THREE.Object3D(); scene.add(lookTarget);   // 視線(目)のターゲット＝プレイヤー頭
+let neckNode = null, headNode = null, armL = null, armR = null;
+const lookS = { w: 0 };
+const bodyLocalFwd = new THREE.Vector3(0, 0, 1);   // モデル前方(npcRoot相対)。安静姿勢で確定
+const _lp = new THREE.Vector3(), _al = new THREE.Vector3(), _ar = new THREE.Vector3();
+const _rgt = new THREE.Vector3(), _upv = new THREE.Vector3(0, 1, 0), _fwd = new THREE.Vector3();
+const _hpv = new THREE.Vector3(), _dh = new THREE.Vector3(), _hDir = new THREE.Vector3(), _hFwd = new THREE.Vector3();
+const _bw = new THREE.Quaternion(), _pw = new THREE.Quaternion();
+const _hqCur = new THREE.Quaternion(), _hqDes = new THREE.Quaternion(), _hqPar = new THREE.Quaternion(), _hqDelta = new THREE.Quaternion();
+const HEAD_FWD = new THREE.Vector3(0, 0, 1);   // VRM頭の顔正面（VRMLookAt.faceFront 既定=+Z）
+const LK = { HEAD_MAX: Math.PI * 0.55, IN: 1.0, OUT: 1.75, SPEED: 6 };   // 頭最大~99°, 正面錐~57°で満/~100°で切れる
+
+// 首・頭をプレイヤーへ（swing-catch の applyHeadLook 方式：頭前方を setFromUnitVectors で目標へ、角度制限つき）
+function updateHeadLook(dt) {
+  if (!headNode || !npcRoot) return;
+  camera.getWorldPosition(_lp);   // プレイヤー頭（XR=ヘッドセット / PC=カメラ）
+  headNode.getWorldPosition(_hpv);
+  // 正面錐の重み：モデル前方(npcRoot基準・アニメで揺れない)とプレイヤー水平方向の角
+  npcRoot.getWorldQuaternion(_bw);
+  _fwd.copy(bodyLocalFwd).applyQuaternion(_bw); _fwd.y = 0;
+  _dh.copy(_lp).sub(_hpv); _dh.y = 0;
+  let wt = 0;
+  if (_fwd.lengthSq() > 1e-6 && _dh.lengthSq() > 1e-6) {
+    const fa = _fwd.normalize().angleTo(_dh.normalize());
+    wt = fa < LK.IN ? 1 : fa > LK.OUT ? 0 : (LK.OUT - fa) / (LK.OUT - LK.IN);
+  }
+  lookS.w += (wt - lookS.w) * (1 - Math.exp(-dt * LK.SPEED));   // 滑らかに（急に向かない）
+  if (lookS.w < 0.01) return;
+  // 頭の前方を目標方向へ回す
+  _hDir.copy(_lp).sub(_hpv);
+  if (_hDir.lengthSq() < 1e-8) return;
+  _hDir.normalize();
+  headNode.getWorldQuaternion(_hqCur);
+  _hFwd.copy(HEAD_FWD).applyQuaternion(_hqCur).normalize();
+  const ang = _hFwd.angleTo(_hDir);
+  if (ang < 1e-4) return;
+  let w = lookS.w;
+  if (ang > LK.HEAD_MAX) w *= LK.HEAD_MAX / ang;   // 後ろへ向きすぎない
+  _hqDelta.setFromUnitVectors(_hFwd, _hDir);
+  _hqDes.identity().slerp(_hqDelta, w).multiply(_hqCur);   // delta を w 分 → 望ましいワールド回転
+  headNode.parent.getWorldQuaternion(_hqPar);
+  headNode.quaternion.copy(_hqPar.invert().multiply(_hqDes)).normalize();
+}
 async function loadNPC(name) {
   if (loading) return; loading = true;
   setStatus(name + ' 読み込み中…');
@@ -231,15 +290,34 @@ async function loadNPC(name) {
     npcRoot = vrm.scene;
     hipsNode = vrm.humanoid?.getNormalizedBoneNode('hips') ?? null;   // 腰の安静位置を記録（後でXZロック）
     if (hipsNode) hipsRest.copy(hipsNode.position);
-    if (renderer.xr.isPresenting) npcRoot.position.set(0, 0, xrModelZ);
-    // 演技（選択中のVRMAを適用。デフォルト=埋込vrma）
+    // 視線＋首の追従用ボーン
+    const hb = vrm.humanoid;
+    neckNode = hb?.getNormalizedBoneNode('neck') ?? null;
+    headNode = hb?.getNormalizedBoneNode('head') ?? null;
+    armL = hb?.getNormalizedBoneNode('leftUpperArm') ?? null;
+    armR = hb?.getNormalizedBoneNode('rightUpperArm') ?? null;
+    lookS.w = 0;
+    if (vrm.lookAt) vrm.lookAt.target = lookTarget;   // 目でプレイヤーを追う
+    // 安静姿勢で顔の前方を確定→モデルを+Z（正面/ユーザー方向）へ向ける（頭ボーンの顔正面=HEAD_FWDを基準に）
+    vrm.update(0); vrm.scene.updateMatrixWorld(true);
+    if (headNode) {
+      headNode.getWorldQuaternion(_hqCur);
+      _fwd.copy(HEAD_FWD).applyQuaternion(_hqCur); _fwd.y = 0;
+      if (_fwd.lengthSq() > 1e-6) {
+        _fwd.normalize();
+        npcRoot.getWorldQuaternion(_pw);
+        bodyLocalFwd.copy(_fwd).applyQuaternion(_pw.invert());   // 顔前方（npcRoot相対・不変）
+        npcRoot.rotation.y -= Math.atan2(_fwd.x, _fwd.z);       // 顔を+Z（ユーザー）へ
+      }
+    }
+    baseYaw = npcRoot.rotation.y;   // 自動整列(+Z)後を基準に
+    modelPose.yaw = 0; modelPose.x = 0; modelPose.z = 0;
+    applyModelPose();
+    // マントを先に作る（安静姿勢でアンカー確定）。timelineは後の applyPerformance で setTimeline
     curBundle = bundle;
-    await applyPerformance();
-    // マント
     if (bundle.cloth) {
       vrm.update(0); vrm.scene.updateMatrixWorld(true);
-      cape = createVRMClothCPU({ scene, vrm, cloth: bundle.cloth, timeline: bundle.timeline, basePos: new THREE.Vector3(0, 0, 0), floorY: -1e9 });
-      // 素材状態を「そのNPCの既定値」で初期化して反映
+      cape = createVRMClothCPU({ scene, vrm, cloth: bundle.cloth, timeline: null, basePos: new THREE.Vector3(0, 0, 0), floorY: 0 });
       matState.roughness = cape.defaults.roughness; matState.sheen = cape.defaults.sheen; matState.opacity = cape.defaults.opacity;
       applyMaterial();
       cape.clothMesh.visible = capeVisible;
@@ -247,6 +325,8 @@ async function loadNPC(name) {
     } else {
       $('hud-verts').textContent = 'マント無し';
     }
+    // 演技（eri_タイムライン＝VRMA再生＋マント掴み）を適用
+    await applyPerformance();
     syncUI();
     setStatus(name + ' 表示中' + (bundle.cloth ? '（マント=CPUクロス）' : '（マント無し）'));
   } catch (e) { setStatus('読み込み失敗: ' + e.message); console.error(e); }
@@ -267,6 +347,10 @@ function syncUI() {
   $('val-rough').textContent = matState.roughness.toFixed(2); $('val-sheen').textContent = matState.sheen.toFixed(2);
   $('val-opac').textContent = matState.opacity.toFixed(2); $('val-env').textContent = matState.env.toFixed(2);
   $('cb-cape').checked = capeVisible; $('cb-wire').checked = wireOn;
+  set('sl-yaw', modelPose.yaw); set('sl-x', modelPose.x); set('sl-z', modelPose.z);
+  if ($('val-yaw')) $('val-yaw').textContent = modelPose.yaw.toFixed(0);
+  if ($('val-x')) $('val-x').textContent = modelPose.x.toFixed(2);
+  if ($('val-z')) $('val-z').textContent = modelPose.z.toFixed(2);
   if (cart) syncCart();
 }
 function bindUI() {
@@ -280,14 +364,19 @@ function bindUI() {
   on('sl-rough', 'roughness', 'val-rough'); on('sl-sheen', 'sheen', 'val-sheen'); on('sl-opac', 'opacity', 'val-opac'); on('sl-env', 'env', 'val-env');
   $('cb-cape').addEventListener('change', (e) => { capeVisible = e.target.checked; if (cape) cape.clothMesh.visible = capeVisible; syncCart(); });
   $('cb-wire').addEventListener('change', (e) => { wireOn = e.target.checked; applyMaterial(); syncCart(); });
+  const onPose = (id, key, valId, fmt) => $(id).addEventListener('input', (e) => { modelPose[key] = parseFloat(e.target.value); $(valId).textContent = fmt(modelPose[key]); applyModelPose(); syncCart(); });
+  onPose('sl-yaw', 'yaw', 'val-yaw', (v) => v.toFixed(0)); onPose('sl-x', 'x', 'val-x', (v) => v.toFixed(2)); onPose('sl-z', 'z', 'val-z', (v) => v.toFixed(2));
 }
 
 // ── ARカート（3D UI） ──
 const PARAMS = [
-  { key: 'roughness', name: '粗さ', min: 0, max: 1, step: 0.05 },
-  { key: 'sheen', name: '光沢', min: 0, max: 1, step: 0.1 },
-  { key: 'opacity', name: '透明度', min: 0.2, max: 1, step: 0.05 },
-  { key: 'env', name: '環境光', min: 0, max: 2, step: 0.1 },
+  { key: 'roughness', name: '粗さ', min: 0, max: 1, step: 0.05, kind: 'mat' },
+  { key: 'sheen', name: '光沢', min: 0, max: 1, step: 0.1, kind: 'mat' },
+  { key: 'opacity', name: '透明度', min: 0.2, max: 1, step: 0.05, kind: 'mat' },
+  { key: 'env', name: '環境光', min: 0, max: 2, step: 0.1, kind: 'mat' },
+  { key: 'yaw', name: '向き', min: -180, max: 180, step: 10, kind: 'pose' },
+  { key: 'x', name: '左右', min: -2, max: 2, step: 0.1, kind: 'pose' },
+  { key: 'z', name: '前後', min: -2, max: 2, step: 0.1, kind: 'pose' },
 ];
 let paramIdx = 0;
 function curParam() { return PARAMS[paramIdx]; }
@@ -299,14 +388,17 @@ function syncCart() {
   cart.setLabel('wire', 'ワイヤ', wireOn ? 'ON' : 'OFF');
   const p = curParam();
   cart.setLabel('paramSel', '項目', p.name);
-  cart.setLabel('paramVal', p.name, (p.key === 'env' ? matState.env : matState[p.key]).toFixed(2));
+  const pv = (p.kind === 'pose' ? modelPose[p.key] : matState[p.key]);
+  cart.setLabel('paramVal', p.name, p.key === 'yaw' ? pv.toFixed(0) + '°' : pv.toFixed(2));
 }
 function cartAdjust(dir) {
   const p = curParam();
-  let v = matState[p.key] + dir * p.step;
+  const store = p.kind === 'pose' ? modelPose : matState;
+  let v = store[p.key] + dir * p.step;
   v = Math.max(p.min, Math.min(p.max, v));
-  matState[p.key] = Math.round(v * 100) / 100;
-  applyMaterial(); syncUI();
+  store[p.key] = Math.round(v * 100) / 100;
+  if (p.kind === 'pose') applyModelPose(); else applyMaterial();
+  syncUI();
 }
 function buildCart() {
   const C = [-0.18, 0.0, 0.18], R = [0.17, 0.085, 0.0, -0.085, -0.17], D = 0.075;
@@ -328,8 +420,8 @@ function buildCart() {
       { id: 'paramVal', label: '粗さ', sub: '0.45', x: C[1], z: R[4], w: 0.5, d: D, type: 'display' },
     ],
     onPress: (id) => {
-      if (id === 'npcPrev') { npcIdx = (npcIdx + NPCS.length - 1) % NPCS.length; loadNPC(NPCS[npcIdx]); }
-      else if (id === 'npcNext') { npcIdx = (npcIdx + 1) % NPCS.length; loadNPC(NPCS[npcIdx]); }
+      if (id === 'npcPrev') { if (NPCS.length > 1) { npcIdx = (npcIdx + NPCS.length - 1) % NPCS.length; loadNPC(NPCS[npcIdx]); } }
+      else if (id === 'npcNext') { if (NPCS.length > 1) { npcIdx = (npcIdx + 1) % NPCS.length; loadNPC(NPCS[npcIdx]); } }
       else if (id === 'perfPrev') { perfIdx = (perfIdx + PERFORMANCES.length - 1) % PERFORMANCES.length; applyPerformance(); syncUI(); }
       else if (id === 'perfNext') { perfIdx = (perfIdx + 1) % PERFORMANCES.length; applyPerformance(); syncUI(); }
       else if (id === 'cape') { capeVisible = !capeVisible; if (cape) cape.clothMesh.visible = capeVisible; syncUI(); }
@@ -358,7 +450,13 @@ renderer.setAnimationLoop(() => {
   try {
     if (mixer) mixer.update(dt);
     if (hipsNode) { hipsNode.position.x = hipsRest.x; hipsNode.position.z = hipsRest.z; }   // 移動系アニメを その場 に固定
-    if (vrm) { vrm.update(dt); vrm.scene.updateMatrixWorld(true); }
+    if (vrm) {
+      camera.getWorldPosition(lookTarget.position);   // 視線ターゲット＝プレイヤー頭
+      vrm.scene.updateMatrixWorld(true);              // アニメ姿勢の世界行列（首追従の計算用）
+      updateHeadLook(dt);                             // 首・頭をyawでプレイヤーへ（正規化ボーン→vrm.updateでrawへ転写）
+      vrm.update(dt);                                 // 転写＋spring＋視線(目)
+      vrm.scene.updateMatrixWorld(true);
+    }
     if (cape && capeVisible) { const frame = action ? (action.time * tlFps) % durF : 0; cape.update(dt, frame); }
     if (cart) {
       cart.update(dt);
