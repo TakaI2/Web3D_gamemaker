@@ -220,8 +220,8 @@ async function applyPerformance() {
 }
 
 // ── 素材/環境の状態（NPC間で保持） ──
-const matState = { roughness: 0.45, sheen: 1, opacity: 1, env: 1.0 };
-let capeVisible = true, wireOn = false;
+const matState = { roughness: 0.45, sheen: 1, opacity: 1, env: 1.0, thickness: 0.006 };
+let capeVisible = true, wireOn = false, unifyColor = false;
 
 // ── NPC読み込み（差し替え） ──
 let vrm = null, mixer = null, action = null, cape = null, tlFps = 30, durF = 300, loading = false;
@@ -318,7 +318,7 @@ async function loadNPC(name) {
     if (bundle.cloth) {
       vrm.update(0); vrm.scene.updateMatrixWorld(true);
       cape = createVRMClothCPU({ scene, vrm, cloth: bundle.cloth, timeline: null, basePos: new THREE.Vector3(0, 0, 0), floorY: 0 });
-      matState.roughness = cape.defaults.roughness; matState.sheen = cape.defaults.sheen; matState.opacity = cape.defaults.opacity;
+      matState.roughness = cape.defaults.roughness; matState.sheen = cape.defaults.sheen; matState.opacity = cape.defaults.opacity; matState.thickness = cape.defaults.thickness;
       applyMaterial();
       cape.clothMesh.visible = capeVisible;
       $('hud-verts').textContent = cape.vertexCount.toLocaleString() + ' 頂点';
@@ -334,7 +334,7 @@ async function loadNPC(name) {
 }
 
 function applyMaterial() {
-  if (cape) cape.setMaterial({ roughness: matState.roughness, sheen: matState.sheen, opacity: matState.opacity, wireframe: wireOn });
+  if (cape) cape.setMaterial({ roughness: matState.roughness, sheen: matState.sheen, opacity: matState.opacity, thickness: matState.thickness, wireframe: wireOn, unify: unifyColor });
   scene.environmentIntensity = matState.env;
 }
 
@@ -346,7 +346,8 @@ function syncUI() {
   set('sl-rough', matState.roughness); set('sl-sheen', matState.sheen); set('sl-opac', matState.opacity); set('sl-env', matState.env);
   $('val-rough').textContent = matState.roughness.toFixed(2); $('val-sheen').textContent = matState.sheen.toFixed(2);
   $('val-opac').textContent = matState.opacity.toFixed(2); $('val-env').textContent = matState.env.toFixed(2);
-  $('cb-cape').checked = capeVisible; $('cb-wire').checked = wireOn;
+  set('sl-thick', matState.thickness); if ($('val-thick')) $('val-thick').textContent = matState.thickness.toFixed(3);
+  $('cb-cape').checked = capeVisible; $('cb-wire').checked = wireOn; if ($('cb-unify')) $('cb-unify').checked = unifyColor;
   set('sl-yaw', modelPose.yaw); set('sl-x', modelPose.x); set('sl-z', modelPose.z);
   if ($('val-yaw')) $('val-yaw').textContent = modelPose.yaw.toFixed(0);
   if ($('val-x')) $('val-x').textContent = modelPose.x.toFixed(2);
@@ -362,8 +363,10 @@ function bindUI() {
   }
   const on = (id, key, valId) => $(id).addEventListener('input', (e) => { matState[key] = parseFloat(e.target.value); $(valId).textContent = matState[key].toFixed(2); applyMaterial(); syncCart(); });
   on('sl-rough', 'roughness', 'val-rough'); on('sl-sheen', 'sheen', 'val-sheen'); on('sl-opac', 'opacity', 'val-opac'); on('sl-env', 'env', 'val-env');
+  $('sl-thick')?.addEventListener('input', (e) => { matState.thickness = parseFloat(e.target.value); $('val-thick').textContent = matState.thickness.toFixed(3); applyMaterial(); syncCart(); });
   $('cb-cape').addEventListener('change', (e) => { capeVisible = e.target.checked; if (cape) cape.clothMesh.visible = capeVisible; syncCart(); });
   $('cb-wire').addEventListener('change', (e) => { wireOn = e.target.checked; applyMaterial(); syncCart(); });
+  $('cb-unify')?.addEventListener('change', (e) => { unifyColor = e.target.checked; applyMaterial(); });
   const onPose = (id, key, valId, fmt) => $(id).addEventListener('input', (e) => { modelPose[key] = parseFloat(e.target.value); $(valId).textContent = fmt(modelPose[key]); applyModelPose(); syncCart(); });
   onPose('sl-yaw', 'yaw', 'val-yaw', (v) => v.toFixed(0)); onPose('sl-x', 'x', 'val-x', (v) => v.toFixed(2)); onPose('sl-z', 'z', 'val-z', (v) => v.toFixed(2));
 }
@@ -374,6 +377,7 @@ const PARAMS = [
   { key: 'sheen', name: '光沢', min: 0, max: 1, step: 0.1, kind: 'mat' },
   { key: 'opacity', name: '透明度', min: 0.2, max: 1, step: 0.05, kind: 'mat' },
   { key: 'env', name: '環境光', min: 0, max: 2, step: 0.1, kind: 'mat' },
+  { key: 'thickness', name: '厚み', min: 0, max: 0.03, step: 0.002, kind: 'mat' },
   { key: 'yaw', name: '向き', min: -180, max: 180, step: 10, kind: 'pose' },
   { key: 'x', name: '左右', min: -2, max: 2, step: 0.1, kind: 'pose' },
   { key: 'z', name: '前後', min: -2, max: 2, step: 0.1, kind: 'pose' },
@@ -389,7 +393,7 @@ function syncCart() {
   const p = curParam();
   cart.setLabel('paramSel', '項目', p.name);
   const pv = (p.kind === 'pose' ? modelPose[p.key] : matState[p.key]);
-  cart.setLabel('paramVal', p.name, p.key === 'yaw' ? pv.toFixed(0) + '°' : pv.toFixed(2));
+  cart.setLabel('paramVal', p.name, p.key === 'yaw' ? pv.toFixed(0) + '°' : p.key === 'thickness' ? pv.toFixed(3) : pv.toFixed(2));
 }
 function cartAdjust(dir) {
   const p = curParam();
@@ -426,7 +430,7 @@ function buildCart() {
       else if (id === 'perfNext') { perfIdx = (perfIdx + 1) % PERFORMANCES.length; applyPerformance(); syncUI(); }
       else if (id === 'cape') { capeVisible = !capeVisible; if (cape) cape.clothMesh.visible = capeVisible; syncUI(); }
       else if (id === 'wire') { wireOn = !wireOn; applyMaterial(); syncUI(); }
-      else if (id === 'reset') { if (cape) { matState.roughness = cape.defaults.roughness; matState.sheen = cape.defaults.sheen; matState.opacity = cape.defaults.opacity; } matState.env = 1.0; applyMaterial(); syncUI(); }
+      else if (id === 'reset') { if (cape) { matState.roughness = cape.defaults.roughness; matState.sheen = cape.defaults.sheen; matState.opacity = cape.defaults.opacity; matState.thickness = cape.defaults.thickness; } matState.env = 1.0; applyMaterial(); syncUI(); }
       else if (id === 'paramSel') { paramIdx = (paramIdx + 1) % PARAMS.length; syncCart(); }
       else if (id === 'dec') cartAdjust(-1);
       else if (id === 'inc') cartAdjust(1);
