@@ -571,17 +571,50 @@ let nav = null;
 
 function dataURIToBlob(uri) { const [head, data] = uri.split(','); const bin = atob(data); const arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i); return new Blob([arr], { type: (head.match(/:(.*?);/) || [])[1] || 'application/octet-stream' }); }
 async function fetchFirst(urls, asJson) {
-  for (const u of urls) { try { const r = await fetch(u); if (!r.ok) continue; return asJson ? JSON.parse(await r.text()) : await r.arrayBuffer(); } catch { /* next */ } }
+  for (const u of urls) {
+    try {
+      const r = await fetch(u);
+      if (!r.ok) continue;
+      // 開発サーバは存在しないパスに index.html を 200 で返すことがある。
+      // JSON なら JSON.parse が弾くが、バイナリは中身を見ないと気づけないので content-type で判定する。
+      if (!asJson && /text\/html/i.test(r.headers.get('content-type') || '')) continue;
+      return asJson ? JSON.parse(await r.text()) : await r.arrayBuffer();
+    } catch { /* next */ }
+  }
   return null;
+}
+// NPCバンドルの読み込み。scripts/split-npc.mjs で切り出した <name>.meta.json + <name>.vrm があれば
+// そちらを使う（base64 埋め込みの .npc.json より 25% 小さく、巨大JSONのパースと atob が要らない）。
+// 無ければ従来どおり .npc.json を読む。返り値の vrmUrl はそのまま GLTFLoader に渡せる。
+async function loadNpcBundle(name, dirs) {
+  const at = (f) => dirs.map((d) => d + f);
+  const meta = await fetchFirst(at(name + '.meta.json'), true);
+  if (meta) {
+    const bin = async (key) => {
+      const rel = meta[key + 'Url'];
+      if (!rel) return null;
+      const buf = await fetchFirst(at(rel.replace(/^\.\//, '')), false);
+      return buf ? URL.createObjectURL(new Blob([buf])) : null;
+    };
+    const [vrmUrl, vrmaUrl] = await Promise.all([bin('vrm'), bin('vrma')]);
+    if (vrmUrl) return { ...meta, vrmUrl, vrmaUrl };
+  }
+  const bundle = await fetchFirst(at(name + '.npc.json'), true);
+  if (!bundle) return null;
+  return {
+    ...bundle,
+    vrmUrl: bundle.vrm ? URL.createObjectURL(dataURIToBlob(bundle.vrm)) : null,
+    vrmaUrl: bundle.vrma ? URL.createObjectURL(dataURIToBlob(bundle.vrma)) : null,
+  };
 }
 
 async function loadVamp() {
   setStatus('JOY_vamp 読み込み中…');
-  const bundle = await fetchFirst(['./JOY_vamp.npc.json', '../npc/JOY_vamp.npc.json'], true);
-  if (!bundle) { console.warn('JOY_vamp.npc.json が読めません'); return; }
+  const bundle = await loadNpcBundle('JOY_vamp', ['./', '../npc/']);
+  if (!bundle || !bundle.vrmUrl) { console.warn('JOY_vamp のモデルが読めません'); return; }
   const gl = new GLTFLoader();
   gl.register((pl) => new VRMLoaderPlugin(pl, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(pl, { materialType: MToonNodeMaterial }) }));
-  const gltf = await gl.loadAsync(URL.createObjectURL(dataURIToBlob(bundle.vrm)));
+  const gltf = await gl.loadAsync(bundle.vrmUrl);
   const vrm = gltf.userData.vrm;
   VRMUtils.removeUnnecessaryVertices(gltf.scene); VRMUtils.combineSkeletons(gltf.scene);
   vamp.vrm = vrm;
@@ -645,7 +678,7 @@ async function loadVamp() {
   catch (e) { console.warn('マント生成をスキップ:', e.message); }
   await loadCharLight();
   // 環境光(env)はシーン全体ではなくマントへ。全体に掛けると暗い屋敷が白飛びするため。
-  await hdrReady; applyCapeEnv();
+  hdrReady.then(applyCapeEnv);   // HDRは外部サイトから取るので待たない（届いた時点でマントに適用）
   if (vamp.cape && CAPE_PARAM && CAPE_PARAM.env != null) {
     try { vamp.cape.setMaterial({ envMapIntensity: CAPE_PARAM.env }); } catch { /* noop */ }
   }
@@ -988,9 +1021,9 @@ let speechUI = null, vampSpeech = null;
 
 async function prepareKenAssets() {
   try {
-    const bundle = await fetchFirst(['./ken.npc.json', '../npc/ken.npc.json'], true);
-    if (!bundle) return false;
-    kenAssets.vrmBlobUrl = URL.createObjectURL(dataURIToBlob(bundle.vrm));
+    const bundle = await loadNpcBundle('ken', ['./', '../npc/']);
+    if (!bundle || !bundle.vrmUrl) return false;
+    kenAssets.vrmBlobUrl = bundle.vrmUrl;
     const buf = await fetchFirst(['./vrma/Catwalk_Walk_Forward.vrma', '../vrma/Catwalk_Walk_Forward.vrma'], false);
     if (buf) {
       const al = new GLTFLoader(); al.register((pl) => new VRMAnimationLoaderPlugin(pl));
