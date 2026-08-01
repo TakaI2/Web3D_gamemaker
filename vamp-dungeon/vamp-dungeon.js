@@ -7,6 +7,7 @@ import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
 import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
+import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
 import { pmremTexture } from 'https://esm.sh/three@0.184.0/tsl';
 import { VRMLoaderPlugin, MToonMaterialLoaderPlugin, VRMUtils } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
 import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
@@ -67,22 +68,73 @@ const hdrReady = new UltraHDRLoader().loadAsync('https://threejs.org/examples/te
 camera.add(torch);
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
+// ── マテリアルの共有 ──
+// キットのGLBは部材ごとに別マテリアルの実体を持つが、実際の見た目は数種類しかない
+// （実測: 141実体 → 見た目は20種類）。WebGPU では 1マテリアルにつき TSL のノードグラフを
+// 解析して WGSL を生成するため、同じ見た目のものは1つに統合して構築回数を減らす。
+const matPool = new Map();
+function matKey(m) {
+  const t = (x) => (x ? x.uuid : '-');
+  return [
+    m.type, m.color?.getHexString(), m.roughness, m.metalness,
+    m.emissive?.getHexString(), m.emissiveIntensity, m.opacity, m.alphaTest,
+    m.transparent, m.side, m.flatShading, m.vertexColors, m.depthWrite, m.wireframe,
+    t(m.map), t(m.normalMap), t(m.roughnessMap), t(m.metalnessMap), t(m.emissiveMap), t(m.aoMap), t(m.alphaMap),
+  ].join('|');
+}
+function shareMaterial(m) {
+  if (!m || !m.isMaterial) return m;
+  const k = matKey(m);
+  const hit = matPool.get(k);
+  if (hit && hit !== m) { m.dispose(); return hit; }
+  if (!hit) matPool.set(k, m);
+  return hit || m;
+}
+
 // ── モデル読み込み（bottom-center 原点に正規化＝room-editor と同じ規約） ──
 const loader = new GLTFLoader();
 async function loadPart(dir, name) {
   const url = dir.split('/').map(encodeURIComponent).join('/').replace(/^\.\.%2F|^%2E%2E\//, '../') + encodeURIComponent(name) + '.glb';
   const gltf = await loader.loadAsync(dir + encodeURIComponent(name) + '.glb');
   const obj = gltf.scene;
+  // 読み込み直後に共有へ差し替える＝この部材を使う全ての経路（InstancedMesh・編集用clone）に効く
+  obj.traverse((o) => {
+    if (!o.isMesh) return;
+    o.material = Array.isArray(o.material) ? o.material.map(shareMaterial) : shareMaterial(o.material);
+  });
   const box = new THREE.Box3().setFromObject(obj);
   const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
   obj.position.set(-c.x, -box.min.y, -c.z);
   return { obj, size, url };
 }
-// 部材の全メッシュを1つのジオメトリ配列として取り出す（InstancedMesh 化のため）
+// 部材の全メッシュを取り出す（InstancedMesh 化のため）。
+// WebGPU は (ジオメトリ×マテリアル) の組ごとにシェーダを構築するため、部材内で同じマテリアルの
+// サブメッシュはジオメトリを統合して組の数を減らす。起動時間はこの構築回数でほぼ決まる。
+const MERGE_ATTR = ['position', 'normal', 'uv'];
+const collectCache = new WeakMap();   // userData に持たせると clone 時に JSON 化されて壊れる
 function collectMeshes(root) {
-  const out = [];
+  const hit = collectCache.get(root);
+  if (hit) return hit;
+  const groups = new Map(), out = [];
   root.updateMatrixWorld(true);
-  root.traverse((o) => { if (o.isMesh) out.push({ geo: o.geometry, mat: o.material, mat4: o.matrixWorld.clone() }); });
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    if (Array.isArray(o.material)) { out.push({ geo: o.geometry, mat: o.material, mat4: o.matrixWorld.clone() }); return; }
+    const g = o.geometry.clone().applyMatrix4(o.matrixWorld);   // 統合するので行列を焼き込む
+    for (const k of Object.keys(g.attributes)) if (!MERGE_ATTR.includes(k)) g.deleteAttribute(k);
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]);   // 統合は index の有無を揃える必要がある
+    const k = o.material.uuid;
+    if (!groups.has(k)) groups.set(k, { mat: o.material, geos: [] });
+    groups.get(k).geos.push(g);
+  });
+  const I = new THREE.Matrix4();
+  for (const { mat, geos } of groups.values()) {
+    let geo = geos[0];
+    if (geos.length > 1) { const m = mergeGeometries(geos, false); if (m) geo = m; else { for (const g of geos) out.push({ geo: g, mat, mat4: I }); continue; } }
+    out.push({ geo, mat, mat4: I });
+  }
+  collectCache.set(root, out);
   return out;
 }
 
@@ -204,17 +256,36 @@ async function rebuildItemInstances() {
     _sv.set(pl.sx, pl.sy, pl.sz);
     push(it.model, _m.compose(_p, _q, _sv).clone());
   }
+  // 家具は種類が多く（実測54種）、種類ごとに InstancedMesh を作ると (ジオメトリ×マテリアル) の
+  // 組が増えて起動時のシェーダ構築が膨らむ。マテリアル単位でジオメトリを1つに焼き込み、
+  // 描画オブジェクトを組の数まで減らす（インスタンス化の利点よりシェーダ構築の削減が効く）。
+  const merged = new Map();   // マテリアル → 統合待ちのジオメトリ配列
+  const mm = new THREE.Matrix4();
   for (const [kind, mats] of buckets) {
     const part = partsCache[kind]; if (!part || !mats.length) continue;
+    const overhead = kind === 'chandelier';   // 観察モードで隠す対象は混ぜない
     for (const sub of collectMeshes(part.obj)) {
-      const inst = new THREE.InstancedMesh(sub.geo, sub.mat, mats.length);
-      const mm = new THREE.Matrix4();
-      for (let i = 0; i < mats.length; i++) inst.setMatrixAt(i, mm.multiplyMatrices(mats[i], sub.mat4));
-      inst.instanceMatrix.needsUpdate = true;
-      inst.frustumCulled = false;
-      if (kind === 'chandelier') inst.userData.overhead = true;
-      itemGroup.add(inst);
+      if (Array.isArray(sub.mat)) {   // マルチマテリアルは統合せずインスタンスのまま
+        const inst = new THREE.InstancedMesh(sub.geo, sub.mat, mats.length);
+        for (let i = 0; i < mats.length; i++) inst.setMatrixAt(i, mm.multiplyMatrices(mats[i], sub.mat4));
+        inst.instanceMatrix.needsUpdate = true; inst.frustumCulled = false;
+        if (overhead) inst.userData.overhead = true;
+        itemGroup.add(inst); continue;
+      }
+      const key = sub.mat.uuid + (overhead ? '|oh' : '');
+      if (!merged.has(key)) merged.set(key, { mat: sub.mat, overhead, geos: [] });
+      const bucket = merged.get(key).geos;
+      for (const m of mats) bucket.push(sub.geo.clone().applyMatrix4(mm.multiplyMatrices(m, sub.mat4)));
     }
+  }
+  for (const { mat, overhead, geos } of merged.values()) {
+    const geo = geos.length === 1 ? geos[0] : mergeGeometries(geos, false);
+    if (!geo) { for (const g of geos) { const mh = new THREE.Mesh(g, mat); mh.frustumCulled = false; if (overhead) mh.userData.overhead = true; itemGroup.add(mh); } continue; }
+    if (geos.length > 1) for (const g of geos) g.dispose();
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    if (overhead) mesh.userData.overhead = true;
+    itemGroup.add(mesh);
   }
 }
 function setGoalCell(cx, cz) {
@@ -1512,13 +1583,20 @@ function editSelect(obj, additive) {
     : edit.sel.length === 1 ? (prim === goalMesh ? '🏁 ゴール地点' : (prim.userData.item?.model || '?'))
     : edit.sel.length + '個選択中';
 }
+// マテリアルは同じ見た目のものを共有しているので、選択色を直接書くと同じ部材が全部光ってしまう。
+// ハイライト中だけ複製に差し替え、解除で共有マテリアルへ戻す。
 function setEditHighlight(obj, on) {
   obj.traverse((o) => {
     if (!o.isMesh) return;
-    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
-      if (!m) continue;
-      if (on) { if (m.emissive) { o.userData._em = m.emissive.getHex(); m.emissive.setHex(0x2255ff); } }
-      else if (o.userData._em != null && m.emissive) { m.emissive.setHex(o.userData._em); delete o.userData._em; }
+    if (on) {
+      if (o.userData._matOrg) return;
+      o.userData._matOrg = o.material;
+      const mk = (m) => { if (!m || !m.emissive) return m; const c = m.clone(); c.emissive.setHex(0x2255ff); return c; };
+      o.material = Array.isArray(o.material) ? o.material.map(mk) : mk(o.material);
+    } else if (o.userData._matOrg) {
+      for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m !== o.userData._matOrg) m.dispose();
+      o.material = o.userData._matOrg;
+      delete o.userData._matOrg;
     }
   });
 }
@@ -1790,7 +1868,7 @@ $('btn-start').addEventListener('click', startGame);
 
 window.__game = {
   get phase() { return phase; }, get player() { return player; }, get dg() { return dg; },
-  startGame, camera, get goal() { return goalMesh; },
+  startGame, camera, renderer, get goal() { return goalMesh; },
   teleport(cx, cz) { player.pos.set(cx * TILE, EYE_H, cz * TILE); player.vel.set(0, 0, 0); },
   get vamp() { return vamp; }, get nav() { return nav; }, get drain() { return drain; },
   vampTo(cx, cz) { placeVampAt({ x: cx, z: cz }); vamp.path = null; vamp.repathT = 0; },
