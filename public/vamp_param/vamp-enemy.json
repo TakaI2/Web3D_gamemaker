@@ -1,0 +1,97 @@
+{
+  "states": {
+    "spawn_wall": {
+      "anim": "eri_model_walk.timeline.json",
+      "sfx": "",
+      "sfxMode": "oneshot",
+      "vol": 0.9,
+      "expr": {
+        "dur": 2,
+        "loop": true,
+        "keys": []
+      }
+    },
+    "spawn_ceiling": {
+      "anim": "eri_Fly_idle.timeline.json",
+      "sfx": "",
+      "sfxMode": "oneshot",
+      "vol": 0.9,
+      "expr": {
+        "dur": 2,
+        "loop": true,
+        "keys": []
+      }
+    },
+    "approach_walk": {
+      "anim": "eri_model_walk.timeline.json",
+      "sfx": "",
+      "sfxMode": "oneshot",
+      "vol": 0.9,
+      "expr": {
+        "dur": 2,
+        "loop": true,
+        "keys": []
+      }
+    },
+    "approach_fly": {
+      "anim": "eri_Fly_idle.timeline.json",
+      "sfx": "",
+      "sfxMode": "oneshot",
+      "vol": 0.9,
+      "expr": {
+        "dur": 2,
+        "loop": true,
+        "keys": [
+          {
+            "t": 0,
+            "v": {
+              "aa": 0.65
+            }
+          }
+        ]
+      }
+    },
+    "kiss": {
+      "anim": "JOY_vamp_Fly_flat.timeline.json",
+      "sfx": "fat02.ogg",
+      "sfxMode": "loop",
+      "vol": 0.95,
+      "expr": {
+        "dur": 1.4,
+        "loop": true,
+        "keys": [
+          {
+            "t": 0,
+            "v": {
+              "ou": 0.7
+            }
+          }
+        ]
+      }
+    },
+    "repelled": {
+      "anim": "eri_Fly_R.timeline.json",
+      "sfx": "",
+      "sfxMode": "oneshot",
+      "vol": 0.9,
+      "expr": {
+        "dur": 2,
+        "loop": true,
+        "keys": []
+      }
+    }
+  },
+  "bgm": "se1.ogg",
+  "bgmVol": 0.5,
+  "params": {
+    "nightSec": 300,
+    "kissToLose": 10,
+    "walkSpeed": 0.9,
+    "flySpeed": 0.7,
+    "animSpeed": 0.8,
+    "spawnGapMin": 2.5,
+    "spawnGapMax": 5,
+    "ceilingChance": 0.35,
+    "circleChance": 0.4
+  }
+}

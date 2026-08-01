@@ -1,0 +1,31 @@
+{
+ "format": "unit",
+ "version": 1,
+ "name": "fridge",
+ "tags": {
+  "rooms": [
+   "kitchen"
+  ],
+  "place": "wall"
+ },
+ "fp": [
+  1,
+  1
+ ],
+ "items": [
+  {
+   "model": "kitchenFridgeLarge",
+   "x": 0,
+   "y": 0,
+   "z": 0,
+   "ry": 0
+  },
+  {
+   "model": "kitchenMicrowave",
+   "x": 0,
+   "y": 0.9221405857034488,
+   "z": 0,
+   "ry": 0
+  }
+ ]
+}

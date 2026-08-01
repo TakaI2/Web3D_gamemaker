@@ -1,0 +1,1490 @@
+{
+ "format": "room",
+ "version": 1,
+ "params": {
+  "type": "house",
+  "w": 7,
+  "d": 10,
+  "seed": 88910,
+  "windowRate": 0.35,
+  "floors": 1
+ },
+ "shell": [
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 0,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 0,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 0,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 0,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 0,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 0,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 0,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 0,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 1,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 1,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 1,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 1,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 1,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 1,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 1,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 1,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 2,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 2,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 2,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 2,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 2,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 2,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 2,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 2,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 3,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 3,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 3,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 3,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 3,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 3,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 3,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 3,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 4,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 4,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 4,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 4,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 4,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 4,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 4,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 4,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 5,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 5,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 5,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 5,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 5,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 5,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 5,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 5,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 6,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 6,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 6,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 6,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 6,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 6,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 6,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 6,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 7,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 7,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 7,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 7,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 7,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 7,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 7,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 7,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 8,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 8,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 8,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 8,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 8,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 8,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 8,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 8,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 0,
+   "z": 9,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 1,
+   "z": 9,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 2,
+   "z": 9,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 3,
+   "z": 9,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 4,
+   "z": 9,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 5,
+   "z": 9,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 6,
+   "z": 9,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "floorFull",
+   "x": 7,
+   "z": 9,
+   "ry": 0,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 0,
+   "z": -0.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 0,
+   "z": 9.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 1,
+   "z": -0.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 1,
+   "z": 9.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 2,
+   "z": -0.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 2,
+   "z": 9.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 3,
+   "z": -0.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 3,
+   "z": 9.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 4,
+   "z": -0.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 4,
+   "z": 9.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 5,
+   "z": -0.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 5,
+   "z": 9.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 6,
+   "z": -0.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 6,
+   "z": 9.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 7,
+   "z": -0.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 7,
+   "z": 9.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": -0.5,
+   "z": 0,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 7.5,
+   "z": 0,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": -0.5,
+   "z": 1,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 7.5,
+   "z": 1,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": -0.5,
+   "z": 2,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 7.5,
+   "z": 2,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": -0.5,
+   "z": 3,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 7.5,
+   "z": 3,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": -0.5,
+   "z": 4,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 7.5,
+   "z": 4,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallDoorwayWide",
+   "x": -0.5,
+   "z": 5,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 7.5,
+   "z": 5,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": -0.5,
+   "z": 6,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 7.5,
+   "z": 6,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": -0.5,
+   "z": 7,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 7.5,
+   "z": 7,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": -0.5,
+   "z": 8,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 7.5,
+   "z": 8,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": -0.5,
+   "z": 9,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallWindow",
+   "x": 7.5,
+   "z": 9,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallCorner",
+   "x": -0.5,
+   "z": -0.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallCorner",
+   "x": 7.5,
+   "z": -0.5,
+   "ry": -1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallCorner",
+   "x": 7.5,
+   "z": 9.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallCorner",
+   "x": -0.5,
+   "z": 9.5,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 0,
+   "z": 4.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallDoorway",
+   "x": 1,
+   "z": 4.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 2,
+   "z": 4.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 3,
+   "z": 4.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 4,
+   "z": 4.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallDoorway",
+   "x": 5,
+   "z": 4.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 6,
+   "z": 4.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 7,
+   "z": 4.5,
+   "ry": 3.141592653589793,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 0,
+   "z": 5.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 1,
+   "z": 5.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallDoorway",
+   "x": 2,
+   "z": 5.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 3,
+   "z": 5.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 4,
+   "z": 5.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 5,
+   "z": 5.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wallDoorway",
+   "x": 6,
+   "z": 5.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 7,
+   "z": 5.5,
+   "ry": 0,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 2.5,
+   "z": 0,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 2.5,
+   "z": 1,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 2.5,
+   "z": 2,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 2.5,
+   "z": 3,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 2.5,
+   "z": 4,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 3.5,
+   "z": 6,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 3.5,
+   "z": 7,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 3.5,
+   "z": 8,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  },
+  {
+   "model": "wall",
+   "x": 3.5,
+   "z": 9,
+   "ry": 1.5707963267948966,
+   "wall": true,
+   "level": 0
+  }
+ ],
+ "items": [
+  {
+   "id": 1,
+   "model": "toiletSquare",
+   "x": 0.24357988205328684,
+   "z": -0.20524495865565764,
+   "ry": 0.0276009241441432,
+   "cat": "toilet",
+   "room": 0,
+   "level": 0
+  },
+  {
+   "id": 2,
+   "model": "bathroomSinkSquare",
+   "x": -0.2151556583560262,
+   "z": 0.38704404871200077,
+   "ry": 1.5612667722135467,
+   "cat": "bathSink",
+   "room": 0,
+   "level": 0
+  },
+  {
+   "id": 5,
+   "model": "loungeSofa",
+   "x": 5.036948832886771,
+   "z": 1.975015971277723,
+   "ry": -0.0058370363041006365,
+   "cat": "sofa",
+   "room": 1,
+   "level": 0
+  },
+  {
+   "id": 6,
+   "model": "rugRounded",
+   "x": 4.989527081516887,
+   "z": 0.8809891621206773,
+   "ry": -0.05577841824552947,
+   "cat": "rug",
+   "room": 1,
+   "level": 0
+  },
+  {
+   "id": 7,
+   "model": "tableCoffeeGlass",
+   "x": 5.085320288441384,
+   "z": 1.0185065979919437,
+   "ry": 0.03760616344509529,
+   "cat": "coffeeTable",
+   "room": 1,
+   "level": 0
+  },
+  {
+   "id": 11,
+   "model": "loungeChair",
+   "x": 3.7772796738884473,
+   "z": 1,
+   "ry": 1.5644980659084462,
+   "cat": "armchair",
+   "room": 1,
+   "level": 0
+  },
+  {
+   "id": 12,
+   "model": "lampRoundFloor",
+   "x": 3,
+   "z": -0.18896180085769862,
+   "ry": 2.088612403250089,
+   "cat": "floorLamp",
+   "room": 1,
+   "level": 0
+  },
+  {
+   "id": 13,
+   "model": "plantSmall2",
+   "x": 5.186623483235565,
+   "z": 1.090744806765274,
+   "ry": 5.757058001054032,
+   "cat": "plant",
+   "room": 1,
+   "level": 0
+  },
+  {
+   "id": 15,
+   "model": "kitchenCabinet",
+   "x": 0.43,
+   "z": 5.7250000000000005,
+   "ry": 0,
+   "cat": "kitchenUnit",
+   "run": {
+    "id": "kitchen_0_2",
+    "idx": 1,
+    "dir": [
+     1,
+     0
+    ],
+    "back": 5.5
+   },
+   "room": 2,
+   "level": 0
+  },
+  {
+   "id": 16,
+   "model": "tableCloth",
+   "x": 1.0976615241074696,
+   "z": 7.5404960321310766,
+   "ry": 0,
+   "cat": "diningTable",
+   "room": 2,
+   "level": 0
+  },
+  {
+   "id": 17,
+   "model": "stoolBar",
+   "x": 3.1942318915791392,
+   "z": 8.317978961136353,
+   "ry": -2.677945044588987,
+   "cat": "chair",
+   "room": 2,
+   "level": 0
+  },
+  {
+   "id": 18,
+   "model": "stoolBar",
+   "x": 3.1912305152496665,
+   "z": 8,
+   "ry": 2.677945044588987,
+   "cat": "chair",
+   "room": 2,
+   "level": 0
+  },
+  {
+   "id": 19,
+   "model": "stoolBar",
+   "x": 0,
+   "z": 7,
+   "ry": 1.5707963267948966,
+   "cat": "chair",
+   "room": 2,
+   "level": 0
+  },
+  {
+   "id": 20,
+   "model": "trashcan",
+   "x": 3.2637071529531654,
+   "z": 8.795907767205305,
+   "ry": 5.30050227601837,
+   "cat": "trash",
+   "room": 2,
+   "level": 0
+  },
+  {
+   "id": 22,
+   "model": "cabinetBedDrawer",
+   "x": 3.6561309760428267,
+   "z": 9.167931790353745,
+   "ry": 1.5707963267948966,
+   "cat": "nightstand",
+   "flush": {
+    "target": 21,
+    "dir": [
+     0,
+     -1
+    ]
+   },
+   "room": 3,
+   "level": 0
+  },
+  {
+   "id": 24,
+   "model": "bookcaseOpenLow",
+   "x": 5.480787617251565,
+   "z": 9.343166329636468,
+   "ry": 3.141592653589793,
+   "cat": "bookcase",
+   "room": 3,
+   "level": 0
+  },
+  {
+   "id": 25,
+   "model": "lampSquareFloor",
+   "x": 3.6653927238263395,
+   "z": 7.351436476271747,
+   "ry": 5.215255042020328,
+   "cat": "floorLamp",
+   "room": 3,
+   "level": 0
+  },
+  {
+   "id": 26,
+   "model": "rugRound",
+   "x": 4.885308378641427,
+   "z": 7.950381292797324,
+   "ry": 0,
+   "cat": "rug",
+   "room": 3,
+   "level": 0
+  },
+  {
+   "id": 28,
+   "model": "rugSquare",
+   "x": 5.971393337695091,
+   "z": 6.028345922641937,
+   "ry": 0,
+   "cat": "rug",
+   "room": 4,
+   "level": 0
+  }
+ ],
+ "manual": [
+  {
+   "unit": "kitchen",
+   "x": 2.4418956777563845,
+   "z": 9.271721124128435,
+   "ry": -0.00014422452276896004
+  },
+  {
+   "unit": "tv_set",
+   "x": 5.064421912165405,
+   "z": -0.2835645207690349,
+   "ry": 0
+  },
+  {
+   "model": "loungeSofaLong",
+   "x": 6.349520753023323,
+   "z": 0.9366700455185614,
+   "ry": -1.5521730795659023
+  },
+  {
+   "model": "loungeSofaOttoman",
+   "x": 3.8329392932323967,
+   "z": 1.6293719600577588,
+   "ry": 0
+  },
+  {
+   "model": "loungeChairRelax",
+   "x": 6.237340681857289,
+   "z": 1.9602195917152112,
+   "ry": -0.8309138468311539
+  },
+  {
+   "model": "lampRoundFloor",
+   "x": 6.9900624316711415,
+   "z": -0.035947410424228554,
+   "ry": 0
+  },
+  {
+   "model": "lampSquareFloor",
+   "x": 3,
+   "z": 4.185208802925142,
+   "ry": 0
+  },
+  {
+   "model": "lampSquareFloor",
+   "x": 7.109620019714406,
+   "z": 4.144052880629655,
+   "ry": 0
+  },
+  {
+   "model": "pottedPlant",
+   "x": 3.5220990645659653,
+   "z": -0.33908680579839984,
+   "ry": 0
+  },
+  {
+   "model": "tableRound",
+   "x": 6.750282535770709,
+   "z": 2.736081291847077,
+   "ry": 0
+  },
+  {
+   "model": "coatRackStanding",
+   "x": 3.943787632230105,
+   "z": 4.203493828999609,
+   "ry": 0
+  },
+  {
+   "model": "kitchenFridgeBuiltIn",
+   "x": -0.05262550547330728,
+   "z": 5.738813126504016,
+   "ry": 0
+  },
+  {
+   "model": "paneling",
+   "x": 3.788871368541009,
+   "z": 5.547901405103844,
+   "ry": 0
+  },
+  {
+   "model": "paneling",
+   "x": 4.284867355172303,
+   "z": 5.5482322435113725,
+   "ry": 0
+  },
+  {
+   "model": "bedDouble",
+   "x": 4.112665746477243,
+   "z": 8.392092848628986,
+   "ry": 1.5698752131101756
+  },
+  {
+   "unit": "bookshelf",
+   "x": 5.329236952753724,
+   "z": 5.729740129479844,
+   "ry": 0
+  },
+  {
+   "unit": "bookshelf",
+   "x": 4.918370363619871,
+   "z": 5.726762765131873,
+   "ry": 0
+  },
+  {
+   "unit": "desk",
+   "x": 3.8084501851829593,
+   "z": 6.066986031164894,
+   "ry": 1.5500661197438583
+  },
+  {
+   "model": "chairDesk",
+   "x": 4.252191004919522,
+   "z": 6.315836309858558,
+   "ry": -0.6127412063323653
+  },
+  {
+   "model": "chairCushion",
+   "x": 0.9973688468043974,
+   "z": 7.112972333008386,
+   "ry": 0
+  },
+  {
+   "model": "chairCushion",
+   "x": 1.9642177336740279,
+   "z": 7.091184796737001,
+   "ry": 0
+  },
+  {
+   "model": "chairCushion",
+   "x": 0.9701377316525813,
+   "z": 8.049961607269948,
+   "ry": 0.29083626657321987
+  },
+  {
+   "model": "chairCushion",
+   "x": 1.8989561832545583,
+   "z": 8.047665961155248,
+   "ry": -0.003957526167301617
+  },
+  {
+   "model": "tableCloth",
+   "x": 1.9376467418181365,
+   "z": 7.542869729060956,
+   "ry": 0
+  },
+  {
+   "model": "rugRectangle",
+   "x": 1.037036873843931,
+   "z": 7.566109213040424,
+   "ry": 0
+  },
+  {
+   "model": "rugSquare",
+   "x": 1.001608923447541,
+   "z": 3.9910881091926167,
+   "ry": 0
+  },
+  {
+   "model": "bathroomCabinetDrawer",
+   "x": 2.264905074319161,
+   "z": 3.4350296725830796,
+   "ry": -1.5693992779370798
+  },
+  {
+   "model": "washerDryerStacked",
+   "x": 2.250078219419105,
+   "z": 4.111337584988543,
+   "ry": -1.563080394413278
+  },
+  {
+   "model": "bathtub",
+   "x": 1.665288683509014,
+   "z": -0.19969209112029498,
+   "ry": -0.008232942621182402
+  },
+  {
+   "model": "rugSquare",
+   "x": 0.26775482421566216,
+   "z": 0.5005410502770872,
+   "ry": 0
+  },
+  {
+   "model": "wall",
+   "x": 0.9250129522157838,
+   "z": 0.023175882438356554,
+   "ry": -1.5545112419118028
+  }
+ ]
+}

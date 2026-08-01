@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>Vampire Dungeon — 石造迷宮からの脱出</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #06060a; font-family: system-ui, sans-serif; color: #e6ecf5; }
+    #app { position: fixed; inset: 0; }
+    #back { position: fixed; top: 10px; left: 10px; z-index: 12; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
+    #status { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 12; background: rgba(0,0,0,0.6); color: #cfe; padding: 6px 12px; border-radius: 4px; font-size: 12px; }
+    #hud { position: fixed; top: 10px; right: 10px; z-index: 11; background: rgba(12,16,28,0.85); border: 1px solid #2a3756; border-radius: 8px; padding: 10px 14px; min-width: 180px; font-size: 13px; }
+    #hud-time { font-size: 20px; font-weight: bold; color: #ffd; }
+    #hud-goal { color: #8f8; margin-top: 4px; }
+    #hud-fps { color: #8f8; font-family: monospace; font-size: 11px; margin-top: 6px; }
+    #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(255,255,255,0.75); z-index: 10; pointer-events: none; }
+    #overlay { position: fixed; inset: 0; z-index: 20; background: rgba(4,4,10,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    #ov-title { font-size: 40px; font-weight: 800; letter-spacing: 3px; }
+    #ov-sub { font-size: 15px; color: #b8c4dd; margin: 10px 0 20px; }
+    #overlay .desc { max-width: 460px; font-size: 13px; color: #9ab; line-height: 1.8; margin-bottom: 20px; }
+    #overlay button { padding: 12px 30px; font-size: 16px; background: #6a2b4a; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+    /* タッチUI（モバイルのみ表示） */
+    #touch-ui { display: none; }
+    #joystick-base { position: fixed; width: 140px; height: 140px; border-radius: 50%; background: rgba(255,255,255,0.09); border: 2px solid rgba(255,255,255,0.25); z-index: 14; touch-action: none; }
+    #joystick-stick { position: absolute; width: 58px; height: 58px; border-radius: 50%; background: rgba(255,255,255,0.35); left: 41px; top: 41px; pointer-events: none; }
+    #jump-btn { position: fixed; right: 28px; bottom: 40px; width: 84px; height: 84px; border-radius: 50%; background: rgba(120,170,255,0.28); border: 2px solid rgba(255,255,255,0.35); color: #fff; font-size: 13px; z-index: 14; display: flex; align-items: center; justify-content: center; touch-action: none; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <a id="back" href="../hub/">← 一覧</a>
+  <div id="status">読み込み中…</div>
+  <div id="crosshair"></div>
+  <div id="hud">
+    <div id="hud-time">残り 5:00</div>
+    <div id="hud-goal">ゴールまで --m</div>
+    <div id="hud-state" style="margin:4px 0;min-height:18px;color:#8ab;"></div>
+    <div style="font-size:11px;color:#9ab;">吸血の危険度</div>
+    <div style="height:10px;background:#222;border-radius:5px;overflow:hidden;margin-top:3px;"><div id="hud-drain" style="height:100%;width:0%;background:linear-gradient(90deg,#c33,#f66);transition:width .2s;"></div></div>
+    <div id="hud-fps" style="margin-top:6px;">-- FPS</div>
+  </div>
+  <!-- 観察エディタ（Oキー or ボタンで開閉） -->
+  <button id="btn-obs" style="position:fixed;top:10px;left:90px;z-index:30;background:rgba(60,30,70,0.85);border:1px solid #86f;color:#fff;padding:6px 12px;border-radius:4px;font-size:12px;cursor:pointer;">🎬 観察モード (O)</button>
+  <div id="obs-panel" style="display:none;position:fixed;top:52px;left:10px;z-index:30;background:rgba(12,16,28,0.93);border:1px solid #64a;border-radius:8px;padding:10px 12px;font-size:12px;color:#cfe;width:250px;max-height:82vh;overflow-y:auto;">
+    <div style="font-weight:bold;color:#c9f;margin-bottom:6px;">🎬 観察モード</div>
+    <div style="font-size:10px;color:#9ab;line-height:1.5;margin-bottom:6px;">ドラッグ=視点回転 / ホイール=ズーム / 右ドラッグ=平行移動</div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;">
+      <button class="obs-cam" data-m="overview" style="flex:1;min-width:72px;">俯瞰</button>
+      <button class="obs-cam" data-m="vamp" style="flex:1;min-width:72px;">吸血鬼を追う</button>
+      <button class="obs-cam" data-m="ken" style="flex:1;min-width:72px;">職員を追う</button>
+      <button class="obs-cam" data-m="play" style="flex:1;min-width:72px;">プレイ視点へ</button>
+    </div>
+    <div id="obs-info" style="margin-top:6px;color:#9fe6ff;font-size:11px;min-height:32px;"></div>
+    <div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;font-weight:bold;color:#9fe6ff;">ライティング</div>
+    <label style="display:block;margin-top:4px;">環境光(全体) <span id="lv-hemi">0.75</span><br><input type="range" id="ls-hemi" min="0" max="3" step="0.05" value="0.75" style="width:100%"></label>
+    <label style="display:block;margin-top:4px;">松明(プレイヤー) <span id="lv-torch">6.5</span><br><input type="range" id="ls-torch" min="0" max="20" step="0.5" value="6.5" style="width:100%"></label>
+    <label style="display:block;margin-top:4px;">月明かり <span id="lv-moon">0.55</span><br><input type="range" id="ls-moon" min="0" max="3" step="0.05" value="0.55" style="width:100%"></label>
+    <label style="display:block;margin-top:4px;">ランタン/窓 <span id="lv-lamp">1.00</span><br><input type="range" id="ls-lamp" min="0" max="3" step="0.05" value="1" style="width:100%"></label>
+    <label style="display:block;margin-top:4px;">マントの環境光 <span id="lv-env">1.00</span><br><input type="range" id="ls-env" min="0" max="3" step="0.05" value="1" style="width:100%"></label>
+    <label style="display:block;margin-top:4px;">霧の距離 <span id="lv-fog">42</span>m<br><input type="range" id="ls-fog" min="10" max="200" step="2" value="42" style="width:100%"></label>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;"><input type="checkbox" id="obs-nolight"> ライトを一時的に全部消す（陰影確認）</label>
+    <button id="obs-save" style="margin-top:8px;width:100%;padding:7px;background:#2b6a4a;border:none;border-radius:5px;color:#fff;cursor:pointer;">💾 ライティングを保存</button>
+  </div>
+  <style>
+    #obs-panel button.obs-cam { background:#25304a;border:1px solid #46608c;color:#cfe;border-radius:4px;padding:4px 6px;font-size:11px;cursor:pointer; }
+    #obs-panel button.obs-cam.on { background:#3a5a8c;border-color:#8bf;color:#fff; }
+  </style>
+  <div id="touch-ui">
+    <div id="joystick-base"><div id="joystick-stick"></div></div>
+    <div id="jump-btn">JUMP</div>
+  </div>
+  <div id="overlay">
+    <div id="ov-title" style="color:#e6ecf5;">VAMPIRE DUNGEON</div>
+    <div id="ov-sub">石造迷宮からの脱出</div>
+    <div class="desc">
+      <b>WASD</b> 移動 / <b>Space</b> ジャンプ / <b>マウス</b> 視点<br>
+      広間と入り組んだ廊下を抜け、<b>金色のゴール</b>を目指せ。<br>
+      （スマホ：左の丸で移動・右半分ドラッグで視点）
+    </div>
+    <button id="btn-start" disabled>読み込み中…</button>
+  </div>
+  <div id="err" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;max-height:45%;overflow:auto;background:rgba(40,0,0,0.92);color:#fbb;font:12px monospace;padding:14px;white-space:pre-wrap;"></div>
+  <script>
+    window.addEventListener('error', function (e) { var d = document.getElementById('err'); if (!d) return; d.style.display = 'block'; var l = document.createElement('div'); l.textContent = '⚠ ' + (e.message || (e.target && (e.target.src || e.target.href)) || e); d.appendChild(l); }, true);
+    window.addEventListener('unhandledrejection', function (e) { var d = document.getElementById('err'); if (!d) return; d.style.display = 'block'; var l = document.createElement('div'); l.textContent = '⚠ ' + ((e.reason && e.reason.message) || e.reason); d.appendChild(l); });
+  </script>
+  <script type="module" src="./vamp-dungeon.js"></script>
+</body>
+</html>

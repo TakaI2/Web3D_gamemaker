@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "joy_vamp",
+  "displayName": "JOY_vamp",
+  "states": {
+    "patrol": {
+      "mode": "loop", "intervalMs": 9000, "charsPerSecond": 7,
+      "lines": [
+        "……いい夜。",
+        "喉が、渇いたわ……",
+        { "text": "ふふ……どこにいるの？", "expression": "happy", "weight": 0.35 },
+        "この屋敷から出られると思って？",
+        "月がきれい……こんな夜は、お腹が空くの",
+        { "text": "かくれんぼは得意よ……見つけるのがね", "expression": "happy", "weight": 0.4 },
+        "足音……聞こえてるわよ？",
+        "絵の中の人たちも、昔はよく騒いだわ"
+      ]
+    },
+    "chase": {
+      "mode": "loop", "intervalMs": 3000, "charsPerSecond": 11,
+      "lines": [
+        { "text": "みーつけた♪", "expression": "happy", "weight": 0.7 },
+        "待ちなさい……！",
+        "逃げても無駄よ？",
+        { "text": "ああ、いい匂い……", "expression": "relaxed", "weight": 0.5 },
+        "走ると……余計に美味しくなるのよ？",
+        { "text": "ほら、つかまえてあげる♪", "expression": "happy", "weight": 0.6 },
+        "その角の先……行き止まりよ？"
+      ]
+    },
+    "capture": {
+      "mode": "loop", "intervalMs": 4200, "charsPerSecond": 8,
+      "lines": [
+        { "text": "つかまえた……♪", "expression": "happy", "weight": 0.8 },
+        { "text": "んっ……おいしい……", "expression": "relaxed", "weight": 0.7 },
+        "もう離さないわ……",
+        "静かにして……すぐ終わるから……",
+        { "text": "あたたかい……もっと……", "expression": "relaxed", "weight": 0.8 },
+        "暴れても……無駄よ……？"
+      ]
+    },
+    "holdKen": {
+      "mode": "loop", "intervalMs": 4000, "charsPerSecond": 9,
+      "lines": [
+        { "text": "邪魔しないで？", "expression": "angry", "weight": 0.5 },
+        "職員さんも……いただくわ",
+        { "text": "ふふ、軽いのね", "expression": "happy", "weight": 0.5 },
+        "あなたたちが私を閉じ込めたのよ……？",
+        { "text": "おやすみなさい……", "expression": "relaxed", "weight": 0.6 }
+      ]
+    },
+    "stunned": {
+      "mode": "loop", "intervalMs": 2400, "charsPerSecond": 12,
+      "lines": [
+        { "text": "きゃっ……！", "expression": "surprised", "weight": 0.8 },
+        { "text": "……痛いじゃない", "expression": "angry", "weight": 0.7 },
+        "生意気……！",
+        { "text": "……今の、効いたわよ", "expression": "angry", "weight": 0.5 }
+      ]
+    }
+  },
+  "events": {
+    "repelled": { "lines": ["……覚えてなさい", "ちっ……", "次は容赦しないわ"] },
+    "lost": { "lines": ["……どこへ行ったの？", "隠れても無駄よ……", "匂いは消せないわよ……？"] }
+  }
+}

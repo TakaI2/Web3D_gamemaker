@@ -1,0 +1,45 @@
+{
+ "format": "unit",
+ "version": 1,
+ "name": "tv_set",
+ "tags": {
+  "rooms": [
+   "living"
+  ],
+  "place": "wall"
+ },
+ "fp": [
+  2,
+  1
+ ],
+ "items": [
+  {
+   "model": "cabinetTelevisionDoors",
+   "x": -0.0036039911534480884,
+   "y": 0,
+   "z": 0,
+   "ry": 0
+  },
+  {
+   "model": "televisionModern",
+   "x": -0.0036039911534480884,
+   "y": 0.31295601403882756,
+   "z": 0,
+   "ry": 0
+  },
+  {
+   "model": "speaker",
+   "x": 0.5435636451135402,
+   "y": 0,
+   "z": 0,
+   "ry": 0
+  },
+  {
+   "model": "speaker",
+   "x": -0.536355662806644,
+   "y": 0,
+   "z": 0,
+   "ry": 0
+  }
+ ]
+}

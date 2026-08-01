@@ -138,7 +138,7 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content, encoding } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma', vamp_param: 'vamp_param' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }

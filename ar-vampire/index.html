@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <title>AR Vampire Night — 一夜を耐えろ</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0a14; font-family: system-ui, sans-serif; color: #e6ecf5; }
+    #app { position: fixed; inset: 0; }
+    #back { position: fixed; top: 10px; left: 10px; z-index: 12; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
+    #status { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 12; background: rgba(0,0,0,0.55); color: #cfe; padding: 6px 12px; border-radius: 4px; font-size: 12px; }
+    #hud { position: fixed; top: 10px; right: 10px; z-index: 11; background: rgba(12,16,28,0.85); border: 1px solid #2a3756; border-radius: 8px; padding: 10px 14px; min-width: 190px; font-size: 13px; }
+    #hud-time { font-size: 20px; font-weight: bold; color: #ffd; }
+    #hud-state { color: #f9a; margin: 4px 0; min-height: 18px; }
+    .bar { height: 10px; background: #222; border-radius: 5px; overflow: hidden; margin-top: 4px; }
+    #hud-danger { height: 100%; width: 0%; background: linear-gradient(90deg,#c33,#f66); transition: width 0.2s; }
+    #hud-fps { color: #8f8; font-family: monospace; font-size: 11px; margin-top: 6px; }
+    #overlay { position: fixed; inset: 0; z-index: 20; background: rgba(4,4,10,0.82); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    #ov-title { font-size: 46px; font-weight: 800; letter-spacing: 3px; }
+    #ov-sub { font-size: 16px; color: #b8c4dd; margin: 10px 0 22px; }
+    #overlay .desc { max-width: 460px; font-size: 13px; color: #9ab; line-height: 1.8; margin-bottom: 20px; }
+    #overlay button { padding: 12px 30px; font-size: 16px; background: #2b6a4a; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+    #overlay button:disabled { background: #444; cursor: wait; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <a id="back" href="../hub/">← 一覧</a>
+  <div id="status">読み込み中…</div>
+  <div id="hud">
+    <div id="hud-time">残り 5:00</div>
+    <div id="hud-state"></div>
+    <div style="font-size:11px;color:#9ab;">吸血の危険度</div>
+    <div class="bar"><div id="hud-danger"></div></div>
+    <div id="hud-fps">-- FPS</div>
+    <label style="display:block;margin-top:8px;font-size:12px;color:#ffd27a;cursor:pointer;"><input type="checkbox" id="chk-invincible" style="vertical-align:middle;"> 無敵モード（ライフが減らない）</label>
+    <label style="display:block;margin-top:4px;font-size:11px;color:#9fe6ff;cursor:pointer;"><input type="checkbox" id="chk-room" style="vertical-align:middle;"> 部屋のスキャンをワイヤー表示</label>
+  </div>
+  <div id="overlay">
+    <div id="ov-title" style="color:#e6ecf5;">AR VAMPIRE NIGHT</div>
+    <div id="ov-sub">一夜（5分）を耐え抜け</div>
+    <div class="desc">
+      吸血鬼が壁の闇穴や天井から現れ、あなたに近づいてキスで生気を奪う（10秒で力尽きる）。<br>
+      右横のスタンドの<b>十字架を掴んで（グリップ/ピンチ）</b>、彼女の顔の前にかざせば退けられる。<br>
+      朝（5分）まで生き延びろ。
+    </div>
+    <button id="btn-start" disabled>スタート</button>
+    <button id="btn-retry" style="display:none;">もう一度</button>
+    <button id="btn-overview" disabled style="margin-top:12px;background:#2a4a6a;font-size:13px;padding:9px 20px;">俯瞰モードで確認（ゴーグル不要）</button>
+    <div style="font-size:11px;color:#7a8aa6;margin-top:6px;max-width:420px;">上から空間を見下ろし、青いゴーグル模型＝仮想プレイヤーをドラッグで動かして、JOY_vampの反応を確認できます。</div>
+  </div>
+  <div id="ov-panel" style="display:none;position:fixed;bottom:12px;left:12px;z-index:13;background:rgba(12,16,28,0.9);border:1px solid #2a3756;border-radius:8px;padding:10px 14px;font-size:12px;color:#cfe;min-width:220px;">
+    <div style="font-weight:bold;color:#9fe6ff;margin-bottom:6px;">俯瞰エディタ</div>
+    <div style="color:#9ab;line-height:1.6;">🕶 ゴーグル模型を<b>ドラッグ</b>で移動＝プレイヤーの位置<br>ドラッグ以外は視点回転（オービット）</div>
+    <label style="display:block;margin-top:8px;">身長(頭の高さ) <span id="ov-height-v">1.50</span>m<br><input type="range" id="ov-height" min="1.0" max="1.9" step="0.05" value="1.5" style="width:100%;"></label>
+    <button id="ov-cross" style="margin-top:8px;width:100%;padding:8px;background:#334;border:1px solid #566;border-radius:5px;color:#fff;cursor:pointer;">✝ 十字架をかざす（押している間／Cキー）</button>
+    <div style="margin-top:10px;border-top:1px solid #2a3756;padding-top:8px;">
+      <div style="color:#f9a;font-weight:bold;">キス時の口の密着位置</div>
+      <label style="display:block;margin-top:5px;">唇の前後(突き出し) <span id="kiss-fwd-v">0.090</span><br><input type="range" id="kiss-fwd" min="0" max="0.22" step="0.005" value="0.09" style="width:100%;"></label>
+      <label style="display:block;margin-top:4px;">上下 <span id="kiss-up-v">-0.030</span><br><input type="range" id="kiss-up" min="-0.14" max="0.08" step="0.005" value="-0.03" style="width:100%;"></label>
+      <label style="display:block;margin-top:4px;">密着ギャップ <span id="kiss-gap-v">0.000</span><br><input type="range" id="kiss-gap" min="-0.06" max="0.16" step="0.005" value="0" style="width:100%;"></label>
+      <label style="display:block;margin-top:4px;">前傾(高さ追従) <span id="kiss-lean-v">0.40</span><br><input type="range" id="kiss-lean" min="0" max="1" step="0.05" value="0.4" style="width:100%;"></label>
+      <div style="margin-top:8px;border-top:1px solid #2a3756;padding-top:6px;">
+        <label style="color:#ffcc33;cursor:pointer;"><input type="checkbox" id="grab-en" checked style="vertical-align:middle;"> 手でプレイヤーを掴む（腕IK）</label>
+        <div style="font-size:10px;margin-top:2px;">ターゲット：<span style="color:#3a86ff;">●左手</span> <span style="color:#ff8a3a;">●右手</span></div>
+        <label style="display:block;margin-top:4px;">肩の横幅（−で左右入替） <span id="grab-side-v">0.170</span><br><input type="range" id="grab-side" min="-0.35" max="0.35" step="0.005" value="0.17" style="width:100%;"></label>
+        <label style="display:block;margin-top:4px;">肩の高さ(頭からの下) <span id="grab-down-v">0.140</span><br><input type="range" id="grab-down" min="0" max="0.4" step="0.005" value="0.14" style="width:100%;"></label>
+        <label style="display:block;margin-top:4px;">手前(吸血鬼側) <span id="grab-fwd-v">0.030</span><br><input type="range" id="grab-fwd" min="-0.1" max="0.2" step="0.005" value="0.03" style="width:100%;"></label>
+      </div>
+      <button id="ov-save" style="margin-top:8px;width:100%;padding:8px;background:#2b6a4a;border:none;border-radius:5px;color:#fff;cursor:pointer;font-size:12px;">💾 調整値を保存（vamp_param へ上書き）</button>
+      <div style="font-size:10px;color:#7a8aa6;margin-top:3px;line-height:1.4;">スライダーを動かすと <b>public/vamp_param/vamp-tune.json</b> に自動で上書き保存（devサーバ経由・0.5s）。dist再ビルドで反映。※devサーバが無い環境ではダウンロードにフォールバック。</div>
+    </div>
+    <button id="btn-enemy" style="margin-top:10px;width:100%;padding:9px;background:#6a2b4a;border:none;border-radius:5px;color:#fff;cursor:pointer;font-size:12px;">👹 敵設定（アニメ/効果音/挙動）を開く</button>
+  </div>
+  <div id="enemy-panel" style="display:none;position:fixed;top:10px;right:10px;bottom:10px;width:320px;z-index:14;background:rgba(12,16,28,0.95);border:1px solid #6a3050;border-radius:8px;font-size:12px;color:#cfe;overflow:hidden;flex-direction:column;">
+    <div style="padding:10px 12px;border-bottom:1px solid #2a3756;display:flex;justify-content:space-between;align-items:center;">
+      <b style="color:#f9a;">👹 Enemy エディタ</b><button id="enemy-close" style="background:#334;border:none;color:#fff;border-radius:4px;padding:3px 9px;cursor:pointer;">閉じる</button>
+    </div>
+    <div id="enemy-body" style="padding:10px 12px;overflow-y:auto;flex:1;"></div>
+  </div>
+  <div id="pip-frame" style="display:none;position:fixed;right:12px;bottom:12px;width:300px;height:200px;z-index:12;border:2px solid #66e0ff;border-radius:4px;pointer-events:none;box-shadow:0 0 12px rgba(0,0,0,0.6);">
+    <div style="position:absolute;top:-1px;left:-1px;background:#66e0ff;color:#04121a;font-size:11px;padding:1px 8px;border-radius:2px;">🕶 プレイヤー視界</div>
+  </div>
+  <div id="err" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;max-height:45%;overflow:auto;background:rgba(40,0,0,0.92);color:#fbb;font:12px monospace;padding:14px;white-space:pre-wrap;"></div>
+  <script>
+    window.addEventListener('error', function (e) { var d = document.getElementById('err'); if (!d) return; d.style.display = 'block'; var l = document.createElement('div'); l.textContent = '⚠ ' + (e.message || (e.target && (e.target.src || e.target.href)) || e); d.appendChild(l); }, true);
+    window.addEventListener('unhandledrejection', function (e) { var d = document.getElementById('err'); if (!d) return; d.style.display = 'block'; var l = document.createElement('div'); l.textContent = '⚠ ' + ((e.reason && e.reason.message) || e.reason); d.appendChild(l); });
+    // オーバーレイのボタン切替（GAME OVER/勝利時はretry表示）
+    var _ov = new MutationObserver(function () {
+      var t = document.getElementById('ov-title').textContent;
+      var over = (t === 'GAME OVER' || t === 'DAWN');
+      document.getElementById('btn-start').style.display = over ? 'none' : '';
+      document.getElementById('btn-retry').style.display = over ? '' : 'none';
+    });
+    _ov.observe(document.getElementById('ov-title'), { childList: true });
+  </script>
+  <script type="module" src="./ar-vampire.js"></script>
+</body>
+</html>

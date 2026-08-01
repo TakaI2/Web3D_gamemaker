@@ -223,6 +223,40 @@ async function applyPerformance() {
 const matState = { roughness: 0.45, sheen: 1, opacity: 1, env: 1.0, thickness: 0.006 };
 let capeVisible = true, wireOn = false, unifyColor = false;
 
+// ── マント設定の保存／読込（public/vamp_param/cape-<NPC>.json）──
+// ゲーム(ar-vampire / vamp-dungeon)は起動時にこれを読み、マント生成時のマテリアルへマージする。
+function capeParamFile(name) { return 'cape-' + name + '.json'; }
+function currentCapeParams() {
+  return { npc: NPCS[npcIdx], material: {
+    roughness: matState.roughness, sheen: matState.sheen, opacity: matState.opacity,
+    thickness: matState.thickness, unify: unifyColor,
+  }, env: matState.env };
+}
+async function saveCapeParams(manual) {
+  const data = currentCapeParams();
+  const body = JSON.stringify({ dir: 'vamp_param', filename: capeParamFile(data.npc), content: JSON.stringify(data, null, 2) });
+  let ok = false;
+  try { ok = (await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).ok; } catch { /* devサーバ無 */ }
+  const b = $('btn-save-cape');
+  if (manual && b) {
+    if (ok) b.textContent = '✓ vamp_param に保存しました';
+    else {   // devサーバが無ければダウンロード
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+      a.download = capeParamFile(data.npc); a.click();
+      b.textContent = '↓ DL（devサーバ無）';
+    }
+    setTimeout(() => { b.textContent = '💾 マント設定を保存（ゲームへ反映）'; }, 1600);
+  }
+  return ok;
+}
+async function loadCapeParams(name) {
+  for (const u of ['../vamp_param/' + capeParamFile(name), './' + capeParamFile(name)]) {
+    try { const j = JSON.parse(await (await fetch(u)).text()); if (j && j.material) return j; } catch { /* next */ }
+  }
+  return null;
+}
+
 // ── NPC読み込み（差し替え） ──
 let vrm = null, mixer = null, action = null, cape = null, tlFps = 30, durF = 300, loading = false;
 let hipsNode = null; const hipsRest = new THREE.Vector3();   // ルートモーション除去（その場で演技）
@@ -319,6 +353,17 @@ async function loadNPC(name) {
       vrm.update(0); vrm.scene.updateMatrixWorld(true);
       cape = createVRMClothCPU({ scene, vrm, cloth: bundle.cloth, timeline: null, basePos: new THREE.Vector3(0, 0, 0), floorY: 0 });
       matState.roughness = cape.defaults.roughness; matState.sheen = cape.defaults.sheen; matState.opacity = cape.defaults.opacity; matState.thickness = cape.defaults.thickness;
+      // 保存済みのマント設定があれば復元（ゲームと同じ見た目で調整を再開できる）
+      const saved = await loadCapeParams(name);
+      if (saved) {
+        const m = saved.material || {};
+        if (m.roughness != null) matState.roughness = m.roughness;
+        if (m.sheen != null) matState.sheen = m.sheen;
+        if (m.opacity != null) matState.opacity = m.opacity;
+        if (m.thickness != null) matState.thickness = m.thickness;
+        if (m.unify != null) unifyColor = !!m.unify;
+        if (saved.env != null) matState.env = saved.env;
+      }
       applyMaterial();
       cape.clothMesh.visible = capeVisible;
       $('hud-verts').textContent = cape.vertexCount.toLocaleString() + ' 頂点';
@@ -356,6 +401,8 @@ function syncUI() {
 }
 function bindUI() {
   $('npc-sel').addEventListener('change', (e) => { npcIdx = NPCS.indexOf(e.target.value); loadNPC(NPCS[npcIdx]); });
+  // マント設定の保存／読込（ゲーム側と共有）
+  $('btn-save-cape')?.addEventListener('click', () => saveCapeParams(true));
   const ps = $('perf-sel');
   if (ps) {
     ps.innerHTML = PERFORMANCES.map((p) => `<option value="${p.id}">${p.label}</option>`).join('');
