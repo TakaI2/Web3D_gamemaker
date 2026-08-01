@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import type { Quaternion, Vector3 } from 'three';
+  import { get } from 'svelte/store';
+  import { Euler, Quaternion, Vector3 } from 'three';
   import { animEditorStore } from '../stores/animEditorStore';
 
   const ROW_HEIGHT = 24;
@@ -11,6 +12,13 @@
   let pixelPerFrame = 8;
   let svgEl: SVGSVGElement;
   let containerEl: HTMLDivElement;
+
+  // 表示モード（ドープシート / カーブ）とカーブ表示対象トラック
+  type ViewMode = 'dope' | 'curve';
+  let viewMode: ViewMode = 'dope';
+  let curveH = 300;                       // プロット領域の高さ（コンテナ実高にバインド）
+  const CURVE_TOP = 22, CURVE_BOT = 16;
+  const AXIS_COLORS: Record<'x' | 'y' | 'z', string> = { x: '#e66', y: '#6d6', z: '#6ae' };
 
   // VRM 主要ヒューマノイドボーン（常に表示）
   const HUMANOID_BONES = [
@@ -40,7 +48,9 @@
 
   // SVG サイズ
   $: timelineWidth = Math.max(400, totalFrames * pixelPerFrame + HEADER_WIDTH + 20);
-  $: timelineHeight = Math.max(120, (allRows.length + 1) * ROW_HEIGHT + 30);
+  $: timelineHeight = viewMode === 'curve'
+    ? Math.max(120, curveH)
+    : Math.max(120, (allRows.length + 1) * ROW_HEIGHT + 30);
 
   // プレイヘッド X 座標
   $: playheadX = HEADER_WIDTH + state.currentFrame * pixelPerFrame;
@@ -95,6 +105,7 @@
   function onSvgMouseDown(e: MouseEvent): void {
     if (e.button !== 0 || e.altKey) return;   // 左ボタンのみ。Alt+左/中ボタンはパン
     const p = svgXY(e);
+    if (viewMode === 'curve') { curveDragStartX = p.x; ctxMenu = null; return; }   // カーブ：ドラッグで範囲選択
     marqueeStart = p;
     marquee = null;
   }
@@ -102,6 +113,13 @@
     if (draggingPlayhead) {
       const x = svgXY(e).x - HEADER_WIDTH;
       animEditorStore.setCurrentFrame(Math.max(0, Math.min(totalFrames, Math.round(x / pixelPerFrame))));
+      return;
+    }
+    if (viewMode === 'curve') {
+      if (curveDragStartX !== null) {
+        const x = svgXY(e).x;
+        if (Math.abs(x - curveDragStartX) > 3) curveRange = { lo: frameAtX(Math.min(curveDragStartX, x)), hi: frameAtX(Math.max(curveDragStartX, x)) };
+      }
       return;
     }
     if (marqueeStart) {
@@ -113,6 +131,17 @@
   }
   function onSvgMouseUp(e: MouseEvent): void {
     if (draggingPlayhead) { draggingPlayhead = false; return; }
+    if (viewMode === 'curve') {
+      if (e.button !== 0) return;   // 右クリック等では範囲選択を消さない（この後 contextmenu が出る）
+      const dragged = curveDragStartX !== null && curveRange !== null && Math.abs(svgXY(e).x - curveDragStartX) > 3;
+      curveDragStartX = null;
+      if (!dragged) {   // クリック＝範囲クリア＋シーク
+        curveRange = null;
+        if (!panMoved && !e.altKey) { const cx = svgXY(e).x - HEADER_WIDTH; if (cx >= 0) animEditorStore.setCurrentFrame(Math.max(0, Math.min(totalFrames, Math.round(cx / pixelPerFrame)))); }
+      }
+      panMoved = false;
+      return;
+    }
     if (marquee) {
       finalizeMarquee();
       marquee = null; marqueeStart = null;
@@ -281,6 +310,7 @@
     const tgt = e.target as HTMLElement | null;
     if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (mod && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); animEditorStore.undo(); return; }
     if (mod && (e.key === 'c' || e.key === 'C')) { copySelected(); return; }
     if (mod && (e.key === 'v' || e.key === 'V')) { e.preventDefault(); pasteAtCurrent(); return; }
     if (!mod && (e.key === 'i' || e.key === 'I')) { inFrame = state.currentFrame; return; }
@@ -292,6 +322,178 @@
       selectedKeys = new Set();
     }
   }
+
+  // ══════════ カーブ(グラフ)モード ══════════
+  // 回転=Euler度(X赤/Y緑/Z青)・ルート位置=m(X/Y/Z)・表情=0〜1。チェックしたチャンネルだけ表示・編集。
+  type Axis = 'x' | 'y' | 'z';
+  type ChanKind = 'b' | 'h' | 'e';
+  const AXES: Axis[] = ['x', 'y', 'z'];
+  const chKey = (kind: ChanKind, track: string, axis: string): string => `${kind}|${track}|${axis}`;
+  let curveChannels = new Set<string>();   // 表示中チャンネル（chKey）
+  // 候補トラック（キーのあるもの）。axes=true は回転/位置(X/Y/Z)、false は表情(単一)。
+  $: curveCandidates = [
+    ...[...state.boneKeyframes.keys()].map((b) => ({ kind: 'b' as ChanKind, track: b, label: b, axes: true })),
+    ...(state.hipsPositionKeyframes.size > 0 ? [{ kind: 'h' as ChanKind, track: '', label: '⌖ルート位置', axes: true }] : []),
+    ...[...state.blendShapeKeyframes.keys()].map((ex) => ({ kind: 'e' as ChanKind, track: ex, label: `😊${ex}`, axes: false })),
+  ];
+  function toggleChannel(key: string): void {
+    const next = new Set(curveChannels);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    curveChannels = next;
+  }
+  function toggleTrackAll(kind: ChanKind, track: string, axes: boolean): void {
+    const keys = axes ? AXES.map((a) => chKey(kind, track, a)) : [chKey(kind, track, '')];
+    const allOn = keys.every((k) => curveChannels.has(k));
+    const next = new Set(curveChannels);
+    for (const k of keys) { if (allOn) next.delete(k); else next.add(k); }
+    curveChannels = next;
+  }
+
+  type Channel = { key: string; label: string; color: string; kind: ChanKind; track: string; axis: Axis | ''; points: { f: number; v: number }[] };
+  const _euler = new Euler();
+  // キーフレーム Map 群と選択のみに依存（currentFrame 変化では再計算しない）
+  function buildChannels(
+    boneKf: typeof state.boneKeyframes,
+    hipsKf: typeof state.hipsPositionKeyframes,
+    blendKf: typeof state.blendShapeKeyframes,
+    sel: Set<string>,
+  ): Channel[] {
+    const out: Channel[] = [];
+    for (const [b, m] of boneKf) {
+      const frames = [...m.keys()].sort((a, c) => a - c);
+      for (const k of AXES) {
+        const key = chKey('b', b, k);
+        if (!sel.has(key)) continue;
+        out.push({ key, label: `${b}.${k.toUpperCase()}`, color: AXIS_COLORS[k], kind: 'b', track: b, axis: k,
+          points: frames.map((f) => { _euler.setFromQuaternion(m.get(f) as Quaternion, 'XYZ'); return { f, v: (_euler[k] * 180) / Math.PI }; }) });
+      }
+    }
+    if (hipsKf.size > 0) {
+      const frames = [...hipsKf.keys()].sort((a, c) => a - c);
+      for (const k of AXES) {
+        const key = chKey('h', '', k);
+        if (!sel.has(key)) continue;
+        out.push({ key, label: `root.${k.toUpperCase()}`, color: AXIS_COLORS[k], kind: 'h', track: '', axis: k,
+          points: frames.map((f) => ({ f, v: (hipsKf.get(f) as Vector3)[k] })) });
+      }
+    }
+    for (const [ex, m] of blendKf) {
+      const key = chKey('e', ex, '');
+      if (!sel.has(key)) continue;
+      const frames = [...m.keys()].sort((a, c) => a - c);
+      out.push({ key, label: ex, color: '#f8a', kind: 'e', track: ex, axis: '', points: frames.map((f) => ({ f, v: m.get(f) as number })) });
+    }
+    return out;
+  }
+  $: channels = buildChannels(state.boneKeyframes, state.hipsPositionKeyframes, state.blendShapeKeyframes, curveChannels);
+
+  // Y レンジ自動フィット
+  $: valueRange = ((): { min: number; max: number } => {
+    let mn = Infinity, mx = -Infinity;
+    for (const ch of channels) for (const p of ch.points) { if (p.v < mn) mn = p.v; if (p.v > mx) mx = p.v; }
+    if (!isFinite(mn)) { mn = -1; mx = 1; }
+    if (Math.abs(mx - mn) < 1e-6) { mn -= 1; mx += 1; }
+    const pad = (mx - mn) * 0.1;
+    return { min: mn - pad, max: mx + pad };
+  })();
+  $: plotH = Math.max(60, curveH - CURVE_TOP - CURVE_BOT);
+  // パス・打点（ズーム/レンジ/高さに追従）。打点は編集用に300点まで（線は常に描画）。
+  $: channelPaths = channels.map((ch) => {
+    const toX = (f: number): number => HEADER_WIDTH + f * pixelPerFrame;
+    const toY = (v: number): number => CURVE_TOP + plotH * (1 - (v - valueRange.min) / (valueRange.max - valueRange.min));
+    return {
+      color: ch.color, kind: ch.kind, track: ch.track, axis: ch.axis,
+      d: ch.points.map((p, i) => `${i === 0 ? 'M' : 'L'}${toX(p.f).toFixed(1)},${toY(p.v).toFixed(1)}`).join(' '),
+      pts: ch.points.length <= 300 ? ch.points.map((p) => ({ x: toX(p.f), y: toY(p.v), f: p.f })) : [],
+    };
+  });
+  // Y 軸目盛（min / 中央 / 0 / max）
+  $: yTickRows = (() => {
+    const { min, max } = valueRange;
+    const vals = new Set([min, max, (min + max) / 2]);
+    if (min < 0 && max > 0) vals.add(0);
+    return [...vals].map((v) => ({ v, y: CURVE_TOP + plotH * (1 - (v - min) / (max - min)), zero: Math.abs(v) < 1e-6 }));
+  })();
+
+  // ── 点ドラッグで値編集（縦=値。個別 X/Y/Z）──
+  function valueFromClientY(clientY: number): number {
+    const r = svgEl.getBoundingClientRect();
+    const y = clientY - r.top;
+    return valueRange.max - ((y - CURVE_TOP) / plotH) * (valueRange.max - valueRange.min);
+  }
+  function applyChannelValue(kind: ChanKind, track: string, axis: Axis | '', frame: number, value: number): void {
+    const s = get(animEditorStore);   // バッチ中も最新状態を読む（同一ボーン複数軸の連続編集で取りこぼさない）
+    if (kind === 'b') {
+      if (axis === '') return;
+      const cur = s.boneKeyframes.get(track)?.get(frame);
+      if (!cur) return;
+      _euler.setFromQuaternion(cur, 'XYZ');
+      _euler[axis] = (value * Math.PI) / 180;
+      animEditorStore.setBoneKeyframe(track, frame, new Quaternion().setFromEuler(_euler));
+    } else if (kind === 'h') {
+      if (axis === '') return;
+      const cur = s.hipsPositionKeyframes.get(frame)?.clone() ?? new Vector3();
+      cur[axis] = value;
+      animEditorStore.setHipsPositionKeyframe(frame, cur);
+    } else {
+      animEditorStore.setBlendShapeKeyframe(track, frame, Math.max(0, Math.min(1, value)));
+    }
+  }
+  let dragPt: { kind: ChanKind; track: string; axis: Axis | ''; frame: number } | null = null;
+  function startPointDrag(e: MouseEvent, kind: ChanKind, track: string, axis: Axis | '', frame: number): void {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    dragPt = { kind, track, axis, frame };
+    window.addEventListener('mousemove', onPointDrag);
+    window.addEventListener('mouseup', endPointDrag);
+  }
+  function onPointDrag(e: MouseEvent): void {
+    if (!dragPt) return;
+    applyChannelValue(dragPt.kind, dragPt.track, dragPt.axis, dragPt.frame, valueFromClientY(e.clientY));
+  }
+  function endPointDrag(): void {
+    dragPt = null;
+    window.removeEventListener('mousemove', onPointDrag);
+    window.removeEventListener('mouseup', endPointDrag);
+  }
+
+  // ── 範囲平滑化（In〜Out の表示中トラックのキーを平滑化。1手Undo）──
+  // ── 範囲操作（カーブ上をドラッグで範囲選択→右クリックで 平滑化 / 平ら）──
+  // 対象＝「選択範囲 × 表示中チャンネル」。ボーンは軸(Euler)単位、位置は成分、表情は値。1手Undo。
+  let curveRange: { lo: number; hi: number } | null = null;
+  let curveDragStartX: number | null = null;
+  let ctxMenu: { x: number; y: number } | null = null;
+  function frameAtX(x: number): number {
+    return Math.max(0, Math.min(totalFrames, Math.round((x - HEADER_WIDTH) / pixelPerFrame)));
+  }
+  function applyRangeOp(mode: 'smooth' | 'flat'): void {
+    ctxMenu = null;
+    if (!curveRange || channels.length === 0) return;
+    const { lo, hi } = curveRange;
+    const chans = channels;   // 表示中チャンネル（元値のスナップショット）
+    animEditorStore.batch(() => {
+      for (const ch of chans) {
+        const inRange = ch.points.filter((p) => p.f >= lo && p.f <= hi);
+        if (mode === 'flat') {
+          if (inRange.length === 0) continue;
+          const avg = inRange.reduce((s, p) => s + p.v, 0) / inRange.length;   // 範囲平均で水平化
+          for (const p of inRange) applyChannelValue(ch.kind, ch.track, ch.axis, p.f, avg);
+        } else {
+          if (inRange.length < 3) continue;
+          const vals = inRange.map((p) => p.v);   // 元値で前後加重平均（端は固定）
+          for (let i = 1; i < inRange.length - 1; i++) {
+            applyChannelValue(ch.kind, ch.track, ch.axis, inRange[i].f, vals[i] * 0.5 + vals[i - 1] * 0.25 + vals[i + 1] * 0.25);
+          }
+        }
+      }
+    });
+  }
+  function onSvgContext(e: MouseEvent): void {
+    if (viewMode !== 'curve') return;   // ドープはデフォルト/キー側で処理
+    e.preventDefault();
+    if (curveRange && channels.length > 0) ctxMenu = { x: e.clientX, y: e.clientY };
+  }
 </script>
 
 <svelte:window on:keydown={onKeyDown} />
@@ -299,6 +501,9 @@
 <div style="display:flex;flex-direction:column;height:100%;">
 <!-- トリム/範囲ツールバー -->
 <div class="trim-bar">
+  <button class="modebtn" class:active={viewMode === 'dope'} on:click={() => (viewMode = 'dope')}>ドープ</button>
+  <button class="modebtn" class:active={viewMode === 'curve'} on:click={() => (viewMode = 'curve')}>カーブ</button>
+  <span class="sep"></span>
   <span class="lbl">トリム</span>
   <button on:click={doTrimBefore} title="現在フレームより前を削除して詰める">⟤前を削除</button>
   <button on:click={doTrimAfter} title="現在フレームより後を削除">後を削除⟥</button>
@@ -311,9 +516,32 @@
   <button on:click={doPasteRange} title="現在フレームへ貼り付け">貼付</button>
 </div>
 
+<!-- カーブモード: 表示トラック選択バー -->
+{#if viewMode === 'curve'}
+<div class="curve-bar">
+  <span class="lbl">表示/編集</span>
+  {#each curveCandidates as c}
+    <span class="ct">
+      <button class="tlabel" on:click={() => toggleTrackAll(c.kind, c.track, c.axes)} title="全軸オン/オフ">{c.label}</button>
+      {#if c.axes}
+        {#each AXES as a}
+          <button class="axbtn" style="color:{AXIS_COLORS[a]};border-color:{AXIS_COLORS[a]};" class:on={curveChannels.has(chKey(c.kind, c.track, a))} on:click={() => toggleChannel(chKey(c.kind, c.track, a))}>{a.toUpperCase()}</button>
+        {/each}
+      {:else}
+        <button class="axbtn" style="color:#f8a;border-color:#f8a;" class:on={curveChannels.has(chKey(c.kind, c.track, ''))} on:click={() => toggleChannel(chKey(c.kind, c.track, ''))}>値</button>
+      {/if}
+    </span>
+  {/each}
+  {#if curveCandidates.length === 0}<span style="color:#666;">キーのあるトラックがありません（先にポーズを付けてキーを打ってください）</span>{/if}
+  <span class="sep"></span>
+  <span style="color:#888;">グラフを横ドラッグで範囲選択→右クリックで 平滑化/平ら{#if curveRange}<b style="color:#f9a;">（{curveRange.lo}–{curveRange.hi}）</b>{/if}</span>
+</div>
+{/if}
+
 <div
   bind:this={containerEl}
-  style="flex:1;min-height:0;overflow-x:auto;overflow-y:auto;background:#1a1a1a;user-select:none;"
+  bind:clientHeight={curveH}
+  style="flex:1;min-height:0;overflow-x:auto;overflow-y:{viewMode === 'curve' ? 'hidden' : 'auto'};background:#1a1a1a;user-select:none;"
   on:wheel|nonpassive={onWheel}
   on:pointerdown={onPanDown}
 >
@@ -325,6 +553,7 @@
     on:mousedown={onSvgMouseDown}
     on:mousemove={onSvgMouseMove}
     on:mouseup={onSvgMouseUp}
+    on:contextmenu={onSvgContext}
     style="display:block;"
   >
     <!-- 背景グリッド -->
@@ -334,6 +563,7 @@
       <text x={x + 2} y={14} fill="#666" font-size="10">{i * 10}</text>
     {/each}
 
+    {#if viewMode === 'dope'}
     <!-- トラック行 -->
     {#each boneRows as boneName, i}
       {@const y = rowY(i)}
@@ -401,6 +631,31 @@
         on:contextmenu|preventDefault|stopPropagation={() => onKeyContext('', frame, 'h')}
       />
     {/each}
+    {:else}
+    <!-- ══ カーブモード ══ -->
+    <!-- Y 軸グリッド + 目盛 -->
+    {#each yTickRows as t}
+      <line x1={HEADER_WIDTH} y1={t.y} x2={timelineWidth} y2={t.y} stroke={t.zero ? '#557' : '#282828'} stroke-width="1" />
+      <text x={HEADER_WIDTH - 4} y={t.y + 3} fill="#888" font-size="10" text-anchor="end">{t.v.toFixed(2)}</text>
+    {/each}
+    <!-- チャンネル曲線 + 打点（縦ドラッグで値編集） -->
+    {#each channelPaths as cp}
+      <path d={cp.d} fill="none" stroke={cp.color} stroke-width="1.5" />
+      {#each cp.pts as pt}
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        <circle cx={pt.x} cy={pt.y} r="4" fill={cp.color} stroke="#000" stroke-width="0.5" style="cursor:ns-resize"
+          on:mousedown={(e) => startPointDrag(e, cp.kind, cp.track, cp.axis, pt.f)} />
+      {/each}
+    {/each}
+    {#if channels.length === 0}
+      <text x={HEADER_WIDTH + 20} y={CURVE_TOP + 34} fill="#666" font-size="12">上の「表示」でトラックを選ぶとカーブを表示します（回転=度・位置=m・表情=0〜1）</text>
+    {/if}
+    <!-- 選択範囲バンド（横ドラッグで選択→右クリックメニュー） -->
+    {#if curveRange}
+      <rect x={frameToX(curveRange.lo)} y={0} width={Math.max(1, frameToX(curveRange.hi) - frameToX(curveRange.lo))} height={timelineHeight}
+        fill="#f9a" fill-opacity="0.12" stroke="#f9a" stroke-opacity="0.55" stroke-dasharray="4 3" pointer-events="none" />
+    {/if}
+    {/if}
 
     <!-- トリム範囲（In/Out）帯 -->
     {#if effOut > effIn}
@@ -419,10 +674,10 @@
       />
     {/if}
 
-    <!-- プレイヘッド -->
+    <!-- プレイヘッド（線はイベントを奪わない＝下の打点をドラッグ可能に。移動は上部ハンドルで） -->
     <line
       x1={playheadX} y1={0} x2={playheadX} y2={timelineHeight}
-      stroke="#ff4" stroke-width="2"
+      stroke="#ff4" stroke-width="2" pointer-events="none"
     />
     <!-- プレイヘッドのドラッグハンドル -->
     <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -434,6 +689,17 @@
     />
   </svg>
 </div>
+
+<!-- 範囲右クリックメニュー（平滑化 / 平ら） -->
+{#if ctxMenu}
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div class="ctx-backdrop" on:mousedown={() => (ctxMenu = null)} on:contextmenu|preventDefault={() => (ctxMenu = null)}></div>
+  <div class="ctx-menu" style="left:{ctxMenu.x}px; top:{ctxMenu.y}px;">
+    <div class="ctx-title">範囲 {curveRange?.lo}–{curveRange?.hi}</div>
+    <button on:click={() => applyRangeOp('smooth')}>〜 平滑化</button>
+    <button on:click={() => applyRangeOp('flat')}>― 平ら（水平化）</button>
+  </div>
+{/if}
 </div>
 
 <style>
@@ -442,4 +708,18 @@
   .trim-bar .sep { width: 1px; height: 14px; background: #333; margin: 0 2px; }
   .trim-bar button { background: #2a2a2a; color: #ccd; border: 1px solid #444; border-radius: 3px; padding: 2px 7px; font-size: 11px; cursor: pointer; }
   .trim-bar button:hover { background: #3a3a3a; }
+  .modebtn.active { background: #1a3a5a; border-color: #4af; color: #4af; }
+  .curve-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 6px; background: #141414; border-bottom: 1px solid #333; font-size: 11px; color: #aaa; max-height: 60px; overflow-y: auto; }
+  .curve-bar .lbl { color: #777; }
+  .curve-bar .sep { width: 1px; height: 14px; background: #333; margin: 0 2px; }
+  .curve-bar .ct { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; background: #1c1c1c; border: 1px solid #2c2c2c; border-radius: 4px; padding: 1px 3px; }
+  .curve-bar .tlabel { background: none; border: none; color: #bbc; padding: 1px 3px; font-size: 11px; cursor: pointer; }
+  .curve-bar .tlabel:hover { color: #fff; }
+  .curve-bar .axbtn { background: #181818; border: 1px solid #444; border-radius: 3px; padding: 0 5px; font-size: 10px; font-weight: bold; cursor: pointer; opacity: 0.45; }
+  .curve-bar .axbtn.on { opacity: 1; background: #26262e; }
+  .ctx-backdrop { position: fixed; inset: 0; z-index: 200; }
+  .ctx-menu { position: fixed; z-index: 201; background: #222; border: 1px solid #555; border-radius: 6px; padding: 4px; min-width: 150px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+  .ctx-title { font-size: 10px; color: #888; padding: 2px 8px 4px; }
+  .ctx-menu button { display: block; width: 100%; text-align: left; background: none; border: none; color: #ddd; padding: 6px 10px; font-size: 12px; cursor: pointer; border-radius: 4px; }
+  .ctx-menu button:hover { background: #3a5a7a; }
 </style>

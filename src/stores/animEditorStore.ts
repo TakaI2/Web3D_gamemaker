@@ -59,15 +59,66 @@ function totalFrames(state: AnimEditorState): number {
   return Math.round(state.durationSec * state.fps);
 }
 
+// ── Undo 履歴 ──
+// 各キーフレーム編集の「直前」の状態スナップショットを積む。ドラッグ中に連続発火する
+// 同一ターゲット(bone+frame 等)の編集は editKey で1手にまとめ、Undo が1回で戻せるようにする。
+const MAX_HISTORY = 100;
+let history: AnimEditorState[] = [];
+let lastEditKey: string | null = null;
+let suppressHistory = false;   // batch 中は個々の編集で履歴を積まない
+
+function snapshot(s: AnimEditorState): AnimEditorState {
+  // 上位 Map は複製（内側の Quaternion/Vector3 は各ミューテータが必ず clone するため参照共有で安全）
+  return {
+    ...s,
+    boneKeyframes: new Map([...s.boneKeyframes].map(([k, v]) => [k, new Map(v)])),
+    blendShapeKeyframes: new Map([...s.blendShapeKeyframes].map(([k, v]) => [k, new Map(v)])),
+    hipsPositionKeyframes: new Map(s.hipsPositionKeyframes),
+  };
+}
+// editKey=null は必ず1手（連続まとめなし）。同じ editKey が続く間は1手に集約。
+function pushHistory(editKey: string | null): void {
+  if (suppressHistory) return;
+  if (editKey !== null && editKey === lastEditKey) return;
+  lastEditKey = editKey;
+  history.push(snapshot(get({ subscribe })));
+  if (history.length > MAX_HISTORY) history.shift();
+}
+function clearHistory(): void {
+  history = [];
+  lastEditKey = null;
+}
+
 export const animEditorStore = {
   subscribe,
 
   open(durationSec: number): void {
+    clearHistory();
     set({ ...defaultState(), durationSec });
   },
 
   close(): void {
+    clearHistory();
     set(defaultState());
+  },
+
+  // ── Undo（元に戻す）──
+  undo(): void {
+    const prev = history.pop();
+    if (!prev) return;
+    lastEditKey = null;
+    set(prev);
+  },
+  canUndo(): boolean {
+    return history.length > 0;
+  },
+
+  // 複数の編集を1手のUndoにまとめて実行（範囲平滑化など）。
+  batch(fn: () => void): void {
+    pushHistory(null);
+    const prev = suppressHistory;
+    suppressHistory = true;
+    try { fn(); } finally { suppressHistory = prev; }
   },
 
   setCurrentFrame(frame: number): void {
@@ -78,6 +129,7 @@ export const animEditorStore = {
   },
 
   setDuration(sec: number): void {
+    pushHistory('duration');
     update((s) => {
       const clamped = Math.max(0.1, sec);
       return { ...s, durationSec: clamped };
@@ -108,6 +160,7 @@ export const animEditorStore = {
   },
 
   setBoneKeyframe(boneName: string, frame: number, quat: THREE.Quaternion): void {
+    pushHistory(`bone:${boneName}:${frame}`);
     update((s) => {
       const boneKeyframes: BoneKeyframes = new Map(s.boneKeyframes);
       const boneMap = new Map(boneKeyframes.get(boneName) ?? []);
@@ -118,6 +171,7 @@ export const animEditorStore = {
   },
 
   removeBoneKeyframe(boneName: string, frame: number): void {
+    pushHistory(null);
     update((s) => {
       const boneKeyframes: BoneKeyframes = new Map(s.boneKeyframes);
       const boneMap = boneKeyframes.get(boneName);
@@ -134,6 +188,7 @@ export const animEditorStore = {
   },
 
   setHipsPositionKeyframe(frame: number, pos: THREE.Vector3): void {
+    pushHistory(`hips:${frame}`);
     update((s) => {
       const hipsPositionKeyframes: HipsPositionKeyframes = new Map(s.hipsPositionKeyframes);
       hipsPositionKeyframes.set(frame, pos.clone());
@@ -142,6 +197,7 @@ export const animEditorStore = {
   },
 
   removeHipsPositionKeyframe(frame: number): void {
+    pushHistory(null);
     update((s) => {
       const hipsPositionKeyframes: HipsPositionKeyframes = new Map(s.hipsPositionKeyframes);
       if (!hipsPositionKeyframes.has(frame)) return s;
@@ -151,6 +207,7 @@ export const animEditorStore = {
   },
 
   setBlendShapeKeyframe(exprName: string, frame: number, value: number): void {
+    pushHistory(`blend:${exprName}:${frame}`);
     update((s) => {
       const blendShapeKeyframes: BlendShapeKeyframes = new Map(s.blendShapeKeyframes);
       const exprMap = new Map(blendShapeKeyframes.get(exprName) ?? []);
@@ -161,6 +218,7 @@ export const animEditorStore = {
   },
 
   removeBlendShapeKeyframe(exprName: string, frame: number): void {
+    pushHistory(null);
     update((s) => {
       const blendShapeKeyframes: BlendShapeKeyframes = new Map(s.blendShapeKeyframes);
       const exprMap = blendShapeKeyframes.get(exprName);
@@ -179,6 +237,7 @@ export const animEditorStore = {
   // ── トリミング（時間で区切って前後を丸ごと削除・詰める）──
   // 指定フレームより前を削除し、残りを先頭(0)へ詰める（尺も短縮）。
   trimBefore(frame: number): void {
+    pushHistory(null);
     update((s) => {
       if (frame <= 0) return s;
       const shift = (f: number): number | null => (f >= frame ? f - frame : null);
@@ -196,6 +255,7 @@ export const animEditorStore = {
 
   // 指定フレームより後を削除（尺＝frame）。
   trimAfter(frame: number): void {
+    pushHistory(null);
     update((s) => {
       const keep = (f: number): number | null => (f <= frame ? f : null);
       const durationSec = Math.max(0.1, frame / s.fps);
@@ -212,6 +272,7 @@ export const animEditorStore = {
 
   // In〜Out（両端含む）を削除して後ろを詰める（尺も短縮）。
   deleteRange(inF: number, outF: number): void {
+    pushHistory(null);
     update((s) => {
       const lo = Math.min(inF, outF), hi = Math.max(inF, outF);
       const span = hi - lo + 1;   // 削除フレーム数＝詰め量
@@ -249,6 +310,7 @@ export const animEditorStore = {
   pasteRange(atFrame: number): void {
     const clip = rangeClipboard;
     if (!clip) return;
+    pushHistory(null);
     update((s) => {
       const boneKeyframes: BoneKeyframes = new Map(s.boneKeyframes);
       const blendShapeKeyframes: BlendShapeKeyframes = new Map(s.blendShapeKeyframes);
@@ -290,6 +352,7 @@ export const animEditorStore = {
     },
     vrm: VRM,
   ): void {
+    pushHistory(null);
     // T-pose にリセットして rest quaternion を取得（update() で raw ボーンへ反映してから読む）
     vrm.humanoid.resetNormalizedPose();
     vrm.humanoid.update();

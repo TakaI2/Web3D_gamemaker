@@ -3,6 +3,7 @@
   import { get } from 'svelte/store';
   import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
   import { VRMAnimationLoaderPlugin } from '@pixiv/three-vrm-animation';
+  import { VRMLoaderPlugin } from '@pixiv/three-vrm';
   import { vrmStore } from '../stores/vrmStore';
   import { appModeStore } from '../stores/appModeStore';
   import { animEditorStore } from '../stores/animEditorStore';
@@ -22,6 +23,15 @@
   let vrm: VRM | null = null;
   let editorScene: AnimEditorSceneHandle | null = null;
   let loadError = '';
+  // public フォルダからの読み込み用（VRM=/vrm、VRMA=/vrma）
+  let vrmFiles: string[] = [];
+  let vrmaFiles: string[] = [];
+  let selectedVrm = '';
+  let selectedVrma = '';
+  let vrmLoadError = '';
+
+  // Undo 可否（$animEditorStore が変わるたび再評価）
+  $: canUndo = ((): boolean => { void $animEditorStore; return animEditorStore.canUndo(); })();
 
   // IK スイッチ
   const IK_TARGETS: IKTarget[] = ['rightHand', 'leftHand', 'rightFoot', 'leftFoot'];
@@ -40,13 +50,48 @@
   }
 
   onMount(() => {
+    // VRM 未読込でも編集画面に入れる（ここで読み込める）。既に読込済みなら流用。
     const state = get(vrmStore);
-    if (!state.vrm) {
-      appModeStore.toEditor();
-      return;
-    }
-    vrm = state.vrm;
+    if (state.vrm) vrm = state.vrm;
+    void fetchList('vrm');
+    void fetchList('vrma');
   });
+
+  async function fetchList(mode: 'vrm' | 'vrma'): Promise<void> {
+    try {
+      const res = await fetch(`/${mode}/manifest.json`);
+      const files: string[] = res.ok ? await res.json() : [];
+      if (mode === 'vrm') vrmFiles = files; else vrmaFiles = files;
+    } catch {
+      if (mode === 'vrm') vrmFiles = []; else vrmaFiles = [];
+    }
+  }
+
+  // ── VRM 読み込み（public/vrm フォルダ または ファイル）──
+  async function loadVrmFromUrl(url: string): Promise<void> {
+    vrmLoadError = '';
+    try {
+      const loader = new GLTFLoader();
+      loader.register((parser) => new VRMLoaderPlugin(parser));
+      const gltf = await loader.loadAsync(url);
+      const loaded = gltf.userData.vrm as VRM | undefined;
+      if (!loaded) throw new Error('VRM データが見つかりません');
+      vrm = loaded;
+      vrmStore.setVRM(loaded);
+    } catch (e) {
+      vrmLoadError = e instanceof Error ? e.message : String(e);
+    }
+  }
+  async function loadSelectedVrm(): Promise<void> {
+    if (!selectedVrm) return;
+    await loadVrmFromUrl(`/vrm/${encodeURIComponent(selectedVrm)}`);
+  }
+  async function loadVrmFile(e: Event): Promise<void> {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    try { await loadVrmFromUrl(url); } finally { URL.revokeObjectURL(url); }
+  }
 
   function goBack(): void {
     animEditorStore.close();
@@ -58,23 +103,36 @@
     dialogMode = 'ready';
   }
 
+  // raw VRMAnimation を URL から取得してストアへインポート（AnimationManager 非経由）
+  async function importVrmaFromUrl(url: string): Promise<void> {
+    if (!vrm) return;
+    const loader = new GLTFLoader();
+    loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+    const gltf = await loader.loadAsync(url);
+    const vrmAnim = gltf.userData.vrmAnimations?.[0];
+    if (!vrmAnim) throw new Error('VRMA データが見つかりません');
+    animEditorStore.importFromVrmAnimation(vrmAnim, vrm);
+    dialogMode = 'ready';
+  }
+
   async function openVrma(): Promise<void> {
     if (!vrmaFile || !vrm) return;
     loadError = '';
+    const url = URL.createObjectURL(vrmaFile);
     try {
-      // AnimationManager を経由せず raw VRMAnimation を直接取得する
-      const loader = new GLTFLoader();
-      loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
-      const url = URL.createObjectURL(vrmaFile);
-      try {
-        const gltf = await loader.loadAsync(url);
-        const vrmAnim = gltf.userData.vrmAnimations?.[0];
-        if (!vrmAnim) throw new Error('VRMA データが見つかりません');
-        animEditorStore.importFromVrmAnimation(vrmAnim, vrm);
-        dialogMode = 'ready';
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+      await importVrmaFromUrl(url);
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : String(e);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function openVrmaFromServer(): Promise<void> {
+    if (!selectedVrma || !vrm) return;
+    loadError = '';
+    try {
+      await importVrmaFromUrl(`/vrma/${encodeURIComponent(selectedVrma)}`);
     } catch (e) {
       loadError = e instanceof Error ? e.message : String(e);
     }
@@ -173,20 +231,31 @@
   <div class="overlay">
     <div class="dialog">
       <h2>アニメーション編集</h2>
-      {#if !vrm}
-        <p class="warn">VRM が読み込まれていません。エディタに戻ってください。</p>
-        <button on:click={goBack}>← エディタへ戻る</button>
-      {:else}
-        <div class="dialog-btns">
-          <button class="big-btn" on:click={() => (dialogMode = 'new')}>
-            ＋ 新規作成
-          </button>
-          <button class="big-btn" on:click={() => (dialogMode = 'open')}>
-            📂 VRMA を開く
-          </button>
+      <!-- VRM モデル読み込み（public/vrm フォルダ または ファイル） -->
+      <div class="load-section">
+        <div class="section-label">
+          VRM モデル {#if vrm}<span class="ok">✓ 読込済み</span>{:else}<span class="warn">未読込</span>{/if}
         </div>
-        <button class="back-link" on:click={goBack}>← キャンセル</button>
-      {/if}
+        <div class="load-row">
+          <select bind:value={selectedVrm}>
+            <option value="">— public/vrm から選択 —</option>
+            {#each vrmFiles as f}<option value={f}>{f}</option>{/each}
+          </select>
+          <button on:click={loadSelectedVrm} disabled={!selectedVrm}>読込</button>
+        </div>
+        <label class="file-label">またはファイル: <input type="file" accept=".vrm" on:change={loadVrmFile} /></label>
+        {#if vrmLoadError}<p class="error">{vrmLoadError}</p>{/if}
+      </div>
+      <div class="dialog-btns">
+        <button class="big-btn" on:click={() => (dialogMode = 'new')} disabled={!vrm}>
+          ＋ 新規作成
+        </button>
+        <button class="big-btn" on:click={() => (dialogMode = 'open')} disabled={!vrm}>
+          📂 VRMA を開く
+        </button>
+      </div>
+      {#if !vrm}<p class="hint">まず VRM を読み込むと編集を開始できます。</p>{/if}
+      <button class="back-link" on:click={goBack}>← エディタへ戻る</button>
     </div>
   </div>
 
@@ -209,10 +278,17 @@
   <div class="overlay">
     <div class="dialog">
       <h2>VRMA を開く</h2>
-      <input type="file" accept=".vrma" on:change={(e) => (vrmaFile = e.currentTarget.files?.[0] ?? null)} />
+      <div class="load-row">
+        <select bind:value={selectedVrma}>
+          <option value="">— public/vrma から選択 —</option>
+          {#each vrmaFiles as f}<option value={f}>{f}</option>{/each}
+        </select>
+        <button on:click={openVrmaFromServer} disabled={!selectedVrma}>読込</button>
+      </div>
+      <label class="file-label">またはファイル: <input type="file" accept=".vrma" on:change={(e) => (vrmaFile = e.currentTarget.files?.[0] ?? null)} /></label>
       {#if loadError}<p class="error">{loadError}</p>{/if}
       <div class="dialog-btns">
-        <button class="big-btn" on:click={openVrma} disabled={!vrmaFile}>読み込む</button>
+        <button class="big-btn" on:click={openVrma} disabled={!vrmaFile}>ファイルを読み込む</button>
         <button on:click={() => (dialogMode = 'choose')}>← 戻る</button>
       </div>
     </div>
@@ -224,6 +300,7 @@
     <!-- ヘッダーバー -->
     <div class="header-bar">
       <button class="back-btn" on:click={goBack}>← 戻る</button>
+      <button class="back-btn undo-btn" on:click={() => animEditorStore.undo()} disabled={!canUndo} title="元に戻す (Ctrl+Z)">↶ 元に戻す</button>
       <input
         class="filename-input"
         value={outputFilename}
@@ -361,7 +438,16 @@
   .big-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .back-link { background: none; border: none; color: #888; cursor: pointer; margin-top: 12px; font-size: 12px; }
   .warn { color: #fa8; }
+  .ok { color: #8f8; }
   .error { color: #f66; font-size: 12px; }
+  .hint { color: #888; font-size: 12px; margin: 8px 0 0; }
+  .load-section { border: 1px solid #3a3a3a; border-radius: 6px; padding: 10px; margin-bottom: 14px; }
+  .load-row { display: flex; gap: 6px; margin: 6px 0; }
+  .load-row select { flex: 1; background: #2a2a2a; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px; max-width: 260px; }
+  .load-row button { background: #333; border: 1px solid #555; color: #ddd; border-radius: 4px; padding: 4px 12px; cursor: pointer; }
+  .load-row button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .file-label { font-size: 12px; color: #aaa; }
+  .undo-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* メインエディタ */
   .anim-editor {
