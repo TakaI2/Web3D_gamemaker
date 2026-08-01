@@ -114,11 +114,17 @@ function setStatus(msg) { const e = $('status'); if (e) e.textContent = msg; }
 async function init() {
   const app = $('app');
   if (!navigator.gpu) { showError('WebGPU 非対応のブラウザです'); return; }
-  renderer = new THREE.WebGPURenderer({ antialias: true, requiredLimits: { maxStorageBuffersInVertexStage: 1 } });   // マント(GPUクロス)に必要
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // powerPreference: 既定だとブラウザが省電力＝内蔵GPU(Intel)を選ぶことがある。明示して外付けGPU(GeForce等)を要求する。
+  renderer = new THREE.WebGPURenderer({
+    antialias: !NO_AA,
+    powerPreference: LOW_POWER ? 'low-power' : 'high-performance',
+    requiredLimits: { maxStorageBuffersInVertexStage: 1 },   // マント(GPUクロス)に必要
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, DPR_CAP || (LOW ? 1 : 2)));   // ?dpr=1 / ?low=1 で等倍（塗り面積↓）
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   await renderer.init();
+  await collectGpuInfo();   // 診断: 実際に使われている GPU（ソフトウェアフォールバックだと極端に遅い）
   app.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
@@ -136,12 +142,16 @@ async function init() {
   // TPS Flightと同じ画づくり: Neutralトーンマップ＋HDR環境マップ（マント等の光沢。強度は昼夜連動）
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.toneMappingExposure = 1.0;
-  new UltraHDRLoader().loadAsync('https://threejs.org/examples/textures/equirectangular/royal_esplanade_2k.hdr.jpg')
-    .then((hdr) => { hdr.mapping = THREE.EquirectangularReflectionMapping; scene.environment = hdr; })
-    .catch((e) => console.warn('HDR環境マップ読込失敗:', e));
+  if (!NO_ENV) {   // IBL（全PBR材質が毎ピクセル環境光サンプル）。弱GPUでは重い→?noenv/?low で無効
+    new UltraHDRLoader().loadAsync('https://threejs.org/examples/textures/equirectangular/royal_esplanade_2k.hdr.jpg')
+      .then((hdr) => { hdr.mapping = THREE.EquirectangularReflectionMapping; scene.environment = hdr; })
+      .catch((e) => console.warn('HDR環境マップ読込失敗:', e));
+  }
   initSunMoon();   // 太陽と月のディスク（日周に追従）
-  initSky();   // WebGPU用 SkyMesh（読めなければ背景色レルプにフォールバック）
-  try { buildClouds(); } catch (e) { console.warn('雲生成失敗', e); }
+  if (!NO_SKY) {   // procedural大気散乱シェーダ（フルスクリーン）→?nosky/?low では背景色のみ
+    initSky();   // WebGPU用 SkyMesh（読めなければ背景色レルプにフォールバック）
+    try { buildClouds(); } catch (e) { console.warn('雲生成失敗', e); }
+  }
 
   // ECEF→ローカル再中心化のためのピボット（tiles.group をぶら下げて逆ENUを掛ける）
   pivot = new THREE.Group(); pivot.matrixAutoUpdate = false; scene.add(pivot);
@@ -195,8 +205,10 @@ async function init() {
     ensureTotemFx().catch((e) => console.warn('トーテムFX準備失敗:', e));
     try { initDebrisFx(); } catch (e) { console.warn('破片FX準備失敗:', e); }
     try { initUltFx(); } catch (e) { console.warn('アルティメットFX準備失敗:', e); }
-    prepareKenAssets().then((ok) => { if (ok) setKenCount(KEN_COUNT); }).catch((e) => console.warn('ken準備失敗:', e));
-    loadAgentOverrides().then(() => { try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); } });
+    if (!NO_NPC) {   // 性能切り分け: ?nonpc=1 で住民NPCと生活エージェントを出さない
+      prepareKenAssets().then((ok) => { if (ok) setKenCount(KEN_COUNT); }).catch((e) => console.warn('ken準備失敗:', e));
+      loadAgentOverrides().then(() => { try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); } });
+    }
   });
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
   loadPlayer().then(() => prepareBiteAssets()).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
@@ -246,6 +258,22 @@ function recenterToHachioji() {
 const GROUND_ZOOM = 16, GROUND_RADIUS = 5, DEM_ZOOM = 14, GROUND_SUB = 8;
 // ── マップモード（map-editor製 .map.json の地形へ置換）──
 const MAP_NAME = new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || null;   // dist はビルド時に window.DEFAULT_MAP を注入
+// 性能切り分け用スイッチ。?diag=1 で GPU名/drawCall/三角数まで表示。
+//   ?nocape=1 マント無効 / ?nocity=1 建物無効 / ?nonpc=1 NPC(ken)と車を無効 / ?dpr=1 解像度を下げる
+const _qs = new URLSearchParams(location.search);
+const NO_CAPE = _qs.get('nocape') === '1';
+const NO_CITY = _qs.get('nocity') === '1';
+const NO_NPC = _qs.get('nonpc') === '1';
+const DIAG = _qs.get('diag') === '1';
+const DPR_CAP = parseFloat(_qs.get('dpr') || '') || 0;   // 例 ?dpr=1 で等倍（GPU負荷を大きく下げる）
+// 低スペック向け: ?low=1 で MSAA/環境マップ(IBL)/空シェーダ/雲 をまとめて切り、DPR も 1 に。
+// 個別に切って原因を特定したい場合は ?noaa=1 / ?noenv=1 / ?nosky=1 も使える。
+const LOW = _qs.get('low') === '1';
+const LOW_POWER = _qs.get('lowpower') === '1';   // 検証用: あえて内蔵GPUを要求して差を見る
+const NO_AA = LOW || _qs.get('noaa') === '1';
+const NO_ENV = LOW || _qs.get('noenv') === '1';
+const NO_SKY = LOW || _qs.get('nosky') === '1';
+const SHOW_FPS = _qs.get('fps') === '1' || NO_CAPE || NO_CITY || NO_NPC || DIAG || LOW;
 let mapTerrain = null;   // createTerrainMesh の戻り値（heightAt含む）
 let mapRoads = [];       // .map.json のスプライン道路（あればOSMの代わりに使う）
 let mapBuildings = null; // .map.json の建物差分 {removed[], moved{}, added[]}
@@ -717,7 +745,8 @@ async function loadPlayer() {
     player.vrm = vrm;
     player.mixer = new THREE.AnimationMixer(vrm.scene);
     // マント（GPUクロス）。空中でも落ちないよう floorY 無効化
-    if (bundle.cloth) {
+    // ?nocape=1 でマントを生成しない（性能切り分け用: マントが重さの原因かを比較できる）
+    if (bundle.cloth && !NO_CAPE) {
       try { player.cloth = createVRMCloth({ renderer, scene, vrm, cloth: bundle.cloth, basePos: player.pos, floorY: -1e9 }); }
       catch (e) { console.warn('マント生成失敗:', e); }
     }
@@ -1153,7 +1182,7 @@ async function loadRoads() {
 async function finishRoads() {
   buildRoadSurfIndex();
   await buildRoadMeshes().catch((e) => { console.warn('道路メッシュ生成失敗（デバッグ線で代替）:', e); drawRoadLines(); });
-  await spawnCars();
+  if (!NO_NPC) await spawnCars();   // 性能切り分け: ?nonpc=1 で車を出さない
   try { buildCarLights(); } catch (e) { console.warn('車ライト生成失敗', e); }
   console.log('roads center nodes', roadNodes.size, 'edges', activeEdges.length, 'cars', cars.length);
 }
@@ -2379,6 +2408,7 @@ const bldModels = [];       // { tpl, near, far, recs:[{m,x,z,boxIdx,dead,isFar,
 let _lodT = 0, _lodNearCount = 0, _lodFarCount = 0;
 
 async function buildKenneyCity() {
+  if (NO_CITY) { console.log('city: ?nocity=1 のため建物をスキップ'); return; }   // 性能切り分け
   if (!activeEdges.length) { console.warn('city: no road edges'); return; }
   // 活性エッジ(world XZ＋DEM Y)→ジェネレータ
   const edges = activeEdges.map((e) => [e.a.x, e.a.y, e.a.z, e.b.x, e.b.y, e.b.z]);
@@ -5131,8 +5161,58 @@ function interiorClamp() {
   if (player.pos.y > yHi) { player.pos.y = yHi; if (player.vel.y > 0) player.vel.y = 0; }
 }
 
+// 使用中GPUの取得。software フォールバック（SwiftShader/Basic Render Driver/llvmpipe 等）だと桁違いに遅い。
+let _gpuInfo = '取得中…', _gpuIsSoftware = false, _gpuAlt = '';
+async function adapterName(pref) {
+  try {
+    const ad = await navigator.gpu.requestAdapter(pref ? { powerPreference: pref } : {});
+    const info = ad?.info ?? (ad?.requestAdapterInfo ? await ad.requestAdapterInfo() : null);
+    if (!info) return '(情報なし)';
+    return [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(' / ') || '(空)';
+  } catch (e) { return 'エラー: ' + e.message; }
+}
+async function collectGpuInfo() {
+  _gpuInfo = await adapterName(LOW_POWER ? 'low-power' : 'high-performance');
+  _gpuIsSoftware = /swiftshader|basic render|llvmpipe|software|warp|microsoft basic/i.test(_gpuInfo);
+  const other = await adapterName(LOW_POWER ? 'high-performance' : 'low-power');
+  if (other && other !== _gpuInfo) _gpuAlt = other;   // 別GPUも見えている＝選択の問題だと分かる
+}
+
+// FPS計測オーバーレイ（?fps=1 / ?nocape=1 / ?diag=1 で表示）。性能問題の切り分け用。
+let _fpsEl = null, _fpsFrames = 0, _fpsLast = performance.now(), _fpsMin = 999, _fpsWorstMs = 0;
+let _diagDraw = 0, _diagTri = 0;
+function updateFpsMeter() {
+  if (!_fpsEl) {
+    _fpsEl = document.createElement('div');
+    Object.assign(_fpsEl.style, { position: 'fixed', top: '10px', right: '10px', zIndex: '30', background: 'rgba(0,0,0,0.7)', color: '#8f8', font: '12px monospace', padding: '6px 10px', borderRadius: '6px', pointerEvents: 'none', whiteSpace: 'pre', maxWidth: '46vw' });
+    document.body.appendChild(_fpsEl);
+  }
+  _fpsFrames++;
+  const now = performance.now();
+  const frameMs = now - _fpsLastFrame; _fpsLastFrame = now;
+  if (frameMs > _fpsWorstMs && _fpsFrames > 2) _fpsWorstMs = frameMs;
+  if (now - _fpsLast >= 500) {
+    const fps = Math.round(_fpsFrames / ((now - _fpsLast) / 1000));
+    if (fps < _fpsMin) _fpsMin = fps;
+    let txt = `${fps} FPS (最低 ${_fpsMin} / 最遅 ${_fpsWorstMs.toFixed(0)}ms)\nマント: ${NO_CAPE ? 'OFF' : 'ON'}`;
+    if (DIAG) {
+      txt += `\nGPU: ${_gpuIsSoftware ? '⚠ソフトウェア描画! ' : ''}${_gpuInfo}`;
+      if (_gpuAlt) txt += `\n  (別GPUも検出: ${_gpuAlt})`;
+      txt += `\ndrawCalls ${_diagDraw} / tri ${_diagTri.toLocaleString()}`;
+      txt += `\n建物 ${NO_CITY ? 'OFF' : '近' + _lodNearCount + '/遠' + _lodFarCount} / NPC ${NO_NPC ? 'OFF' : 'ON'}`;
+      txt += `\n解像度 ${renderer?.domElement?.width ?? 0}x${renderer?.domElement?.height ?? 0} (DPR${renderer?.getPixelRatio?.().toFixed(1) ?? '-'})`;
+      txt += `\nMSAA ${NO_AA ? 'OFF' : 'ON'} / 環境光 ${NO_ENV ? 'OFF' : 'ON'} / 空 ${NO_SKY ? 'OFF' : 'ON'}`;
+      if (player.cloth) txt += `\nマント(GPU布) ${player.cloth.vertexCount}頂点 CPU側 ${player.cloth.lastUpdateMs.toFixed(2)}ms`;
+    }
+    _fpsEl.textContent = txt;
+    _fpsFrames = 0; _fpsLast = now; _fpsWorstMs = 0;
+  }
+}
+let _fpsLastFrame = performance.now();
+
 function tick() {
   const dt = Math.min(_clock.getDelta(), 1 / 30);
+  if (SHOW_FPS) updateFpsMeter();
   updateFlight(dt);
   updatePlayerAnim(dt);
   updateCars(dt);
@@ -5173,6 +5253,7 @@ function tick() {
     setStatus(`${clock}${timeScale > 1 ? `(x${timeScale})` : ''}${wanted} / 高度 ${Math.round(player.pos.y)}m / 速度上限 ${Math.round(flight.maxSpeed)} / ${info}${entryPrompt ? ' / ' + entryPrompt : ''}`);
   }
   renderer.render(scene, camera);
+  if (DIAG) { const r = renderer.info?.render; if (r) { _diagDraw = r.drawCalls; _diagTri = r.triangles; } }   // 描画直後に採取（render前はリセット済み）
 }
 
 function onResize() {
