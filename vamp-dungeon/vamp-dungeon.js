@@ -5,6 +5,7 @@
 // 描画は InstancedMesh でまとめられる（数百メッシュ→数ドローコール）。
 import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
+import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 import { pmremTexture } from 'https://esm.sh/three@0.184.0/tsl';
 import { VRMLoaderPlugin, MToonMaterialLoaderPlugin, VRMUtils } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
@@ -92,30 +93,23 @@ scene.add(dungeonGroup);
 
 async function buildDungeon() {
   setStatus('ダンジョン生成中…');
-  dg = generateMansion({ roomsX: 3, roomsZ: 3, seed: (Math.random() * 99999) | 0 });
+  const stg = stageCfg;
+  dg = generateMansion({ roomsX: stg?.roomsX || 3, roomsZ: stg?.roomsZ || 3, seed: stg?.seed ?? ((Math.random() * 99999) | 0) });
+  if (stg?.items) dg.items = stg.items;          // 編集済みアイテムで置き換え
+  if (stg?.goal) dg.goal = stg.goal;             // 編集済みゴール
   buildWallColliders();
 
-  // 抽象名 → 実モデル（キット指定）。部屋の家具は room-gen が返す実名をそのまま使う。
-  const MAP = {
-    floor: [KIT_FURN, 'floorFull'], wall: [KIT, 'wall'], doorway: [KIT, 'wall-doorway-square'],
-    window: [KIT, 'wall-window-round'], pillar: [KIT, 'pillar-stone'], lantern: [KIT, 'lantern'],
-    paneling: [KIT_FURN, 'paneling'], rug: [KIT_FURN, 'rugRectangle'],
-    chandelier: [KIT_FURN, 'lampSquareCeiling'], plant: [KIT_FURN, 'pottedPlant'],
-  };
   const needed = new Set(['floor', 'wall', 'doorway', 'window']);
   for (const it of dg.items) if (it.model !== 'painting') needed.add(it.model);
-  const parts = {};
-  await Promise.all([...needed].map(async (name) => {
-    const [dir, file] = MAP[name] || [KIT_FURN, name];   // 未知＝家具キットの実名
-    try { parts[name] = await loadPart(dir, file); } catch (e) { console.warn('モデル読込失敗:', name, e.message); }
-  }));
+  await Promise.all([...needed].map((name) => ensurePart(name)));
+  const parts = partsCache;
   // 種類ごとに配置行列を集めて InstancedMesh 化
   const buckets = new Map();
   const push = (kind, m) => { if (!buckets.has(kind)) buckets.set(kind, []); buckets.get(kind).push(m); };
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(SCALE, SCALE, SCALE), _p = new THREE.Vector3();
 
   const WALL_H = parts.wall.size.y * SCALE;   // 壁1段の高さ
-  const FLOOR_T = (parts.floor ? parts.floor.size.y : 0.05) * SCALE;   // 床タイルの厚み
+  FLOOR_T = (parts.floor ? parts.floor.size.y : 0.05) * SCALE;   // 床タイルの厚み
   wallH = WALL_H;
   for (const s of dg.shell) {
     const isWall = s.model === 'wall' || s.model === 'doorway' || s.model === 'window';
@@ -131,26 +125,10 @@ async function buildDungeon() {
     // 床の真上に天井（広間=2段ぶん高く / 廊下=1段）
     if (s.model === 'floor') { _p.set(s.x * TILE, (s.ceil || 1) * WALL_H, s.z * TILE); push('ceiling', _m.compose(_p, _q, _s).clone()); }
   }
-  const _s2 = new THREE.Vector3();
-  const FURN_S = 1.4;   // 家具は建築(2.0)より小さめ＝人のスケールに合わせる
-  for (const it of dg.items) {
-    if (it.model === 'painting') { addPainting(it); continue; }   // 絵画は額縁＋テクスチャで個別生成
-    let y = it.y || 0, sc = SCALE, sy = 1, ox = 0, oz = 0;
-    if (it.furn || it.model === 'plant') { sc = FURN_S; }
-    else if (it.model === 'rug') { y = 0.02; }                                   // 床とのZ-fight回避
-    else if (it.model === 'chandelier') { y = (it.ceil || 2) * wallH - 0.05; sc = FURN_S; }
-    else if (it.wainscot) {   // 腰板＝壁の下側だけの帯。壁からわずかに手前へ出す
-      y = 0; sy = 0.42;
-      ox = Math.sin(it.ry || 0) * 0.07; oz = Math.cos(it.ry || 0) * 0.07;
-    }
-    if (it.toCeil) sy = 2;
-    _p.set(it.x * TILE + ox, y, it.z * TILE + oz);
-    _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), it.ry || 0);
-    _s2.set(sc, sc * sy, sc);
-    push(it.model, _m.compose(_p, _q, _s2).clone());
-  }
+  // 絵画は額縁＋テクスチャで個別生成
+  for (const it of dg.items) if (it.model === 'painting') addPainting(it);
 
-  parts.ceiling = parts.floor;   // 天井は床と同じ部材（バケットだけ分けて観察モードで隠せるように）
+  partsCache.ceiling = partsCache.floor;   // 天井は床と同じ部材（バケットだけ分けて観察モードで隠せるように）
   for (const [kind, mats] of buckets) {
     const part = parts[kind]; if (!part || !mats.length) continue;
     for (const sub of collectMeshes(part.obj)) {
@@ -159,18 +137,19 @@ async function buildDungeon() {
       for (let i = 0; i < mats.length; i++) inst.setMatrixAt(i, mm.multiplyMatrices(mats[i], sub.mat4));
       inst.instanceMatrix.needsUpdate = true;
       inst.frustumCulled = false;
-      if (kind === 'ceiling' || kind === 'chandelier') inst.userData.overhead = true;   // 俯瞰時に隠す
+      if (kind === 'ceiling') inst.userData.overhead = true;   // 俯瞰時に隠す
       dungeonGroup.add(inst);
     }
   }
+  await rebuildItemInstances();
 
   // ゴール（金色の柱＋光）
   goalMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 3.2, 16),
     new THREE.MeshStandardMaterial({ color: 0xffcc44, emissive: 0xffaa22, emissiveIntensity: 1.6, roughness: 0.3 }));
   goalMesh.position.set(dg.goal.x * TILE, 1.6, dg.goal.z * TILE);
   scene.add(goalMesh);
-  const gl = new THREE.PointLight(0xffcc55, 40, 22, 1.4);
-  gl.position.copy(goalMesh.position); scene.add(gl);
+  goalLight = new THREE.PointLight(0xffcc55, 40, 22, 1.4);
+  goalLight.position.copy(goalMesh.position); scene.add(goalLight);
 
   // ランタンの淡い光（数を絞る＝負荷対策）
   for (const it of dg.items.filter((i) => i.model === 'lantern').slice(0, 4)) {
@@ -180,7 +159,69 @@ async function buildDungeon() {
   buildMoonlight();
   setStatus('');
 }
-let goalMesh = null, wallH = 2.0;
+let goalMesh = null, goalLight = null, wallH = 2.0, FLOOR_T = 0.1;
+const FURN_S = 1.4;   // 家具は建築(2.0)より小さめ＝人のスケールに合わせる
+// 抽象名 → 実モデル（キット指定）。部屋の家具は room-gen が返す実名をそのまま使う。
+const MODEL_MAP = {
+  floor: [KIT_FURN, 'floorFull'], wall: [KIT, 'wall'], doorway: [KIT, 'wall-doorway-square'],
+  window: [KIT, 'wall-window-round'], pillar: [KIT, 'pillar-stone'], lantern: [KIT, 'lantern'],
+  paneling: [KIT_FURN, 'paneling'], rug: [KIT_FURN, 'rugRectangle'],
+  chandelier: [KIT_FURN, 'lampSquareCeiling'], plant: [KIT_FURN, 'pottedPlant'],
+};
+const partsCache = {};
+async function ensurePart(name) {
+  if (partsCache[name]) return partsCache[name];
+  const [dir, file] = MODEL_MAP[name] || [KIT_FURN, name];
+  try { partsCache[name] = await loadPart(dir, file); } catch (e) { console.warn('モデル読込失敗:', name, e.message); }
+  return partsCache[name];
+}
+// アイテム1個の配置（セル→ワールド）。インスタンス描画とステージ編集の両方で使う共通計算。
+function itemPlacement(it) {
+  let y = it.y || 0, sc = SCALE, sy = 1, ox = 0, oz = 0;
+  if (it.furn || it.model === 'plant') { sc = FURN_S; }
+  else if (it.model === 'rug') { y = 0.02; }
+  else if (it.model === 'chandelier') { y = (it.ceil || 2) * wallH - 0.05; sc = FURN_S; }
+  else if (it.wainscot) { y = 0; sy = 0.42; ox = Math.sin(it.ry || 0) * 0.07; oz = Math.cos(it.ry || 0) * 0.07; }
+  if (it.toCeil) sy = 2;
+  return { x: it.x * TILE + ox, y, z: it.z * TILE + oz, ry: it.ry || 0, sx: sc, sy: sc * sy, sz: sc, ox, oz };
+}
+// アイテム（家具・柱・燭台等）のインスタンス群を dg.items から作り直す（ステージ編集後の反映にも使う）
+const itemGroup = new THREE.Group();
+scene.add(itemGroup);
+async function rebuildItemInstances() {
+  for (const o of [...itemGroup.children]) { itemGroup.remove(o); }
+  const need = new Set();
+  for (const it of dg.items) if (it.model !== 'painting') need.add(it.model);
+  await Promise.all([...need].map((n) => ensurePart(n)));
+  const buckets = new Map();
+  const push = (kind, m) => { if (!buckets.has(kind)) buckets.set(kind, []); buckets.get(kind).push(m); };
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _sv = new THREE.Vector3();
+  for (const it of dg.items) {
+    if (it.model === 'painting') continue;
+    const pl = itemPlacement(it);
+    _p.set(pl.x, pl.y, pl.z);
+    _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), pl.ry);
+    _sv.set(pl.sx, pl.sy, pl.sz);
+    push(it.model, _m.compose(_p, _q, _sv).clone());
+  }
+  for (const [kind, mats] of buckets) {
+    const part = partsCache[kind]; if (!part || !mats.length) continue;
+    for (const sub of collectMeshes(part.obj)) {
+      const inst = new THREE.InstancedMesh(sub.geo, sub.mat, mats.length);
+      const mm = new THREE.Matrix4();
+      for (let i = 0; i < mats.length; i++) inst.setMatrixAt(i, mm.multiplyMatrices(mats[i], sub.mat4));
+      inst.instanceMatrix.needsUpdate = true;
+      inst.frustumCulled = false;
+      if (kind === 'chandelier') inst.userData.overhead = true;
+      itemGroup.add(inst);
+    }
+  }
+}
+function setGoalCell(cx, cz) {
+  dg.goal = { x: cx, z: cz };
+  if (goalMesh) goalMesh.position.set(cx * TILE, 1.6, cz * TILE);
+  if (goalLight) goalLight.position.copy(goalMesh.position);
+}
 
 // 環境マップ(IBL)はマントの質感にだけ使う。scene.environment にすると建物にも効いて
 // 陰影が浅く“のっぺり”するうえ、WebGPUのノードマテリアルでは envMapIntensity=0 でも切れない。
@@ -775,6 +816,15 @@ async function loadCapeParams(npcName) {
   return null;
 }
 
+// ステージ編集の保存（public/vamp_param/mansion-stage.json）。seed で外殻を再現し items/goal を上書き。
+let stageCfg = null;
+async function loadStageCfg() {
+  for (const u of ['./mansion-stage.json', '../vamp_param/mansion-stage.json']) {
+    try { const j = JSON.parse(await (await fetch(u)).text()); if (j && j.seed != null) { stageCfg = j; return true; } } catch { /* next */ }
+  }
+  return false;
+}
+
 async function loadTune() {   // ar-vampire と同じ vamp_param を共有
   for (const u of ['./vamp-tune.json', '../vamp_param/vamp-tune.json']) {
     try { const t = JSON.parse(await (await fetch(u)).text());
@@ -1254,7 +1304,7 @@ function obsTarget() {
 }
 const torchHolder = new THREE.Object3D();   // 観察モード中の松明の置き場（プレイヤー位置に固定）
 // 俯瞰では天井が邪魔なので消す。プレイ復帰時に戻す。
-function setOverheadVisible(v) { dungeonGroup.traverse((o) => { if (o.userData.overhead) o.visible = v; }); }
+function setOverheadVisible(v) { for (const g of [dungeonGroup, itemGroup]) g.traverse((o) => { if (o.userData.overhead) o.visible = v; }); }
 const _obsAt = new THREE.Vector3();
 // カメラ位置が壁の中に入らないように、注視点から少しずつ後退して当たる直前で止める
 function obsPointInWall(x, z) {
@@ -1323,7 +1373,7 @@ function setupObsUI() {
     obsSetMode(b.dataset.m);
   }));
   const cv = renderer.domElement;
-  cv.addEventListener('mousedown', (e) => { if (obs.on) { obs.drag = e.button === 2 ? 2 : 1; obs.lx = e.clientX; obs.ly = e.clientY; } });
+  cv.addEventListener('mousedown', (e) => { if (obs.on && !edit.busy) { obs.drag = e.button === 2 ? 2 : 1; obs.lx = e.clientX; obs.ly = e.clientY; } });
   addEventListener('mouseup', () => { obs.drag = 0; });
   addEventListener('mousemove', (e) => {
     if (!obs.on || !obs.drag) return;
@@ -1386,10 +1436,304 @@ async function loadLighting() {
   }
 }
 
+
+// ══════════ ステージ編集モード（観察カメラの上に構築。パーツ移動/回転・等間隔配置・ユニット・ゴール移動） ══════════
+const edit = { on: false, busy: false, sel: [], gizmo: null, group: null, snap: true, mode: 'translate' };
+
+function editItemMesh(it) {   // 編集用の個別メッシュ（選択・ギズモ操作対象）
+  const part = partsCache[it.model];
+  if (!part) return null;
+  const g = new THREE.Group();
+  g.add(part.obj.clone(true));
+  const pl = itemPlacement(it);
+  g.position.set(pl.x, pl.y, pl.z);
+  g.rotation.y = pl.ry;
+  g.scale.set(pl.sx, pl.sy, pl.sz);
+  g.userData.item = it;
+  return g;
+}
+async function editEnter() {
+  if (edit.on || !dg) return;
+  edit.on = true;
+  if (!obs.on) obsToggle(true);
+  if (!edit.group) { edit.group = new THREE.Group(); scene.add(edit.group); }
+  // アイテムを個別メッシュ化（インスタンス表示は隠す）
+  itemGroup.visible = false;
+  for (const it of dg.items) {
+    if (it.model === 'painting') continue;
+    await ensurePart(it.model);
+    const m = editItemMesh(it);
+    if (m) edit.group.add(m);
+  }
+  if (!edit.gizmo) {
+    edit.gizmo = new TransformControls(camera, renderer.domElement);
+    edit.gizmo.addEventListener('dragging-changed', (e) => { edit.busy = e.value; if (!e.value) editWriteBack(); });
+    edit.gizmo.addEventListener('objectChange', () => { if (edit.mode === 'translate' && edit.gizmo.object === goalMesh) goalMesh.position.y = 1.6; });
+    scene.add(edit.gizmo.getHelper ? edit.gizmo.getHelper() : edit.gizmo);
+  }
+  editApplySnap();
+  $('edit-panel').style.display = 'block';
+  setStatus('ステージ編集中：クリック=選択 / Shift+クリック=追加選択 / G移動 R回転 / Delete削除');
+}
+function editExit() {
+  if (!edit.on) return;
+  edit.on = false;
+  editSelect(null);
+  if (edit.group) { for (const o of [...edit.group.children]) edit.group.remove(o); }
+  itemGroup.visible = true;
+  rebuildItemInstances();
+  $('edit-panel').style.display = 'none';
+  setStatus('');
+}
+function editApplySnap() {
+  if (!edit.gizmo) return;
+  edit.gizmo.setTranslationSnap(edit.snap ? TILE / 2 : null);
+  edit.gizmo.setRotationSnap(edit.snap ? Math.PI / 2 : null);
+}
+function editSetMode(m) {
+  edit.mode = m;
+  if (!edit.gizmo) return;
+  edit.gizmo.setMode(m);
+  if (m === 'rotate') { edit.gizmo.showX = false; edit.gizmo.showZ = false; edit.gizmo.showY = true; }
+  else { edit.gizmo.showX = true; edit.gizmo.showZ = true; edit.gizmo.showY = false; }   // 移動は床平面のみ
+}
+function editSelect(obj, additive) {
+  if (!additive) {
+    for (const o of edit.sel) setEditHighlight(o, false);
+    edit.sel = [];
+  }
+  if (obj) {
+    if (!edit.sel.includes(obj)) { edit.sel.push(obj); setEditHighlight(obj, true); }
+  }
+  const prim = edit.sel[edit.sel.length - 1] || null;
+  if (edit.gizmo) { if (prim) { edit.gizmo.attach(prim); editSetMode(edit.mode); } else edit.gizmo.detach(); }
+  const inf = $('edit-info');
+  if (inf) inf.textContent = edit.sel.length === 0 ? '（未選択）'
+    : edit.sel.length === 1 ? (prim === goalMesh ? '🏁 ゴール地点' : (prim.userData.item?.model || '?'))
+    : edit.sel.length + '個選択中';
+}
+function setEditHighlight(obj, on) {
+  obj.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+      if (!m) continue;
+      if (on) { if (m.emissive) { o.userData._em = m.emissive.getHex(); m.emissive.setHex(0x2255ff); } }
+      else if (o.userData._em != null && m.emissive) { m.emissive.setHex(o.userData._em); delete o.userData._em; }
+    }
+  });
+}
+// ギズモ操作の結果をアイテムデータへ書き戻す
+function editWriteBack() {
+  const prim = edit.gizmo && edit.gizmo.object;
+  if (!prim) return;
+  if (prim === goalMesh) {
+    setGoalCell(Math.round(prim.position.x / TILE), Math.round(prim.position.z / TILE));
+    return;
+  }
+  const it = prim.userData.item;
+  if (!it) return;
+  it.ry = prim.rotation.y;
+  const pl = itemPlacement(it);            // ry確定後のオフセット（腰板など）で逆算
+  it.x = (prim.position.x - pl.ox) / TILE;
+  it.z = (prim.position.z - pl.oz) / TILE;
+  // 高さは chandelier / rug 等は自動。手動Yは維持しない（床置き前提）
+}
+function editDeleteSel() {
+  for (const o of edit.sel) {
+    if (o === goalMesh) continue;   // ゴールは消さない
+    const it = o.userData.item;
+    const i = dg.items.indexOf(it);
+    if (i >= 0) dg.items.splice(i, 1);
+    edit.group.remove(o);
+  }
+  editSelect(null);
+}
+function editDuplicateSel() {
+  const src = edit.sel[edit.sel.length - 1];
+  const it = src && src.userData.item;
+  if (!it) return;
+  const copy = { ...it, x: it.x + 1 };
+  dg.items.push(copy);
+  const m = editItemMesh(copy);
+  if (m) { edit.group.add(m); editSelect(m); }
+}
+// 等間隔配置：選択パーツを N 個、指定セル間隔・方向に並べる（パーツは共通寸法＝セル単位なのできれいに揃う）
+function editArray(count, stepCells, dir) {
+  const src = edit.sel[edit.sel.length - 1];
+  const it = src && src.userData.item;
+  if (!it || count < 2) return;
+  let dx = 0, dz = 0;
+  if (dir === 'x+') dx = 1; else if (dir === 'x-') dx = -1;
+  else if (dir === 'z+') dz = 1; else if (dir === 'z-') dz = -1;
+  else { dx = Math.round(Math.sin(it.ry || 0)); dz = Math.round(Math.cos(it.ry || 0)); if (!dx && !dz) dz = 1; }   // fwd=向いている方向
+  for (let i = 1; i < count; i++) {
+    const copy = { ...it, x: it.x + dx * stepCells * i, z: it.z + dz * stepCells * i };
+    dg.items.push(copy);
+    const m = editItemMesh(copy);
+    if (m) edit.group.add(m);
+  }
+}
+// クリック選択（obsのドラッグ回転と両立：動かさずに離した時だけ選択）
+const _ray = new THREE.Raycaster(), _ndc = new THREE.Vector2();
+let _downXY = null;
+function editPointerDown(e) { if (edit.on && e.button === 0 && !edit.busy) _downXY = [e.clientX, e.clientY]; }
+function editPointerUp(e) {
+  if (!edit.on || !_downXY || edit.busy) { _downXY = null; return; }
+  const moved = Math.hypot(e.clientX - _downXY[0], e.clientY - _downXY[1]);
+  _downXY = null;
+  if (moved > 4) return;   // ドラッグ＝カメラ回転
+  const r = renderer.domElement.getBoundingClientRect();
+  _ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  _ray.setFromCamera(_ndc, camera);
+  const hits = _ray.intersectObjects([...(edit.group ? edit.group.children : []), goalMesh].filter(Boolean), true);
+  if (!hits.length) { editSelect(null); return; }
+  let obj = hits[0].object;
+  if (obj !== goalMesh) { while (obj.parent && obj.parent !== edit.group) obj = obj.parent; }
+  editSelect(obj === goalMesh || obj.parent === edit.group ? obj : null, e.shiftKey);
+}
+// 選択グループをユニットとして保存（room-editor 互換の .unit.json）
+async function editSaveUnit(name) {
+  const items = edit.sel.map((o) => o.userData.item).filter(Boolean);
+  if (!items.length || !name) return false;
+  let cx = 0, cz = 0;
+  for (const it of items) { cx += it.x; cz += it.z; }
+  cx /= items.length; cz /= items.length;
+  const children = items.map((it) => ({
+    model: it.model,
+    x: +(((it.x - cx) * TILE) / FURN_S).toFixed(4), y: 0, z: +(((it.z - cz) * TILE) / FURN_S).toFixed(4),
+    ry: +(it.ry || 0).toFixed(4),
+  }));
+  let mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9;
+  for (const c of children) { mnx = Math.min(mnx, c.x); mxx = Math.max(mxx, c.x); mnz = Math.min(mnz, c.z); mxz = Math.max(mxz, c.z); }
+  const def = { format: 'unit', version: 1, name, tags: { rooms: ['any'], place: 'free' }, fp: [Math.max(1, Math.ceil(mxx - mnx)), Math.max(1, Math.ceil(mxz - mnz))], items: children };
+  try {
+    const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'room', filename: name + '.unit.json', content: JSON.stringify(def, null, 1) }) });
+    return r.ok;
+  } catch { return false; }
+}
+async function editPlaceUnit(name) {
+  let def = null;
+  try { def = JSON.parse(await (await fetch('../rooms/' + encodeURIComponent(name))).text()); } catch { /* noop */ }
+  if (!def || !def.items) return;
+  const bx = obs.tgt.x / TILE, bz = obs.tgt.z / TILE;   // カメラ注視点に配置
+  for (const c of def.items) {
+    const it = { model: c.model, x: bx + (c.x * FURN_S) / TILE, z: bz + (c.z * FURN_S) / TILE, y: (c.y || 0) * FURN_S, ry: c.ry || 0, furn: true };
+    dg.items.push(it);
+    await ensurePart(it.model);
+    const m = editItemMesh(it);
+    if (m) edit.group.add(m);
+  }
+}
+async function editAddModel(name) {
+  const it = { model: name, x: obs.tgt.x / TILE, z: obs.tgt.z / TILE, ry: 0, furn: true };
+  await ensurePart(name);
+  if (!partsCache[name]) { setStatus('モデルが読めません: ' + name); return; }
+  dg.items.push(it);
+  const m = editItemMesh(it);
+  if (m) { edit.group.add(m); editSelect(m); }
+}
+async function editSaveStage() {
+  const data = { version: 1, seed: dg.seed, roomsX: 3, roomsZ: 3, goal: dg.goal, items: dg.items };
+  try {
+    const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'vamp_param', filename: 'mansion-stage.json', content: JSON.stringify(data) }) });
+    return r.ok;
+  } catch { return false; }
+}
+// UI（自前DOM注入。index.html は変更しない）
+function setupEditUI() {
+  const panel = document.createElement('div');
+  panel.id = 'edit-panel';
+  panel.style.cssText = 'display:none;position:fixed;right:10px;top:150px;z-index:31;background:rgba(14,18,30,0.93);border:1px solid #4a6;border-radius:8px;padding:10px 12px;font-size:12px;color:#cfe;width:250px;max-height:78vh;overflow-y:auto;';
+  panel.innerHTML = [
+    '<div style="font-weight:bold;color:#8f8;margin-bottom:4px;">🛠 ステージ編集</div>',
+    '<div id="edit-info" style="color:#9fe6ff;min-height:16px;">（未選択）</div>',
+    '<div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;">',
+    '<button id="ed-move">移動(G)</button><button id="ed-rot">回転(R)</button><button id="ed-rot90">90°回す</button>',
+    '<button id="ed-dup">複製(Ctrl+D)</button><button id="ed-del" style="background:#5a2a2a;">削除(Del)</button></div>',
+    '<label style="display:flex;align-items:center;gap:5px;margin-top:6px;cursor:pointer;"><input type="checkbox" id="ed-snap" checked> グリッド吸着（1mマス・90°）</label>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">等間隔配置</div>',
+    '<div style="display:flex;gap:4px;align-items:center;margin-top:3px;">個数<input type="number" id="ed-n" value="4" min="2" max="40" style="width:44px;">',
+    '間隔<input type="number" id="ed-step" value="1" min="0.5" step="0.5" style="width:44px;">セル</div>',
+    '<div style="display:flex;gap:4px;align-items:center;margin-top:3px;">方向<select id="ed-dir" style="flex:1;"><option value="x+">X+</option><option value="x-">X-</option><option value="z+">Z+</option><option value="z-">Z-</option><option value="fwd">向いている方向</option></select>',
+    '<button id="ed-array">並べる</button></div>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">パーツ追加</div>',
+    '<div style="display:flex;gap:4px;margin-top:3px;"><select id="ed-models" style="flex:1;"></select><button id="ed-add">追加</button></div>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">ユニット</div>',
+    '<div style="display:flex;gap:4px;margin-top:3px;"><select id="ed-units" style="flex:1;"></select><button id="ed-unit-place">配置</button></div>',
+    '<div style="display:flex;gap:4px;margin-top:3px;"><input type="text" id="ed-unit-name" placeholder="ユニット名" style="flex:1;"><button id="ed-unit-save">選択を保存</button></div>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;display:flex;gap:4px;">',
+    '<button id="ed-save" style="flex:1;background:#2b6a4a;">💾 ステージ保存</button>',
+    '<button id="ed-play" style="flex:1;background:#6a2b4a;">▶ シミュレーション</button></div>',
+  ].join('');
+  document.body.appendChild(panel);
+  const st = document.createElement('style');
+  st.textContent = '#edit-panel button{background:#25304a;border:1px solid #46608c;color:#cfe;border-radius:4px;padding:3px 7px;font-size:11px;cursor:pointer;} #edit-panel input,#edit-panel select{background:#1a2030;color:#cfe;border:1px solid #345;border-radius:3px;padding:2px 4px;font-size:11px;}';
+  document.head.appendChild(st);
+  // 編集開始ボタンを観察パネルへ注入
+  const obsPanel = $('obs-panel');
+  if (obsPanel) {
+    const b = document.createElement('button');
+    b.textContent = '🛠 ステージ編集を開く';
+    b.style.cssText = 'margin-top:8px;width:100%;padding:7px;background:#2a5a3a;border:1px solid #4a8;border-radius:5px;color:#fff;cursor:pointer;';
+    b.addEventListener('click', () => editEnter());
+    obsPanel.appendChild(b);
+  }
+  $('ed-move').addEventListener('click', () => editSetMode('translate'));
+  $('ed-rot').addEventListener('click', () => editSetMode('rotate'));
+  $('ed-rot90').addEventListener('click', () => { const o = edit.sel[edit.sel.length - 1]; if (o && o !== goalMesh) { o.rotation.y += Math.PI / 2; edit.gizmo.attach(o); const it = o.userData.item; if (it) { it.ry = o.rotation.y; } } });
+  $('ed-dup').addEventListener('click', editDuplicateSel);
+  $('ed-del').addEventListener('click', editDeleteSel);
+  $('ed-snap').addEventListener('change', (e) => { edit.snap = e.target.checked; editApplySnap(); });
+  $('ed-array').addEventListener('click', () => editArray(+$('ed-n').value || 2, +$('ed-step').value || 1, $('ed-dir').value));
+  $('ed-add').addEventListener('click', () => { const v = $('ed-models').value; if (v) editAddModel(v); });
+  $('ed-unit-place').addEventListener('click', () => { const v = $('ed-units').value; if (v) editPlaceUnit(v); });
+  $('ed-unit-save').addEventListener('click', async () => {
+    const name = ($('ed-unit-name').value || '').replace(/[^\w\-]/g, '');
+    const btn = $('ed-unit-save');
+    const ok = await editSaveUnit(name);
+    btn.textContent = ok ? '✓保存' : '✗失敗';
+    setTimeout(() => { btn.textContent = '選択を保存'; refreshUnitList(); }, 1200);
+  });
+  $('ed-save').addEventListener('click', async () => { const b2 = $('ed-save'); b2.textContent = (await editSaveStage()) ? '✓ 保存しました' : '✗ 失敗'; setTimeout(() => { b2.textContent = '💾 ステージ保存'; }, 1400); });
+  $('ed-play').addEventListener('click', () => { editExit(); obsToggle(false); if (phase !== 'playing') startGame(); });
+  renderer.domElement.addEventListener('pointerdown', editPointerDown);
+  renderer.domElement.addEventListener('pointerup', editPointerUp);
+  addEventListener('keydown', (e) => {
+    if (!edit.on) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (/INPUT|TEXTAREA|SELECT/.test(tag)) return;
+    if (e.code === 'KeyG') editSetMode('translate');
+    else if (e.code === 'KeyR') editSetMode('rotate');
+    else if (e.code === 'Delete' || e.code === 'Backspace') editDeleteSel();
+    else if (e.code === 'KeyD' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); editDuplicateSel(); }
+  });
+  refreshModelList(); refreshUnitList();
+}
+async function refreshModelList() {
+  const sel = $('ed-models');
+  if (!sel) return;
+  let names = ['table', 'chair', 'bench', 'bookcaseClosed', 'pottedPlant', 'rugRectangle', 'lampSquareFloor'];
+  try {
+    const all = await (await fetch('../models/manifest.json')).json();
+    const kit = all.filter((f) => f.includes('kenney_furniture-kit')).map((f) => f.split('/').pop().replace(/\.glb$/i, ''));
+    if (kit.length) names = kit;
+  } catch { /* devサーバ無 */ }
+  sel.innerHTML = names.map((n) => '<option value="' + n + '">' + n + '</option>').join('');
+}
+async function refreshUnitList() {
+  const sel = $('ed-units');
+  if (!sel) return;
+  try {
+    const files = await (await fetch('../rooms/manifest.json')).json();
+    const units = files.filter((f) => f.endsWith('.unit.json'));
+    sel.innerHTML = units.map((n) => '<option value="' + n + '">' + n.replace('.unit.json', '') + '</option>').join('');
+  } catch { sel.innerHTML = ''; }
+}
+
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 1 / 20);
-  if (phase === 'playing') {
+  if (phase === 'playing' && !edit.on) {
     nightT += dt;
     updatePlayer(dt);
     updateVamp(dt);
@@ -1433,11 +1777,12 @@ renderer.setAnimationLoop(() => {
 
 // ── 起動 ──
 setupTouch();
-Promise.all([loadPaintingCfg(), loadTune(), loadEnemyCfg(), loadLighting()]).then(() => { initKissAudio(); return buildDungeon(); }).then(() => { nav = buildNav(dg); return loadVamp(); }).then(() => {
+Promise.all([loadPaintingCfg(), loadTune(), loadEnemyCfg(), loadLighting(), loadStageCfg()]).then(() => { initKissAudio(); return buildDungeon(); }).then(() => { nav = buildNav(dg); return loadVamp(); }).then(() => {
   initSpeech();
   prepareKenAssets().then(spawnStaff).catch((e) => console.warn('職員配置失敗:', e));
   resetPlayer();
-  setupObsUI(); applyLighting(); syncLightUI();   // 観察エディタとライティングを初期化
+  setupObsUI();
+  setupEditUI(); applyLighting(); syncLightUI();   // 観察エディタとライティングを初期化
   $('btn-start').disabled = false;
   $('btn-start').textContent = 'スタート';
 }).catch((e) => { setStatus('読み込み失敗: ' + e.message); console.error(e); });
@@ -1452,6 +1797,7 @@ window.__game = {
   fireShot, get KISS() { return KISS; }, get GRAB() { return GRAB; },
   get obs() { return obs; }, get lightCfg() { return lightCfg; },
   curAnim() { return vampAnimName; }, get enemyCfg() { return ENEMY_CFG; }, get kens() { return kens; }, get KEN() { return KEN; }, startHoldKen,
+  get edit() { return edit; }, editEnter, editExit, editSelect, editArray, editSaveStage, setGoalCell, get stageCfg() { return stageCfg; },
   mouthWorld() { if (!vamp.head) return null; const hp=vamp.head.getWorldPosition(new THREE.Vector3()), hq=vamp.head.getWorldQuaternion(new THREE.Quaternion());
     return headFace.clone().multiplyScalar(KISS.fwd).setY(KISS.up).applyQuaternion(hq).add(hp); },
   kissSrc() { return kissAudio.el ? kissAudio.el.src.split('/').pop() : null; },
