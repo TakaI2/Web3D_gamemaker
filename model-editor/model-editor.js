@@ -81,7 +81,19 @@ async function renderThumb(file) {
 function buildGrid() {
   const grid = $('grid');
   grid.innerHTML = '';
+  // フォルダ（キット）ごとに見出しを挟む。files はソート済みなので先頭セグメントの変化で区切れる
+  const counts = {};
+  for (const f of files) counts[f.split('/')[0]] = (counts[f.split('/')[0]] || 0) + 1;
+  let curKit = null;
   for (const file of files) {
+    const kit = file.split('/')[0];
+    if (kit !== curKit) {
+      curKit = kit;
+      const h = document.createElement('div');
+      h.className = 'kit-head';
+      h.textContent = `${kit}（${counts[kit]}）`;
+      grid.appendChild(h);
+    }
     const cell = document.createElement('div');
     cell.className = 'cell' + (selected.has(file) ? ' sel' : '');
     cell.dataset.file = file;

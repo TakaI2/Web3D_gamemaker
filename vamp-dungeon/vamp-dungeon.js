@@ -34,7 +34,7 @@ const $ = (id) => document.getElementById(id);
 const setStatus = (m) => { const e = $('status'); if (e) e.textContent = m; };
 
 // ── 設定 ──
-const SCALE = 2.0;                 // 1セル=2m → 大回廊3セル=6m / 脇廊下2セル=4m
+const SCALE = 2.5;                 // 1セル=2.5m（入口高を人の身長より上げる）→ 大回廊3セル=7.5m / 脇廊下2セル=5m
 const TILE = SCALE;
 const WALL_T = 0.18;               // 壁の当たり厚み（見た目の板厚より少し太めに取る）
 const NIGHT_SEC = 300;             // 5分耐久（Phase2で勝敗に使用）
@@ -99,6 +99,23 @@ function shareMaterial(m) {
 
 // ── モデル読み込み（bottom-center 原点に正規化＝room-editor と同じ規約） ──
 const loader = new GLTFLoader();
+// unlit（KHR_materials_unlit → MeshBasicMaterial）はライトに反応しないので標準マテリアルへ変換。
+// 同じ元マテリアルからは同じ変換結果を返す（共有を保ってパイプライン数を増やさない）
+const litCache = new WeakMap();
+function litMaterial(m) {
+  if (!m || !m.isMeshBasicMaterial) return m;
+  let std = litCache.get(m);
+  if (!std) {
+    std = new THREE.MeshStandardMaterial({
+      map: m.map || null, color: m.color ? m.color.clone() : 0xffffff,
+      roughness: 0.95, metalness: 0,
+      transparent: m.transparent, opacity: m.opacity, alphaTest: m.alphaTest || 0,
+      side: THREE.DoubleSide,   // unlitモデルは面の向きが不定（床が上から見えない等）→両面で描く
+    });
+    litCache.set(m, std);
+  }
+  return std;
+}
 async function loadPart(dir, name) {
   const url = dir.split('/').map(encodeURIComponent).join('/').replace(/^\.\.%2F|^%2E%2E\//, '../') + encodeURIComponent(name) + '.glb';
   const gltf = await loader.loadAsync(dir + encodeURIComponent(name) + '.glb');
@@ -106,7 +123,23 @@ async function loadPart(dir, name) {
   // 読み込み直後に共有へ差し替える＝この部材を使う全ての経路（InstancedMesh・編集用clone）に効く
   obj.traverse((o) => {
     if (!o.isMesh) return;
-    o.material = Array.isArray(o.material) ? o.material.map(shareMaterial) : shareMaterial(o.material);
+    const wasUnlit = Array.isArray(o.material) ? o.material.some((mm) => mm && mm.isMeshBasicMaterial) : o.material?.isMeshBasicMaterial;
+    o.material = Array.isArray(o.material) ? o.material.map((mm) => shareMaterial(litMaterial(mm))) : shareMaterial(litMaterial(o.material));
+    // unlitモデルは法線を持たないことがある。標準マテリアル化すると真っ黒になるので補完する。
+    // さらに両面共有の平面（floor-flat等）は自動計算が表裏で打ち消されて長さ0/NaNの法線になる
+    // → 無効な法線は上向きに置き換える（DoubleSideなので裏面は自動反転）
+    if (wasUnlit && o.geometry) {
+      if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+      const nor = o.geometry.attributes.normal;
+      if (nor) {
+        let fixed = false;
+        for (let i = 0; i < nor.count; i++) {
+          const l = Math.hypot(nor.getX(i), nor.getY(i), nor.getZ(i));
+          if (!(l > 0.5)) { nor.setXYZ(i, 0, 1, 0); fixed = true; }
+        }
+        if (fixed) nor.needsUpdate = true;
+      }
+    }
   });
   const box = new THREE.Box3().setFromObject(obj);
   const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
@@ -153,6 +186,7 @@ async function buildDungeon() {
   setStatus('ダンジョン生成中…');
   const stg = stageCfg;
   dg = generateEstate({ layout: stg?.layout || 'mansion', roomsX: stg?.roomsX || 3, roomsZ: stg?.roomsZ || 3, seed: stg?.seed ?? ((Math.random() * 99999) | 0) });
+  dg.parts = stg?.parts || null; applyPartMap(dg.parts);   // 外装パーツの差し替え（柱/床/壁/窓）
   if (stg?.items) dg.items = stg.items;          // 編集済みアイテムで置き換え
   if (stg?.goal) dg.goal = stg.goal;             // 編集済みゴール
   buildWallColliders();
@@ -160,14 +194,17 @@ async function buildDungeon() {
   const needed = new Set(['floor', 'wall', 'doorway', 'window']);
   for (const it of dg.items) if (it.model !== 'painting') needed.add(it.model);
   await Promise.all([...needed].map((name) => ensurePart(name)));
+  const zoneSet = new Set([0]);
+  for (const sh of dg.shell) zoneSet.add(sh.zone ?? sh.level ?? 0);
+  await Promise.all([...zoneSet].flatMap((z) => ['floor', 'wall', 'window', 'pillar'].map((k) => ensurePartRef(partRefOf(k, z)))));
   const parts = partsCache;
   // 種類ごとに配置行列を集めて InstancedMesh 化
   const buckets = new Map();
   const push = (kind, m) => { if (!buckets.has(kind)) buckets.set(kind, []); buckets.get(kind).push(m); };
-  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(SCALE, SCALE, SCALE), _p = new THREE.Vector3();
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _yAxis = new THREE.Vector3(0, 1, 0), _s = new THREE.Vector3(SCALE, SCALE, SCALE), _p = new THREE.Vector3();
 
-  const WALL_H = parts.wall.size.y * SCALE;   // 壁1段の高さ
-  FLOOR_T = (parts.floor ? parts.floor.size.y : 0.05) * SCALE;   // 床タイルの厚み
+  const WALL_H = (partOf('wall', 0) || parts.wall).size.y * SCALE;   // 壁1段の高さ（ゾーン0基準）
+  FLOOR_T = ((partOf('floor', 0) || parts.floor)?.size.y || 0.05) * SCALE;   // 床タイルの厚み
   wallH = WALL_H;
   STORY_H = WALL_H * 2;   // 天井が全域2段なので1フロア＝壁2枚ぶん
   stairByCell.clear();
@@ -177,34 +214,43 @@ async function buildDungeon() {
   }
   for (const s of dg.shell) {
     const isWall = s.model === 'wall' || s.model === 'doorway' || s.model === 'window';
-    const ry = (s.ry || 0) + (isWall ? WALL_RY_OFFSET : 0);
+    const zn = s.zone ?? s.level ?? 0;
+    let ry = (s.ry || 0) + (isWall ? WALL_RY_OFFSET : 0);
+    if (s.model === 'wall' || s.model === 'window' || s.model === 'floor') ry += partRotOf(s.model, zn);
     const yB = (s.level || 0) * STORY_H;   // 2階以上は上へ積む
     _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), ry);
     // 床は厚みぶん沈めて「上面が階の基準高」になるように（家具や足が床上面に正しく載る）
     // holeOnly＝吹き抜けの開口：床板は張らないが天井（屋根）は生成する
+    const lv = s.level || 0;
     if (!(s.model === 'floor' && s.holeOnly)) {
       _p.set(s.x * TILE, yB + (s.model === 'floor' ? -FLOOR_T : 0), s.z * TILE);
-      push(s.model, _m.compose(_p, _q, _s).clone());
+      push(s.model + '|' + lv + '|' + zn, _m.compose(_p, _q, _s).clone());
     }
     if (isWall && s.tall) {   // 広間側は2段積み（天井が高いぶんを塞ぐ）
       _p.set(s.x * TILE, yB + WALL_H, s.z * TILE);
-      push('wall', _m.compose(_p, _q, _s).clone());
+      // 2段目は常に「壁」モデルなので、扉・窓レコード由来でも壁の回転補正で積む
+      _q2.setFromAxisAngle(_yAxis, (s.ry || 0) + WALL_RY_OFFSET + partRotOf('wall', zn));
+      push('wall|' + lv + '|' + zn, _m.compose(_p, _q2, _s).clone());
     }
     // 床の真上に天井（noCeil＝上階の床が天井を兼ねる／吹き抜け）
-    if (s.model === 'floor' && !s.noCeil) { _p.set(s.x * TILE, yB + (s.ceil || 1) * WALL_H, s.z * TILE); push('ceiling', _m.compose(_p, _q, _s).clone()); }
+    if (s.model === 'floor' && !s.noCeil) { _p.set(s.x * TILE, yB + (s.ceil || 1) * WALL_H, s.z * TILE); push('ceiling|' + lv + '|' + zn, _m.compose(_p, _q, _s).clone()); }
   }
   // 絵画は額縁＋テクスチャで個別生成
   for (const it of dg.items) if (it.model === 'painting') addPainting(it);
 
   partsCache.ceiling = partsCache.floor;   // 天井は床と同じ部材（バケットだけ分けて観察モードで隠せるように）
-  for (const [kind, mats] of buckets) {
-    const part = parts[kind]; if (!part || !mats.length) continue;
+  for (const [bkey, mats] of buckets) {
+    const seg = bkey.split('|');
+    const kind = seg[0], blv = +(seg[1] || 0), bzn = seg[2] != null ? +seg[2] : blv;
+    const part = (kind === 'doorway') ? parts.doorway : partOf(kind === 'ceiling' ? 'floor' : kind, bzn);
+    if (!part || !mats.length) continue;
     for (const sub of collectMeshes(part.obj)) {
       const inst = new THREE.InstancedMesh(sub.geo, sub.mat, mats.length);
       const mm = new THREE.Matrix4();
       for (let i = 0; i < mats.length; i++) inst.setMatrixAt(i, mm.multiplyMatrices(mats[i], sub.mat4));
       inst.instanceMatrix.needsUpdate = true;
       inst.frustumCulled = false;
+      inst.userData.level = blv;
       if (kind === 'ceiling') inst.userData.overhead = true;   // 俯瞰時に隠す
       dungeonGroup.add(inst);
     }
@@ -241,6 +287,49 @@ const MODEL_MAP = {
   paneling: [KIT_FURN, 'paneling'], rug: [KIT_FURN, 'rugRectangle'],
   chandelier: [KIT_FURN, 'lampSquareCeiling'], plant: [KIT_FURN, 'pottedPlant'],
 };
+const KIT_RETRO = '../models/GLB retro_fantasy/';
+// 地下の配置物（タル・木箱）はレトロキットから
+for (const n of ['barrels', 'detail-barrel', 'detail-crate', 'detail-crate-ropes', 'detail-crate-small']) MODEL_MAP[n] = [KIT_RETRO, n];
+// ステージ設定 parts で 柱/床/壁/窓 をレトロキットのモデルへ差し替え（null=既定のfantasyキット）
+const PART_CANDIDATES = {
+  pillar: ['column', 'column-damaged', 'column-paint', 'column-paint-damaged', 'column-wood'],
+  floor: ['floor', 'floor-flat', 'wood-floor'],
+  wall: ['wall', 'wall-detail', 'wall-half', 'wall-fortified', 'wall-fortified-paint', 'wall-pane-wood', 'structure-wall'],
+  window: ['wall-window', 'wall-fortified-window', 'wall-fortified-paint-window', 'wall-pane-window', 'wall-pane-wood-window'],
+};
+// 外装パーツ設定：全体(global) と ゾーン別(zones)。ゾーン＝階（2階建て/地下）または棟（本館0/別棟1）
+const PART_KEYS = ['pillar', 'floor', 'wall', 'window'];
+const PART_CFG = { global: {}, zones: {} };   // {key: {name, rot}}（name=null は既定モデルで回転のみ）
+function applyPartMap(parts) {
+  if (!parts) return;
+  const norm = (v) => (typeof v === 'string') ? { name: v, rot: 0 } : { name: v.name || null, rot: v.rot || 0 };
+  if (parts.global || parts.zones) {
+    for (const k of PART_KEYS) if (parts.global?.[k]) PART_CFG.global[k] = norm(parts.global[k]);
+    for (const [z, m] of Object.entries(parts.zones || {})) {
+      PART_CFG.zones[z] = {};
+      for (const k of PART_KEYS) if (m[k]) PART_CFG.zones[z][k] = norm(m[k]);
+    }
+  } else {
+    for (const k of PART_KEYS) if (parts[k]) PART_CFG.global[k] = norm(parts[k]);   // 旧形式（フラット）
+  }
+}
+function partOvOf(kind, zone) { return (PART_CFG.zones[zone] && PART_CFG.zones[zone][kind]) || PART_CFG.global[kind] || null; }
+function partRefOf(kind, zone) {
+  const o = partOvOf(kind, zone);
+  if (o && o.name) return [KIT_RETRO, o.name];
+  return MODEL_MAP[kind] || [KIT_FURN, kind];
+}
+function partRotOf(kind, zone) { const o = partOvOf(kind, zone); return o ? (o.rot || 0) * Math.PI / 2 : 0; }
+const partRefCache = new Map();   // "dir|file" → {obj, size}
+async function ensurePartRef(ref) {
+  const key = ref[0] + '|' + ref[1];
+  if (partRefCache.has(key)) return partRefCache.get(key);
+  let part = null;
+  try { part = await loadPart(ref[0], ref[1]); } catch (e) { console.warn('モデル読込失敗:', ref[1], e.message); }
+  partRefCache.set(key, part);
+  return part;
+}
+function partOf(kind, zone) { return partRefCache.get(partRefOf(kind, zone).join('|')) || partsCache[kind]; }
 const partsCache = {};
 async function ensurePart(name) {
   if (partsCache[name]) return partsCache[name];
@@ -264,7 +353,7 @@ function itemPlacement(it) {
   }
   else if (it.wainscot) { y = 0; sy = 0.42; ox = Math.sin(it.ry || 0) * 0.07; oz = Math.cos(it.ry || 0) * 0.07; }
   if (it.toCeil) sy = 2;
-  return { x: it.x * TILE + ox, y: y + yB, z: it.z * TILE + oz, ry: it.ry || 0, sx: sc, sy: sc * sy, sz: sc, ox, oz };
+  return { x: it.x * TILE + ox, y: y + yB, z: it.z * TILE + oz, ry: (it.ry || 0) + (it.model === 'pillar' ? partRotOf('pillar', it.zone ?? it.level ?? 0) : 0), sx: sc, sy: sc * sy, sz: sc, ox, oz };
 }
 // アイテム（家具・柱・燭台等）のインスタンス群を dg.items から作り直す（ステージ編集後の反映にも使う）
 const itemGroup = new THREE.Group();
@@ -274,6 +363,9 @@ async function rebuildItemInstances() {
   const need = new Set();
   for (const it of dg.items) if (it.model !== 'painting') need.add(it.model);
   await Promise.all([...need].map((n) => ensurePart(n)));
+  const zset = new Set([0]);
+  for (const it of dg.items) if (it.model === 'pillar') zset.add(it.zone ?? it.level ?? 0);
+  await Promise.all([...zset].map((z) => ensurePartRef(partRefOf('pillar', z))));
   const buckets = new Map();
   const push = (kind, m) => { if (!buckets.has(kind)) buckets.set(kind, []); buckets.get(kind).push(m); };
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _sv = new THREE.Vector3();
@@ -283,36 +375,41 @@ async function rebuildItemInstances() {
     _p.set(pl.x, pl.y, pl.z);
     _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), pl.ry);
     _sv.set(pl.sx, pl.sy, pl.sz);
-    push(it.model, _m.compose(_p, _q, _sv).clone());
+    push(it.model + '|' + (it.level || 0) + '|' + (it.zone ?? it.level ?? 0), _m.compose(_p, _q, _sv).clone());
   }
   // 家具は種類が多く（実測54種）、種類ごとに InstancedMesh を作ると (ジオメトリ×マテリアル) の
   // 組が増えて起動時のシェーダ構築が膨らむ。マテリアル単位でジオメトリを1つに焼き込み、
   // 描画オブジェクトを組の数まで減らす（インスタンス化の利点よりシェーダ構築の削減が効く）。
-  const merged = new Map();   // マテリアル → 統合待ちのジオメトリ配列
+  const merged = new Map();   // (マテリアル×階) → 統合待ちのジオメトリ配列
   const mm = new THREE.Matrix4();
-  for (const [kind, mats] of buckets) {
-    const part = partsCache[kind]; if (!part || !mats.length) continue;
+  for (const [bkey, mats] of buckets) {
+    const seg = bkey.split('|');
+    const kind = seg[0], blv = +(seg[1] || 0), bzn = seg[2] != null ? +seg[2] : blv;
+    const part = kind === 'pillar' ? partOf('pillar', bzn) : partsCache[kind];
+    if (!part || !mats.length) continue;
     const overhead = kind === 'chandelier';   // 観察モードで隠す対象は混ぜない
     for (const sub of collectMeshes(part.obj)) {
       if (Array.isArray(sub.mat)) {   // マルチマテリアルは統合せずインスタンスのまま
         const inst = new THREE.InstancedMesh(sub.geo, sub.mat, mats.length);
         for (let i = 0; i < mats.length; i++) inst.setMatrixAt(i, mm.multiplyMatrices(mats[i], sub.mat4));
         inst.instanceMatrix.needsUpdate = true; inst.frustumCulled = false;
+        inst.userData.level = blv;
         if (overhead) inst.userData.overhead = true;
         itemGroup.add(inst); continue;
       }
-      const key = sub.mat.uuid + (overhead ? '|oh' : '');
-      if (!merged.has(key)) merged.set(key, { mat: sub.mat, overhead, geos: [] });
+      const key = sub.mat.uuid + (overhead ? '|oh' : '') + '|L' + blv;
+      if (!merged.has(key)) merged.set(key, { mat: sub.mat, overhead, lv: blv, geos: [] });
       const bucket = merged.get(key).geos;
       for (const m of mats) bucket.push(sub.geo.clone().applyMatrix4(mm.multiplyMatrices(m, sub.mat4)));
     }
   }
-  for (const { mat, overhead, geos } of merged.values()) {
+  for (const { mat, overhead, lv, geos } of merged.values()) {
     const geo = geos.length === 1 ? geos[0] : mergeGeometries(geos, false);
-    if (!geo) { for (const g of geos) { const mh = new THREE.Mesh(g, mat); mh.frustumCulled = false; if (overhead) mh.userData.overhead = true; itemGroup.add(mh); } continue; }
+    if (!geo) { for (const g of geos) { const mh = new THREE.Mesh(g, mat); mh.frustumCulled = false; mh.userData.level = lv; if (overhead) mh.userData.overhead = true; itemGroup.add(mh); } continue; }
     if (geos.length > 1) for (const g of geos) g.dispose();
     const mesh = new THREE.Mesh(geo, mat);
     mesh.frustumCulled = false;
+    mesh.userData.level = lv;
     if (overhead) mesh.userData.overhead = true;
     itemGroup.add(mesh);
   }
@@ -358,7 +455,8 @@ function buildMoonlight() {
   for (const s of wins) {
     const horiz = Math.abs(Math.sin(s.ry || 0)) < 0.5;
     const pane = new THREE.Mesh(new THREE.PlaneGeometry(TILE * 0.55, wallH * 0.75), winMat);
-    pane.position.set(s.x * TILE, wallH * 0.62, s.z * TILE);
+    pane.position.set(s.x * TILE, wallH * 0.62 + (s.level || 0) * STORY_H, s.z * TILE);
+    pane.userData.level = s.level || 0;
     pane.rotation.y = horiz ? 0 : Math.PI / 2;
     scene.add(pane);
   }
@@ -925,6 +1023,7 @@ function updateVamp(dt) {
     return;
   }
   stopKiss(); setVampAnimForState(vamp.state); relaxVampY(dt);
+  stuckRescue(vamp, vamp.root.position, dt, () => { vamp.path = null; vamp.repathT = 0; });
 
   const sees = canSeePlayer();
   // 職員（ken）も獲物：視界内で最も近い者を狙う
@@ -1245,6 +1344,26 @@ function kenMove(m, dx, dz) {
   if (el > 0.03) { pos.x += ex / el * 0.02; pos.z += ez / el * 0.02; }
   return false;
 }
+// 動けなくなった歩行者の救済：2.5秒間ほぼ動いていなければ、経路を捨てて床高を合わせ、
+// 階段セル上なら近い方の端（下=入口/上=着地）へ寄せて再探索させる
+function stuckRescue(ent, pos, dt, clearPath) {
+  ent._stk = ent._stk || { x: pos.x, z: pos.z, t: 0 };
+  const st = ent._stk;
+  st.t += dt;
+  if (Math.hypot(pos.x - st.x, pos.z - st.z) > 0.12) { st.x = pos.x; st.z = pos.z; st.t = 0; return; }
+  if (st.t < 2.5) return;
+  st.t = 0; st.x = pos.x; st.z = pos.z;
+  const cx = Math.round(pos.x / TILE), cz = Math.round(pos.z / TILE);
+  const sc = stairByCell.get(cx + ',' + cz);
+  if (sc) {   // 階段の途中で詰まった：高さに応じて入口 or 着地セルの中心へ寄せる
+    const base = (sc.base || 0) * STORY_H;
+    const up = pos.y > base + STORY_H * 0.5;
+    const ex = up ? sc.x + 2 * sc.dx : sc.x - sc.dx, ez = up ? sc.z + 2 * sc.dz : sc.z - sc.dz;
+    pos.x = ex * TILE; pos.z = ez * TILE;
+  }
+  pos.y = floorYAt(pos.x, pos.z, pos.y + 0.5);
+  clearPath();
+}
 function kenAlive(m) { return !m._remove && m.hp > 0 && (m.state === 'patrol' || m.state === 'flee'); }
 const _kpin = new THREE.Vector3(), _kd2 = new THREE.Vector3(), _ktmp = new THREE.Vector3(), _kperp = new THREE.Vector3();
 
@@ -1325,6 +1444,7 @@ function updateOneKen(m, dt) {
   }
 
   // ── 行動：彼女が近い→逃走 / 射程内→発砲 / それ以外→巡回 ──
+  stuckRescue(m, pos, dt, () => { m.path = null; m.patrolTo = null; m.fleeRepathT = 0; });
   m.shootCd -= dt;
   if (vd < KEN.fleeR) {
     if (m.state !== 'flee' && m.speech) m.speech.bark('witness');
@@ -1570,7 +1690,27 @@ function obsTarget() {
 }
 const torchHolder = new THREE.Object3D();   // 観察モード中の松明の置き場（プレイヤー位置に固定）
 // 俯瞰では天井が邪魔なので消す。プレイ復帰時に戻す。
-function setOverheadVisible(v) { for (const g of [dungeonGroup, itemGroup]) g.traverse((o) => { if (o.userData.overhead) o.visible = v; }); }
+let overheadVis = true;
+const floorVis = [];   // エディタの「表示階」。空=全階表示
+function applyVisibility() {
+  const groups = [dungeonGroup, itemGroup];
+  if (edit.group) groups.push(edit.group);
+  if (edit.trigGroup) groups.push(edit.trigGroup);
+  for (const g of groups) {
+    g.traverse((o) => {
+      let lv = o.userData.level;
+      if (lv == null && o.userData.item) lv = o.userData.item.level || 0;
+      if (lv == null && !o.userData.overhead) return;
+      let v = true;
+      if (o.userData.overhead && !overheadVis) v = false;
+      if (lv != null && floorVis.length && floorVis[lv] === false) v = false;
+      o.visible = v;
+    });
+  }
+  for (const pr of props) pr.mesh.visible = !(floorVis.length && floorVis[pr.data.level || 0] === false);
+  for (const dr of doorObjs) dr.group.visible = !(floorVis.length && floorVis[dr.data.level || 0] === false);
+}
+function setOverheadVisible(v) { overheadVis = v; applyVisibility(); }
 const _obsAt = new THREE.Vector3();
 // カメラ位置が壁の中に入らないように、注視点から少しずつ後退して当たる直前で止める
 function obsPointInWall(x, z) {
@@ -1774,6 +1914,8 @@ async function editEnter() {
     scene.add(edit.gizmo.getHelper ? edit.gizmo.getHelper() : edit.gizmo);
   }
   editApplySnap();
+  const ov = $('overlay');
+  if (ov) ov.style.display = 'none';   // スタート画面がキャンバスを覆うと選択も右クリックメニューも効かない
   // 全体が見えるようフラット照明へ（夜の演出照明・フォグは編集の邪魔）
   if (!edit.lights) {
     edit.lights = new THREE.Group();
@@ -1783,6 +1925,18 @@ async function editEnter() {
   scene.add(edit.lights);
   edit.fogSave = scene.fog; scene.fog = null;
   if (!edit.paletteBuilt) { edit.paletteBuilt = true; buildEditPalette(); }
+  buildPartsUI();
+  const fv = $('ed-floorvis');
+  if (fv) {
+    const n = dg.floors || 1;
+    if (n > 1) {
+      const names = dg.layout === 'basement' ? ['B1', '1F'] : ['1F', '2F'];
+      fv.innerHTML = '表示階: ' + Array.from({ length: n }, (_, i) =>
+        '<label style="margin-right:8px;cursor:pointer;"><input type="checkbox" data-fv="' + i + '" checked> ' + (names[i] || (i + 1) + 'F') + '</label>').join('');
+      floorVis.length = 0; for (let i = 0; i < n; i++) floorVis.push(true);
+      fv.querySelectorAll('input').forEach((cb) => cb.addEventListener('change', () => { floorVis[+cb.dataset.fv] = cb.checked; applyVisibility(); }));
+    } else { fv.innerHTML = ''; floorVis.length = 0; }
+  }
   const achTa = $('ed-ach-events');
   if (achTa) achTa.value = JSON.stringify(dg.achEvents || []);
   $('edit-panel').style.display = 'block';
@@ -1794,6 +1948,8 @@ function editExit() {
   editSelect(null);
   if (edit.lights) scene.remove(edit.lights);
   scene.fog = edit.fogSave;
+  floorVis.length = 0; applyVisibility();
+  if (phase !== 'playing') { const ov = $('overlay'); if (ov) ov.style.display = ''; }
   applyLighting();
   if (edit.hover) edit.hover.visible = false;
   if (edit.group) { for (const o of [...edit.group.children]) edit.group.remove(o); }
@@ -1813,7 +1969,11 @@ function editSetMode(m) {
   if (!edit.gizmo) return;
   edit.gizmo.setMode(m);
   if (m === 'rotate') { edit.gizmo.showX = false; edit.gizmo.showZ = false; edit.gizmo.showY = true; }
-  else { edit.gizmo.showX = true; edit.gizmo.showZ = true; edit.gizmo.showY = false; }   // 移動は床平面のみ
+  else {   // 移動は床平面が基本。プロップ選択中はYも（机の上などに載せられる）
+    const prim = edit.sel[edit.sel.length - 1];
+    const isProp = !!(prim?.userData.item && dg.props?.includes(prim.userData.item));
+    edit.gizmo.showX = true; edit.gizmo.showZ = true; edit.gizmo.showY = isProp;
+  }
 }
 function editSelect(obj, additive) {
   if (!additive) {
@@ -1831,7 +1991,19 @@ function editSelect(obj, additive) {
     : edit.sel.length + '個選択中';
   const csIt = prim?.userData.item;
   const csTa = $('ed-cs-script');
-  if (csTa && csIt && dg.cutscenes?.includes(csIt)) csTa.value = JSON.stringify({ actors: csIt.actors || [], script: csIt.script || [] }, null, 1);
+  if (csTa && csIt && dg.cutscenes?.includes(csIt)) {
+    csTa.value = JSON.stringify({ actors: csIt.actors || [], script: csIt.script || [] }, null, 1);
+    csTa.scrollIntoView({ block: 'center', behavior: 'smooth' });   // 長いパネルでも設定が見えるように
+  }
+  if (csIt && dg.triggers?.includes(csIt)) {
+    const tp = $('ed-trig-type');
+    if (tp) {
+      tp.value = csIt.event?.type || 'speech';
+      $('ed-trig-param').value = csIt.event?.text || csIt.event?.name || csIt.event?.id || '';
+      $('ed-trig-w').value = csIt.w || 1; $('ed-trig-d').value = csIt.d || 1;
+      tp.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
 }
 // マテリアルは同じ見た目のものを共有しているので、選択色を直接書くと同じ部材が全部光ってしまう。
 // ハイライト中だけ複製に差し替え、解除で共有マテリアルへ戻す。
@@ -1944,9 +2116,13 @@ function editWriteBack() {
       o.position.y = it.level * STORY_H + 0.7;
       continue;
     }
-    if (dg.props && dg.props.includes(it)) {   // プロップ：セル座標＋床高へ再着地
+    if (dg.props && dg.props.includes(it)) {   // プロップ：セル座標＋床からの高さ(yOff)を保存＝机上にも置ける
       it.x = o.position.x / TILE; it.z = o.position.z / TILE;
       it.level = lvlOfY(o.position.y);
+      delete it.yOff;
+      const rest = propRestY(it);
+      const off = +(o.position.y - rest).toFixed(3);
+      if (off > 0.02) it.yOff = off;
       o.position.y = propRestY(it);
       continue;
     }
@@ -2057,7 +2233,7 @@ async function editAddModel(name) {
   if (m) { edit.group.add(m); editSelect(m); }
 }
 async function editSaveStage() {
-  const data = { version: 1, seed: dg.seed, layout: dg.layout || 'mansion', roomsX: 3, roomsZ: 3, goal: dg.goal, items: dg.items, props: dg.props || [], doors: dg.doors || [], achEvents: dg.achEvents || [], triggers: (dg.triggers || []).map((t) => { const c = { ...t }; delete c._fired; return c; }), cutscenes: dg.cutscenes || [] };
+  const data = { version: 1, seed: dg.seed, layout: dg.layout || 'mansion', roomsX: 3, roomsZ: 3, goal: dg.goal, items: dg.items, props: dg.props || [], doors: dg.doors || [], achEvents: dg.achEvents || [], triggers: (dg.triggers || []).map((t) => { const c = { ...t }; delete c._fired; return c; }), cutscenes: dg.cutscenes || [], parts: dg.parts || null };
   try {
     const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'vamp_param', filename: 'mansion-stage.json', content: JSON.stringify(data) }) });
     return r.ok;
@@ -2071,6 +2247,7 @@ function setupEditUI() {
   panel.innerHTML = [
     '<div style="font-weight:bold;color:#8f8;margin-bottom:4px;">🛠 ステージ編集</div>',
     '<div id="edit-info" style="color:#9fe6ff;min-height:16px;">（未選択）</div>',
+    '<div id="ed-floorvis" style="margin-top:2px;font-size:11px;"></div>',
     '<div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;">',
     '<button id="ed-move">移動(G)</button><button id="ed-rot">回転(R)</button><button id="ed-rot90">90°回す</button>',
     '<button id="ed-dup">複製(Ctrl+D)</button><button id="ed-del" style="background:#5a2a2a;">削除(Del)</button></div>',
@@ -2105,6 +2282,9 @@ function setupEditUI() {
     '<div style="font-size:11px;color:#9ab;">[{"when":{"id":"readNote","op":"==","value":true},"event":{"type":"thunder"}}] 形式。実績はメモ閲覧/clear などで更新</div>',
     '<textarea id="ed-ach-events" rows="3" style="width:100%;margin-top:3px;font-size:11px;"></textarea>',
     '<button id="ed-ach-apply" style="margin-top:3px;">反映</button>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">外装パーツ（GLB retro_fantasy と交換）</div>',
+    '<div id="ed-parts-box" style="margin-top:3px;"></div>',
+    '<button id="ed-part-apply" style="margin-top:3px;width:100%;">保存してリロード（反映）</button>',
     '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">ステージ生成</div>',
     '<div style="display:flex;gap:4px;margin-top:3px;"><select id="ed-layout" style="flex:1;"><option value="mansion">本館のみ</option><option value="annex">別棟つき（渡り廊下）</option><option value="floors2">2階建て（階段）</option><option value="basement">地下棟つき（階段）</option></select><button id="ed-regen">🎲 生成</button></div>',
     '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;display:flex;gap:4px;">',
@@ -2278,6 +2458,26 @@ function setupEditUI() {
     if (o?.userData.item && dg.props?.includes(o.userData.item)) o.userData.item.grabbable = e.target.checked;
   });
   if (stageCfg?.layout) $('ed-layout').value = stageCfg.layout;
+  $('ed-part-apply').addEventListener('click', async () => {
+    const clean = (sel) => {
+      const out = {};
+      for (const key of ['pillar', 'floor', 'wall', 'window']) {
+        const ps = sel[key];
+        if (ps && (ps.name || ps.rot)) out[key] = { name: ps.name || null, rot: ps.rot || 0 };
+      }
+      return out;
+    };
+    const g = clean(partScopes.all || {});
+    const zones = {};
+    for (const [z, sel] of Object.entries(partScopes)) {
+      if (z === 'all') continue;
+      const c = clean(sel);
+      if (Object.keys(c).length) zones[z] = c;
+    }
+    dg.parts = (Object.keys(g).length || Object.keys(zones).length) ? { global: g, zones } : null;
+    if (await editSaveStage()) location.reload();
+    else setStatus('保存に失敗（devサーバなし）');
+  });
   $('ed-regen').addEventListener('click', async () => {
     if (!confirm('保存済みステージを置き換えて新しく生成します。よろしいですか？')) return;
     const data = { version: 1, seed: (Math.random() * 99999) | 0, layout: $('ed-layout').value };
@@ -2359,6 +2559,116 @@ async function buildEditPalette() {
   };
   step();
 }
+// ── 外装パーツのサムネイル選択UI（適用先＝全体/ゾーン別、既定タイル＋レトロキット候補、90°回転ボタン付き）──
+const emptySel = () => ({ pillar: { name: null, rot: 0 }, floor: { name: null, rot: 0 }, wall: { name: null, rot: 0 }, window: { name: null, rot: 0 } });
+const partScopes = { all: emptySel() };   // 'all' | '0' | '1'（ゾーン番号）
+let partScope = 'all';
+const partUiRefs = {};   // key → { select(name), rotBtn }
+const retroPartCache = new Map();
+function renderThumbOf(part) {
+  const c = part.obj.clone(true);
+  thumbScene.add(c);
+  const r = Math.max(part.size.x, part.size.y, part.size.z) || 1;
+  thumbCam.position.set(r * 1.4, r * 1.1, r * 1.4);
+  thumbCam.lookAt(0, part.size.y * 0.45, 0);
+  thumbR.render(thumbScene, thumbCam);
+  const url = thumbR.domElement.toDataURL();
+  thumbScene.remove(c);
+  return url;
+}
+function curPartSel() { if (!partScopes[partScope]) partScopes[partScope] = emptySel(); return partScopes[partScope]; }
+function refreshPartsUiFromScope() {
+  const sel = curPartSel();
+  for (const key of Object.keys(PART_CANDIDATES)) {
+    const r = partUiRefs[key];
+    if (!r) continue;
+    r.select(sel[key].name, true);
+    r.rotBtn.textContent = (sel[key].rot * 90) + '°';
+  }
+}
+let partsUiBuilt = false;
+async function buildPartsUI() {
+  if (partsUiBuilt) return;
+  partsUiBuilt = true;
+  const box = $('ed-parts-box');
+  if (!box) return;
+  if (!thumbR) initThumbRenderer();
+  // 保存済み設定を初期状態へ（旧フラット形式 / {global, zones} 両対応）
+  const norm = (v) => (typeof v === 'string') ? { name: v, rot: 0 } : { name: v.name || null, rot: v.rot || 0 };
+  const src = dg.parts || {};
+  if (src.global || src.zones) {
+    for (const k of Object.keys(PART_CANDIDATES)) if (src.global?.[k]) partScopes.all[k] = norm(src.global[k]);
+    for (const [z, m] of Object.entries(src.zones || {})) {
+      partScopes[z] = emptySel();
+      for (const k of Object.keys(PART_CANDIDATES)) if (m[k]) partScopes[z][k] = norm(m[k]);
+    }
+  } else {
+    for (const k of Object.keys(PART_CANDIDATES)) if (src[k]) partScopes.all[k] = norm(src[k]);
+  }
+  // 適用先（全体 / ゾーン別）。ゾーン名はレイアウトに合わせる
+  const zoneNames = dg.layout === 'basement' ? ['B1（地下）', '1F（本館）']
+    : dg.layout === 'floors2' ? ['1F', '2F']
+    : dg.layout === 'annex' ? ['本館', '別棟'] : [];
+  const scopeRow = document.createElement('div');
+  scopeRow.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:11px;';
+  const scopeSel = document.createElement('select');
+  scopeSel.innerHTML = '<option value="all">全体</option>' + zoneNames.map((n, i) => '<option value="' + i + '">' + n + '</option>').join('');
+  scopeSel.addEventListener('change', () => { partScope = scopeSel.value; refreshPartsUiFromScope(); });
+  scopeRow.append('適用先', scopeSel);
+  box.appendChild(scopeRow);
+
+  const LABEL = { pillar: '柱', floor: '床', wall: '壁', window: '窓' };
+  const queue = [];
+  for (const key of Object.keys(PART_CANDIDATES)) {
+    const row = document.createElement('div');
+    row.style.cssText = 'margin-top:4px;';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:11px;color:#9fe6ff;';
+    const rotBtn = document.createElement('button');
+    rotBtn.title = '向きを90°ずつ回転';
+    rotBtn.addEventListener('click', () => { const ps = curPartSel()[key]; ps.rot = (ps.rot + 1) % 4; rotBtn.textContent = (ps.rot * 90) + '°'; });
+    head.append(LABEL[key], rotBtn);
+    const strip = document.createElement('div');
+    strip.style.cssText = 'display:flex;gap:3px;overflow-x:auto;margin-top:2px;padding-bottom:2px;';
+    // 横スクロール帯はホイールで送れるように（縦ホイール→横スクロール変換）
+    strip.addEventListener('wheel', (e) => { if (e.deltaY) { strip.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+    const tiles = [];
+    const select = (name, uiOnly) => {
+      if (!uiOnly) curPartSel()[key].name = name;
+      for (const t of tiles) t.el.style.borderColor = (t.name === name) ? '#ffd166' : 'transparent';
+    };
+    partUiRefs[key] = { select, rotBtn };
+    const defTile = document.createElement('div');
+    defTile.textContent = '既定';
+    defTile.style.cssText = 'min-width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:#1c2436;border:2px solid transparent;border-radius:4px;cursor:pointer;font-size:10px;color:#9ab;';
+    defTile.addEventListener('click', () => select(null));
+    strip.appendChild(defTile);
+    tiles.push({ name: null, el: defTile });
+    for (const n of PART_CANDIDATES[key]) {
+      const img = document.createElement('img');
+      img.title = n; img.alt = n;
+      img.style.cssText = 'width:40px;height:40px;border-radius:4px;background:#1c2436;cursor:pointer;border:2px solid transparent;flex:none;';
+      img.addEventListener('click', () => select(n));
+      strip.appendChild(img);
+      tiles.push({ name: n, el: img });
+      queue.push({ n, img });
+    }
+    row.append(head, strip);
+    box.appendChild(row);
+  }
+  refreshPartsUiFromScope();
+  const step = () => {   // 1枚ずつ順次生成
+    const job = queue.shift();
+    if (!job) return;
+    (async () => {
+      let part = retroPartCache.get(job.n);
+      if (!part) { part = await loadPart(KIT_RETRO, job.n); retroPartCache.set(job.n, part); }
+      job.img.src = renderThumbOf(part);
+    })().catch(() => { /* 失敗はプレースホルダのまま */ }).finally(() => setTimeout(step, 10));
+  };
+  step();
+}
+
 async function refreshUnitList() {
   const sel = $('ed-units');
   if (!sel) return;
@@ -2422,7 +2732,7 @@ const PROP_MAKERS = {
     return g;
   },
 };
-function propRestY(d) { return floorYAt(d.x * TILE, d.z * TILE, ((d.level || 0) * STORY_H) + 0.5) + 0.06; }
+function propRestY(d) { return floorYAt(d.x * TILE, d.z * TILE, ((d.level || 0) * STORY_H) + 0.5) + 0.06 + (d.yOff || 0); }
 function makePropMesh(d) {
   const mk = PROP_MAKERS[d.model] || PROP_MAKERS.key;
   const m = mk();
@@ -3101,6 +3411,7 @@ window.__game = {
   get bodyFwd() { return bodyFwd; }, get headFace() { return headFace; },
   staffShoot, playGunshot,
   gameEvent, triggerThunder, get props() { return props; }, propInteract, get heldProp() { return heldProp; }, get hoverProp() { return hoverProp; }, get memoOpen() { return memoOpen; }, capeSettle,
+  partRotOf, partRefOf, get PART_CFG() { return PART_CFG; }, get partRefCache() { return partRefCache; },
   get ACH() { return ACH; }, achSet, get doorObjs() { return doorObjs; }, openDoor, dropGrenadeAt, explodeGrenade,
   get triggers() { return dg?.triggers; }, showSubtitle, playBgmFile, get vampInactive() { return vamp.inactive; },
   playCutscene, get cutscene() { return cutscene; }, get cutscenes() { return dg?.cutscenes; },

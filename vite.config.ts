@@ -318,7 +318,7 @@ export default defineConfig({
           const all = findFilesRecursive(dir, '.glb', dir, 0, ['node_modules', '.git', 'gltf']);
           // 自前 colormap を持つキットのみ採用: トップ階層「*_GLB format」＋ Kenney の入れ子「*/Models/GLB format」。
           // （無印 GLB format / kenney_car-kit 等の重複・無テクスチャを除外。都市エディタが road/suburban キットを使う）
-          const kits = all.filter((f) => f.split('/')[0].endsWith('_GLB format') || f.includes('/Models/GLB format/') || f.includes('/Models/GLTF format/'));
+          const kits = all.filter((f) => f.split('/')[0].endsWith('_GLB format') || f.split('/')[0] === 'GLB retro_fantasy' || f.includes('/Models/GLB format/') || f.includes('/Models/GLTF format/'));
           const files = kits.length ? kits : all;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));

@@ -35,6 +35,7 @@ cpDir('lib', path.join(OUT, 'lib'), (n) => n.endsWith('.js'));
 // ── モデル（建築＝fantasyキット / 家具＝kenneyキット。部屋生成がキット全域を使うため全コピー）──
 cpDir('public/models/fantasy_GLB format', path.join(OUT, 'models', 'fantasy_GLB format'));   // Textures/ 含む
 cpDir('public/models/kenney_furniture-kit/Models/GLTF format', path.join(OUT, 'models', 'kenney_furniture-kit', 'Models', 'GLTF format'));
+cpDir('public/models/GLB retro_fantasy', path.join(OUT, 'models', 'GLB retro_fantasy'));
 
 // ── NPC（吸血鬼と職員のみ）＋ラグドール ──
 for (const f of ['JOY_vamp.npc.json', 'JOY_vamp.vrm', 'JOY_vamp.meta.json', 'ken.npc.json', 'ken.vrm', 'ken.meta.json', 'char-light.json'])
