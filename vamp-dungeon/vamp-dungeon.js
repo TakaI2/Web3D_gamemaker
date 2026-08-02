@@ -6,21 +6,27 @@
 import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
 import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
+import { WebGLRenderer } from 'https://esm.sh/three@0.184.0';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
 import { pmremTexture } from 'https://esm.sh/three@0.184.0/tsl';
 import { VRMLoaderPlugin, MToonMaterialLoaderPlugin, VRMUtils } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
 import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
-import { generateMansion, SOLID } from '../lib/dungeon-gen.js';
+import { generateEstate, SOLID } from '../lib/dungeon-gen.js';
 import { makePaintingTexture } from '../lib/painting-tex.js';
 import { buildNav, findPath, hasLineOfSight, passable } from '../lib/dungeon-nav.js';
+import { categorize } from '../lib/room-gen.js';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { solveTwoBoneIK } from '../lib/vrm-ik.js';
 import { sampleExpr, applyExpr } from '../lib/expr-timeline.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 import { createDissolve } from '../lib/fx-dissolve.js';
+import { createMeshFx } from '../lib/fx-mesh.js';
+import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
 import { createNpcSpeech } from '../lib/npc-speech.js';
+import { createStoryRunner } from '../lib/story-runner.js';
+import { createLipSync } from '../lib/lip-sync.js';
 import { createSpeechUI } from '../lib/speech-ui.js';
 import { fetchSpeechSet, buildSpeechCharacter } from '../lib/speech-set.js';
 
@@ -146,7 +152,7 @@ scene.add(dungeonGroup);
 async function buildDungeon() {
   setStatus('ダンジョン生成中…');
   const stg = stageCfg;
-  dg = generateMansion({ roomsX: stg?.roomsX || 3, roomsZ: stg?.roomsZ || 3, seed: stg?.seed ?? ((Math.random() * 99999) | 0) });
+  dg = generateEstate({ layout: stg?.layout || 'mansion', roomsX: stg?.roomsX || 3, roomsZ: stg?.roomsZ || 3, seed: stg?.seed ?? ((Math.random() * 99999) | 0) });
   if (stg?.items) dg.items = stg.items;          // 編集済みアイテムで置き換え
   if (stg?.goal) dg.goal = stg.goal;             // 編集済みゴール
   buildWallColliders();
@@ -163,19 +169,29 @@ async function buildDungeon() {
   const WALL_H = parts.wall.size.y * SCALE;   // 壁1段の高さ
   FLOOR_T = (parts.floor ? parts.floor.size.y : 0.05) * SCALE;   // 床タイルの厚み
   wallH = WALL_H;
+  STORY_H = WALL_H * 2;   // 天井が全域2段なので1フロア＝壁2枚ぶん
+  stairByCell.clear();
+  for (const st of (dg.stairs || [])) {
+    stairByCell.set(st.x + ',' + st.z, st);
+    stairByCell.set((st.x + st.dx) + ',' + (st.z + st.dz), st);
+  }
   for (const s of dg.shell) {
     const isWall = s.model === 'wall' || s.model === 'doorway' || s.model === 'window';
     const ry = (s.ry || 0) + (isWall ? WALL_RY_OFFSET : 0);
+    const yB = (s.level || 0) * STORY_H;   // 2階以上は上へ積む
     _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), ry);
-    // 床は厚みぶん沈めて「上面が y=0」になるように（家具や足が床上面に正しく載る）
-    _p.set(s.x * TILE, s.model === 'floor' ? -FLOOR_T : 0, s.z * TILE);
-    push(s.model, _m.compose(_p, _q, _s).clone());
+    // 床は厚みぶん沈めて「上面が階の基準高」になるように（家具や足が床上面に正しく載る）
+    // holeOnly＝吹き抜けの開口：床板は張らないが天井（屋根）は生成する
+    if (!(s.model === 'floor' && s.holeOnly)) {
+      _p.set(s.x * TILE, yB + (s.model === 'floor' ? -FLOOR_T : 0), s.z * TILE);
+      push(s.model, _m.compose(_p, _q, _s).clone());
+    }
     if (isWall && s.tall) {   // 広間側は2段積み（天井が高いぶんを塞ぐ）
-      _p.set(s.x * TILE, WALL_H, s.z * TILE);
+      _p.set(s.x * TILE, yB + WALL_H, s.z * TILE);
       push('wall', _m.compose(_p, _q, _s).clone());
     }
-    // 床の真上に天井（広間=2段ぶん高く / 廊下=1段）
-    if (s.model === 'floor') { _p.set(s.x * TILE, (s.ceil || 1) * WALL_H, s.z * TILE); push('ceiling', _m.compose(_p, _q, _s).clone()); }
+    // 床の真上に天井（noCeil＝上階の床が天井を兼ねる／吹き抜け）
+    if (s.model === 'floor' && !s.noCeil) { _p.set(s.x * TILE, yB + (s.ceil || 1) * WALL_H, s.z * TILE); push('ceiling', _m.compose(_p, _q, _s).clone()); }
   }
   // 絵画は額縁＋テクスチャで個別生成
   for (const it of dg.items) if (it.model === 'painting') addPainting(it);
@@ -198,15 +214,19 @@ async function buildDungeon() {
   // ゴール（金色の柱＋光）
   goalMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 3.2, 16),
     new THREE.MeshStandardMaterial({ color: 0xffcc44, emissive: 0xffaa22, emissiveIntensity: 1.6, roughness: 0.3 }));
-  goalMesh.position.set(dg.goal.x * TILE, 1.6, dg.goal.z * TILE);
+  goalMesh.position.set(dg.goal.x * TILE, (dg.goal.level || 0) * STORY_H + 1.6, dg.goal.z * TILE);
   scene.add(goalMesh);
   goalLight = new THREE.PointLight(0xffcc55, 40, 22, 1.4);
   goalLight.position.copy(goalMesh.position); scene.add(goalLight);
 
-  // ランタンの淡い光（数を絞る＝負荷対策）
-  for (const it of dg.items.filter((i) => i.model === 'lantern').slice(0, 4)) {
+  // ランタンの淡い光（負荷対策：各階3灯まで）
+  const lanternPerLv = {};
+  for (const it of dg.items.filter((i) => i.model === 'lantern')) {
+    const lv = it.level || 0;
+    lanternPerLv[lv] = (lanternPerLv[lv] || 0) + 1;
+    if (lanternPerLv[lv] > 3) continue;
     const l = new THREE.PointLight(0xffb060, 10, 10, 1.4);
-    l.position.set(it.x * TILE, 2.2, it.z * TILE); scene.add(l); LIGHTS.lamps.push(l);
+    l.position.set(it.x * TILE, 2.2 + lv * STORY_H, it.z * TILE); scene.add(l); LIGHTS.lamps.push(l);
   }
   buildMoonlight();
   setStatus('');
@@ -217,6 +237,7 @@ const FURN_S = 1.4;   // 家具は建築(2.0)より小さめ＝人のスケー�
 const MODEL_MAP = {
   floor: [KIT_FURN, 'floorFull'], wall: [KIT, 'wall'], doorway: [KIT, 'wall-doorway-square'],
   window: [KIT, 'wall-window-round'], pillar: [KIT, 'pillar-stone'], lantern: [KIT, 'lantern'],
+  stair: [KIT, 'stairs-wide-stone-handrail'], door: [KIT, 'wall-door'],
   paneling: [KIT_FURN, 'paneling'], rug: [KIT_FURN, 'rugRectangle'],
   chandelier: [KIT_FURN, 'lampSquareCeiling'], plant: [KIT_FURN, 'pottedPlant'],
 };
@@ -229,13 +250,21 @@ async function ensurePart(name) {
 }
 // アイテム1個の配置（セル→ワールド）。インスタンス描画とステージ編集の両方で使う共通計算。
 function itemPlacement(it) {
+  const yB = (it.level || 0) * STORY_H;   // 2階の家具は上へ
+  if (it.model === 'stair') {   // 階段：セグメント0=床→半階 / 1=半階→1階
+    return { x: it.x * TILE, y: yB + (it.seg ? wallH : 0), z: it.z * TILE, ry: (it.ry || 0) + STAIR_RY, sx: SCALE, sy: SCALE, sz: SCALE, ox: 0, oz: 0 };
+  }
   let y = it.y || 0, sc = SCALE, sy = 1, ox = 0, oz = 0;
   if (it.furn || it.model === 'plant') { sc = FURN_S; }
   else if (it.model === 'rug') { y = 0.02; }
-  else if (it.model === 'chandelier') { y = (it.ceil || 2) * wallH - 0.05; sc = FURN_S; }
+  else if (it.model === 'chandelier') {
+    // 原点が下端のモデルなので、上端が天井に付く高さへ（上階の床への突き抜け防止）
+    const ph = ((partsCache.chandelier?.size?.y) || 0.35) * FURN_S;
+    y = (it.ceil || 2) * wallH - ph - 0.02; sc = FURN_S;
+  }
   else if (it.wainscot) { y = 0; sy = 0.42; ox = Math.sin(it.ry || 0) * 0.07; oz = Math.cos(it.ry || 0) * 0.07; }
   if (it.toCeil) sy = 2;
-  return { x: it.x * TILE + ox, y, z: it.z * TILE + oz, ry: it.ry || 0, sx: sc, sy: sc * sy, sz: sc, ox, oz };
+  return { x: it.x * TILE + ox, y: y + yB, z: it.z * TILE + oz, ry: it.ry || 0, sx: sc, sy: sc * sy, sz: sc, ox, oz };
 }
 // アイテム（家具・柱・燭台等）のインスタンス群を dg.items から作り直す（ステージ編集後の反映にも使う）
 const itemGroup = new THREE.Group();
@@ -289,8 +318,8 @@ async function rebuildItemInstances() {
   }
 }
 function setGoalCell(cx, cz) {
-  dg.goal = { x: cx, z: cz };
-  if (goalMesh) goalMesh.position.set(cx * TILE, 1.6, cz * TILE);
+  dg.goal = { x: cx, z: cz, level: dg.goal?.level || 0 };
+  if (goalMesh) goalMesh.position.set(cx * TILE, (dg.goal.level || 0) * STORY_H + 1.6, cz * TILE);
   if (goalLight) goalLight.position.copy(goalMesh.position);
 }
 
@@ -338,7 +367,7 @@ function buildMoonlight() {
     const s = wins[i];
     const inX = Math.sign(dg.w / 2 - s.x), inZ = Math.sign(dg.d / 2 - s.z);
     const l = new THREE.PointLight(0x88aaff, 5.5, 9, 1.2);
-    l.position.set((s.x + inX * 0.6) * TILE, 1.9, (s.z + inZ * 0.6) * TILE);
+    l.position.set((s.x + inX * 0.6) * TILE, 1.9 + (s.level || 0) * STORY_H, (s.z + inZ * 0.6) * TILE);
     scene.add(l); LIGHTS.lamps.push(l);
   }
 }
@@ -355,7 +384,7 @@ function addPainting(it) {
   const bar = (w, h, x, y) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, T * 1.6), frameMat); m.position.set(x, y, -T * 0.4); g.add(m); };
   bar(PW + T * 2, T, 0, PH / 2 + T / 2); bar(PW + T * 2, T, 0, -PH / 2 - T / 2);
   bar(T, PH + T * 2, -PW / 2 - T / 2, 0); bar(T, PH + T * 2, PW / 2 + T / 2, 0);
-  g.position.set(it.x * TILE + (it.nx || 0) * 0.09, it.y || 1.7, it.z * TILE + (it.nz || 0) * 0.09);
+  g.position.set(it.x * TILE + (it.nx || 0) * 0.09, (it.y || 1.7) + (it.level || 0) * STORY_H, it.z * TILE + (it.nz || 0) * 0.09);
   g.rotation.y = it.ry || 0;
   scene.add(g);
   paintings.push({ id: it.id, group: g, mat: canvasMat });
@@ -381,9 +410,9 @@ function buildWallColliders() {
     const hx = horiz ? TILE / 2 : WALL_T, hz = horiz ? WALL_T : TILE / 2;
     const seg = { minX: cx - hx, maxX: cx + hx, minZ: cz - hz, maxZ: cz + hz };
     wallSegs.push(seg);
-    // 壁が触れる両側のセルに登録
+    // 壁が触れる両側のセルに登録（階層別）
     for (const [ox, oz] of [[-0.5, 0], [0.5, 0], [0, -0.5], [0, 0.5]]) {
-      const k = Math.round(s.x + ox) + ',' + Math.round(s.z + oz);
+      const k = (s.level || 0) + ':' + Math.round(s.x + ox) + ',' + Math.round(s.z + oz);
       if (!segsByCell.has(k)) segsByCell.set(k, []);
       const arr = segsByCell.get(k); if (!arr.includes(seg)) arr.push(seg);
     }
@@ -396,14 +425,44 @@ const keys = {};
 let isLocked = false, touchMode = false, phase = 'load', nightT = 0, won = false, drain = 0;
 
 function resetPlayer() {
-  player.pos.set(dg.spawn.x * TILE, EYE_H, dg.spawn.z * TILE);
+  player.pos.set(dg.spawn.x * TILE, (dg.spawn.level || 0) * STORY_H + EYE_H, dg.spawn.z * TILE);
   player.vel.set(0, 0, 0); player.yaw = 0; player.pitch = 0;
 }
 
+// ── 多層基盤：階の高さ・階段・階層別の通行/接地 ──
+let STORY_H = 4;                    // 1階ぶんの高さ（buildDungeon で壁高×2に確定）
+const STAIR_RY = -Math.PI / 2;      // 階段モデルの向き補正（stairs-wide-stone はローカル+X方向へ上る形状）
+const stairByCell = new Map();      // 'cx,cz' → {x,z,dx,dz,base}
+function lvlOfY(y) { const n = dg?.floors || 1; return Math.max(0, Math.min(n - 1, Math.round(y / STORY_H))); }
 // グリッド当たり：足元セル周辺の岩盤を AABB として円(半径BODY_R)を押し出す
-function cellSolid(cx, cz) {
+function cellSolidAt(lvl, cx, cz) {
   if (cx < 0 || cz < 0 || cx >= dg.w || cz >= dg.d) return true;
-  return dg.grid[cz * dg.w + cx] === SOLID;
+  if (stairByCell.has(cx + ',' + cz)) return false;   // 階段セルは常に通行可（高さは floorYAt が受け持つ）
+  if (typeof doorSolidAt === 'function' && doorSolidAt(cx, cz)) return true;   // 閉じた扉はセルを塞ぐ
+  const g = dg.grids ? dg.grids[Math.max(0, Math.min(dg.grids.length - 1, lvl))] : dg.grid;
+  return g[cz * dg.w + cx] === SOLID;
+}
+function cellSolid(cx, cz) { return cellSolidAt(0, cx, cz); }
+// その場所の床の高さ。階段セルは入口→2セル先へ1階ぶんのスロープ。それ以外は「今の高さから届く一番高い床」
+function floorYAt(wx, wz, curY) {
+  const cx = Math.round(wx / TILE), cz = Math.round(wz / TILE);
+  const st = stairByCell.get(cx + ',' + cz);
+  if (st) {
+    const ex = st.x * TILE - st.dx * TILE * 0.5, ez = st.z * TILE - st.dz * TILE * 0.5;   // 入口セルの手前端
+    const u = Math.max(0, Math.min(1, ((wx - ex) * st.dx + (wz - ez) * st.dz) / (TILE * 2)));
+    return (st.base || 0) * STORY_H + u * STORY_H;
+  }
+  const levels = dg.grids ? dg.grids.length : 1;
+  const maxRef = (curY == null ? 1e9 : curY) + 0.6;
+  let best = 0;
+  for (let l = 0; l < levels; l++) {
+    const g = dg.grids ? dg.grids[l] : dg.grid;
+    if (cx >= 0 && cz >= 0 && cx < dg.w && cz < dg.d && g[cz * dg.w + cx] !== SOLID) {
+      const y = l * STORY_H;
+      if (y <= maxRef && y >= best) best = y;
+    }
+  }
+  return best;
 }
 // 円(半径BODY_R)を AABB から押し出す
 function pushOutAABB(minX, maxX, minZ, maxZ) {
@@ -423,10 +482,11 @@ function pushOutAABB(minX, maxX, minZ, maxZ) {
 }
 function collideWalls() {
   const cx = Math.round(player.pos.x / TILE), cz = Math.round(player.pos.z / TILE);
+  const lv = lvlOfY(player.pos.y - EYE_H);
   for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
     const gx = cx + dx, gz = cz + dz;
-    if (cellSolid(gx, gz)) pushOutAABB(gx * TILE - TILE / 2, gx * TILE + TILE / 2, gz * TILE - TILE / 2, gz * TILE + TILE / 2);
-    const segs = segsByCell.get(gx + ',' + gz);   // 部屋の囲い壁など、セル境界に立つ薄い壁
+    if (cellSolidAt(lv, gx, gz)) pushOutAABB(gx * TILE - TILE / 2, gx * TILE + TILE / 2, gz * TILE - TILE / 2, gz * TILE + TILE / 2);
+    const segs = segsByCell.get(lv + ':' + gx + ',' + gz);   // 部屋の囲い壁など、セル境界に立つ薄い壁
     if (segs) for (const s of segs) pushOutAABB(s.minX, s.maxX, s.minZ, s.maxZ);
   }
 }
@@ -440,9 +500,25 @@ function syncCamera() {
 }
 // 捕縛中の演出：松明を落として顔の白飛びを防ぎ、視点を彼女の顔へ吸い寄せる
 const _lookAt = new THREE.Vector3();
+// 吸血中は画面の縁が薄赤く染まる（吸われるほど濃く・鼓動のように脈打つ）
+let vignetteEl = null, vignetteA = 0, vignetteT = 0;
+function updateVignette(dt, captured) {
+  if (!vignetteEl) {
+    vignetteEl = document.createElement('div');
+    vignetteEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:15;opacity:0;'
+      + 'background:radial-gradient(ellipse at center, rgba(150,0,25,0) 52%, rgba(150,0,25,0.42) 82%, rgba(120,0,20,0.72) 100%);';
+    document.body.appendChild(vignetteEl);
+  }
+  vignetteT += dt;
+  const pulse = captured ? Math.sin(vignetteT * 5.2) * 0.08 : 0;
+  const target = captured ? Math.min(1, 0.45 + 0.55 * (drain / 100)) + pulse : 0;   // 危険度が上がるほど濃く
+  vignetteA += (target - vignetteA) * Math.min(1, dt * (captured ? 6 : 3));
+  vignetteEl.style.opacity = Math.max(0, Math.min(1, vignetteA)).toFixed(3);
+}
 function updateCaptureView(dt) {
   const captured = vamp.ready && vamp.state === 'capture' && phase === 'playing';
   torch.intensity += ((captured ? 0.35 : 6.5) - torch.intensity) * Math.min(1, dt * 5);
+  updateVignette(dt, captured);
   if (!captured || !vamp.head) return;
   vamp.head.getWorldPosition(_lookAt);
   const dx = _lookAt.x - player.pos.x, dy = _lookAt.y - player.pos.y, dz = _lookAt.z - player.pos.z;
@@ -455,6 +531,7 @@ function updateCaptureView(dt) {
   player.pitch += (wantPitch - player.pitch) * k;
 }
 function updatePlayer(dt) {
+  if (memoOpen) { syncCamera(); return; }   // メモ閲覧中は停止（カーソル表示）
   if (!isLocked && !touchMode) { syncCamera(); return; }
   _fwd.set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   _right.set(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
@@ -475,8 +552,9 @@ function updatePlayer(dt) {
 
   player.pos.addScaledVector(player.vel, dt);
   collideWalls();
-  // 床（単層なので y=EYE_H が接地）
-  if (player.pos.y <= EYE_H) { player.pos.y = EYE_H; player.vel.y = 0; player.onFloor = true; }
+  // 床（多層：その場の床高＝階段はスロープ）
+  const gy = floorYAt(player.pos.x, player.pos.z, player.pos.y - EYE_H);
+  if (player.pos.y <= gy + EYE_H) { player.pos.y = gy + EYE_H; player.vel.y = 0; player.onFloor = true; }
   else player.onFloor = false;
 
   syncCamera();
@@ -484,9 +562,17 @@ function updatePlayer(dt) {
 
 // ── 入力（PC） ──
 const canvas = renderer.domElement;
-canvas.addEventListener('click', () => { if (!touchMode && phase === 'playing') canvas.requestPointerLock(); });
+canvas.addEventListener('click', () => {
+  if (cutscene.on) { const f = cutscene.advance; cutscene.advance = null; if (f) f(); return; }   // 会話送り
+  if (!touchMode && phase === 'playing' && !obs.on && !edit.on) canvas.requestPointerLock();
+});
 document.addEventListener('pointerlockchange', () => { isLocked = document.pointerLockElement === canvas; });
-addEventListener('mousedown', (e) => { if (e.button === 0 && isLocked && phase === 'playing') fireShot(); });
+addEventListener('mousedown', (e) => {
+  if (e.button === 0 && isLocked && phase === 'playing') fireShot();
+  if (e.button === 2 && isLocked && phase === 'playing' && heldWeapon() === 'shockgun' && !cutscene.on) tryShockGrab();
+});
+addEventListener('mouseup', (e) => { if (e.button === 2) shockRelease(); });
+addEventListener('contextmenu', (e) => { if (isLocked) e.preventDefault(); });
 document.addEventListener('mousemove', (e) => {
   if (!isLocked) return;
   player.yaw -= e.movementX * 0.0024;
@@ -557,12 +643,29 @@ function initKissAudio() {
   a.addEventListener('error', () => { if (!a.src.endsWith('./audio/' + name)) a.src = './audio/' + name; }, { once: true });
   kissAudio.el = a;
 }
+// 職員の発砲音（プレイヤーからの距離で減衰。cloneで同時発砲も重ねて鳴る）
+let gunAudio = null;
+function initGunAudio() {
+  const a = new Audio();
+  a.src = '../sound/Gunshot01.ogg';
+  a.addEventListener('error', () => { if (!a.src.endsWith('./sound/Gunshot01.ogg')) a.src = './sound/Gunshot01.ogg'; }, { once: true });
+  a.preload = 'auto';
+  gunAudio = a;
+}
+function playGunshot(fromPos) {
+  if (!gunAudio) return;
+  const d = Math.hypot(fromPos.x - player.pos.x, fromPos.y - player.pos.y, fromPos.z - player.pos.z);
+  const a = gunAudio.cloneNode();
+  a.volume = Math.max(0.1, Math.min(1, 1 - d / 30));
+  a.play().catch(() => { /* 自動再生制限 */ });
+}
 function playKiss() { if (kissAudio.el && !kissAudio.playing) { kissAudio.playing = true; kissAudio.el.play().catch(() => {}); } }
 function stopKiss() { if (kissAudio.el && kissAudio.playing) { try { kissAudio.el.pause(); kissAudio.el.currentTime = 0; } catch {} } kissAudio.playing = false; }
 
 const vamp = {
   vrm: null, mixer: null, action: null, clips: {}, cape: null, root: null,
   state: 'patrol', path: null, seg: 0, repathT: 0, stunT: 0, ready: false,
+  grabState: null, grabBone: null, rdRecover: 0, ragdoll: null, inactive: false,   // ショックガン/出現トリガー用（未初期化だとガードが誤作動する）
   hips: null, head: null, footL: null, footR: null,
 };
 const bodyFwd = new THREE.Vector3(0, 0, 1);   // モデル前方（npcRoot相対・ry補正込み）
@@ -732,15 +835,17 @@ function footLockMove(dt) {
   // 壁に当たったら軸ごとに滑る（角に正面衝突しても止まらない）
   const px = vamp.root.position.x, pz = vamp.root.position.z;
   const nx = px + _fw.x * move, nz = pz + _fw.z * move;
-  if (vampFree(nx, nz)) { vamp.root.position.x = nx; vamp.root.position.z = nz; return move; }
-  if (vampFree(nx, pz)) { vamp.root.position.x = nx; return Math.abs(_fw.x * move); }
-  if (vampFree(px, nz)) { vamp.root.position.z = nz; return Math.abs(_fw.z * move); }
+  const vy = vamp.root.position.y;
+  if (vampFree(nx, nz, vy)) { vamp.root.position.x = nx; vamp.root.position.z = nz; return move; }
+  if (vampFree(nx, pz, vy)) { vamp.root.position.x = nx; return Math.abs(_fw.x * move); }
+  if (vampFree(px, nz, vy)) { vamp.root.position.z = nz; return Math.abs(_fw.z * move); }
   return 0;
 }
-function vampFree(wx, wz) {
+function vampFree(wx, wz, wy = 0) {
   const cx = Math.round(wx / TILE), cz = Math.round(wz / TILE);
-  if (cellSolid(cx, cz)) return false;
-  const segs = segsByCell.get(cx + ',' + cz);
+  const lv = lvlOfY(wy);
+  if (cellSolidAt(lv, cx, cz)) return false;
+  const segs = segsByCell.get(lv + ':' + cx + ',' + cz);
   if (segs) for (const s of segs) {
     const qx = Math.max(s.minX, Math.min(wx, s.maxX)), qz = Math.max(s.minZ, Math.min(wz, s.maxZ));
     if ((wx - qx) * (wx - qx) + (wz - qz) * (wz - qz) < 0.36) return false;   // 半径0.6m
@@ -757,8 +862,8 @@ function faceTowards(wx, wz, dt, k) {
 }
 
 // ── 状態機械 ──
-function vampCell() { return { x: Math.round(vamp.root.position.x / TILE), z: Math.round(vamp.root.position.z / TILE) }; }
-function playerCell() { return { x: Math.round(player.pos.x / TILE), z: Math.round(player.pos.z / TILE) }; }
+function vampCell() { return { x: Math.round(vamp.root.position.x / TILE), z: Math.round(vamp.root.position.z / TILE), level: lvlOfY(vamp.root.position.y) }; }
+function playerCell() { return { x: Math.round(player.pos.x / TILE), z: Math.round(player.pos.z / TILE), level: lvlOfY(player.pos.y - EYE_H) }; }
 function repath(to) {
   const from = vampCell();
   const p = findPath(nav, from, to);
@@ -766,14 +871,32 @@ function repath(to) {
 }
 function canSeePlayer() {
   const a = vampCell(), b = playerCell();
-  const dist = Math.hypot(player.pos.x - vamp.root.position.x, player.pos.z - vamp.root.position.z);
-  if (dist < VAMP.hearRange) return true;                       // 近ければ壁越しでも気配で分かる
+  const dist = Math.hypot(player.pos.x - vamp.root.position.x, (player.pos.y - EYE_H) - vamp.root.position.y, player.pos.z - vamp.root.position.z);
+  if (dist < VAMP.hearRange && a.level === b.level) return true;   // 近ければ壁越しでも気配で分かる（同じ階のみ）
   if (dist > VAMP.sightRange) return false;
-  return hasLineOfSight(nav, a.x, a.z, b.x, b.z);
+  return hasLineOfSight(nav, a.x, a.z, b.x, b.z, a.level, b.level);
 }
 function updateVamp(dt) {
   if (!vamp.ready || phase !== 'playing') return;
-  const distToPlayer = Math.hypot(player.pos.x - vamp.root.position.x, player.pos.z - vamp.root.position.z);
+  if (vamp.inactive) { if (vamp.vrm && vamp.vrm.scene.visible) vamp.vrm.scene.visible = false; return; }   // 出現トリガー待ち
+  if (vamp.grabState) return;   // ショックガンで掴まれている（ラグドール駆動）
+  if (vamp.rdRecover > 0) {
+    vamp.rdRecover -= dt;
+    if (vamp.rdRecover <= 0 && vamp.ragdoll) {
+      // 倒れた位置から復帰：腰粒子の位置へルートを合わせてからラグドール解除
+      const hi = vamp.ragdoll.idxOf?.hips;
+      if (hi != null && vamp.ragdoll.particles?.[hi]) {
+        const hp = vamp.ragdoll.particles[hi].pos;
+        vamp.root.position.x = hp.x; vamp.root.position.z = hp.z;
+        vamp.root.position.y = floorYAt(hp.x, hp.z, hp.y);
+      }
+      setRagdollActive(vamp.ragdoll, false);
+      vamp.stunT = 1.4; vamp.state = 'stunned'; vamp.path = null;
+      capeSettle(0.4);
+    }
+    return;
+  }
+  const distToPlayer = Math.hypot(player.pos.x - vamp.root.position.x, (player.pos.y - EYE_H) - vamp.root.position.y, player.pos.z - vamp.root.position.z);
 
   if (vamp.stunT > 0) {   // ショットで硬直（倒せはしない）
     if (vamp.holding) releaseHeldKen();   // 撃たれたら職員を取り落とす
@@ -809,10 +932,10 @@ function updateVamp(dt) {
   const vc = vampCell();
   for (const m of kens) {
     if (!kenAlive(m)) continue;
-    const d = Math.hypot(m.vrm.scene.position.x - vamp.root.position.x, m.vrm.scene.position.z - vamp.root.position.z);
+    const d = Math.hypot(m.vrm.scene.position.x - vamp.root.position.x, m.vrm.scene.position.y - vamp.root.position.y, m.vrm.scene.position.z - vamp.root.position.z);
     if (d > VAMP.sightRange) continue;
     const kc = kenCell(m);
-    if (d > VAMP.hearRange && !hasLineOfSight(nav, vc.x, vc.z, kc.x, kc.z)) continue;
+    if (d > VAMP.hearRange && !hasLineOfSight(nav, vc.x, vc.z, kc.x, kc.z, vc.level, kc.level)) continue;
     if (d < preyDist) { prey = m; preyDist = d; }
   }
   const huntKen = prey && (!sees || preyDist < distToPlayer);
@@ -956,26 +1079,46 @@ function kissApproach(dt) {
   }
   const k = Math.min(1, dt * 6);
   const nx = vamp.root.position.x + (_ktar.x - _mouth.x) * k, nz = vamp.root.position.z + (_ktar.z - _mouth.z) * k;
-  if (vampFree(nx, nz)) { vamp.root.position.x = nx; vamp.root.position.z = nz; }
+  if (vampFree(nx, nz, vamp.root.position.y)) { vamp.root.position.x = nx; vamp.root.position.z = nz; }
   // 縦寄せ（ar-vampire と同じ lean）。これが無いと彼女が見上げる形になり、AR版と見え方が変わる。
   vamp.root.position.y += (_ktar.y - _mouth.y) * KISS.lean * k;
-  vamp.root.position.y = Math.max(-0.15, Math.min(0.9, vamp.root.position.y));   // 床から極端に浮き沈みしない
+  vamp.root.position.y = Math.max((vamp.groundY || 0) - 0.15, Math.min((vamp.groundY || 0) + 0.9, vamp.root.position.y));   // 床から極端に浮き沈みしない
 }
-// 捕縛が解けたら足元を床へ戻す
+// 捕縛が解けたら足元をその場の床へ戻す（階段・2階に追従）
 function relaxVampY(dt) {
-  if (Math.abs(vamp.root.position.y) < 1e-4) return;
-  vamp.root.position.y += (0 - vamp.root.position.y) * Math.min(1, dt * 4);
-  if (Math.abs(vamp.root.position.y) < 1e-3) vamp.root.position.y = 0;
+  const g = floorYAt(vamp.root.position.x, vamp.root.position.z, vamp.root.position.y);
+  vamp.groundY = g;
+  const d = g - vamp.root.position.y;
+  if (Math.abs(d) < 1e-4) return;
+  vamp.root.position.y += d * Math.min(1, dt * 5);
 }
 // 首をプレイヤーへ向ける（ar-vampire の applyHeadLook 方式・角度制限つき）
 const _hq = new THREE.Quaternion(), _hqD = new THREE.Quaternion(), _hqP = new THREE.Quaternion(), _hf = new THREE.Vector3(), _hd = new THREE.Vector3();
+// 首の可動域（体の正面基準）。目線は VRM の lookAt が担い、首より広い範囲を追える
+const NECK_LIMIT = { yaw: 1.22, up: 0.52, down: 0.7 };   // ヨー±70° / 上30° / 下40°
+const _bfw2 = new THREE.Vector3(), _bq3 = new THREE.Quaternion();
 function headLook(w) {
   if (!vamp.head || w <= 0) return;
   vamp.head.getWorldPosition(_hp2);
   const tgt = (vamp.state === 'holdKen' && vamp.holding) ? _kpin : player.pos;   // 獲物を吸っている間はそちらを見る
+  // 目線ターゲット：VRM の lookAt が目の可動域内で追う（首がクランプされても目だけは向く）
+  if (vamp.vrm?.lookAt) {
+    if (!vamp.eyeTgt) { vamp.eyeTgt = new THREE.Object3D(); scene.add(vamp.eyeTgt); vamp.vrm.lookAt.target = vamp.eyeTgt; }
+    vamp.eyeTgt.position.set(tgt.x, tgt.y, tgt.z);
+  }
   _hd.set(tgt.x - _hp2.x, tgt.y - _hp2.y, tgt.z - _hp2.z);
   if (_hd.lengthSq() < 1e-8) return;
   _hd.normalize();
+  // 体の正面を基準にヨー/ピッチをクランプ＝真後ろへは向かない
+  vamp.root.getWorldQuaternion(_bq3);
+  _bfw2.copy(bodyFwd).applyQuaternion(_bq3); _bfw2.y = 0; _bfw2.normalize();
+  const bodyYaw = Math.atan2(_bfw2.x, _bfw2.z);
+  let dyaw = Math.atan2(_hd.x, _hd.z) - bodyYaw;
+  while (dyaw > Math.PI) dyaw -= Math.PI * 2; while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+  dyaw = Math.max(-NECK_LIMIT.yaw, Math.min(NECK_LIMIT.yaw, dyaw));
+  const pitch = Math.max(-NECK_LIMIT.down, Math.min(NECK_LIMIT.up, Math.asin(Math.max(-1, Math.min(1, _hd.y)))));
+  const yaw2 = bodyYaw + dyaw, cp = Math.cos(pitch);
+  _hd.set(Math.sin(yaw2) * cp, Math.sin(pitch), Math.cos(yaw2) * cp);
   vamp.head.getWorldQuaternion(_hq);
   _hf.copy(headFace).applyQuaternion(_hq).normalize();
   const ang = _hf.angleTo(_hd); if (ang < 1e-4) return;
@@ -1054,7 +1197,7 @@ async function spawnKen(cell) {
   const gltf = await gl2.loadAsync(kenAssets.vrmBlobUrl);
   const kvrm = gltf.userData.vrm;
   VRMUtils.removeUnnecessaryVertices(gltf.scene); VRMUtils.combineSkeletons(gltf.scene);
-  kvrm.scene.position.set(cell.x * TILE, 0, cell.z * TILE);
+  kvrm.scene.position.set(cell.x * TILE, (cell.level || 0) * STORY_H, cell.z * TILE);
   scene.add(kvrm.scene);
   const mixer = new THREE.AnimationMixer(kvrm.scene);
   let action = null;
@@ -1083,17 +1226,18 @@ async function spawnKen(cell) {
 async function spawnStaff() {
   if (!kenAssets.ready) return;
   const rs = dg.rooms.slice().sort(() => Math.random() - 0.5).slice(0, KEN.count);
-  for (const r of rs) { try { await spawnKen({ x: r.cx, z: r.cz }); } catch (e) { console.warn('ken spawn失敗:', e.message); } }
+  for (const r of rs) { try { await spawnKen({ x: r.cx, z: r.cz, level: r.level || 0 }); } catch (e) { console.warn('ken spawn失敗:', e.message); } }
 }
 
-function kenCell(m) { return { x: Math.round(m.vrm.scene.position.x / TILE), z: Math.round(m.vrm.scene.position.z / TILE) }; }
+function kenCell(m) { return { x: Math.round(m.vrm.scene.position.x / TILE), z: Math.round(m.vrm.scene.position.z / TILE), level: lvlOfY(m.vrm.scene.position.y) }; }
 // 壁ずり移動：進めない時は軸ごとに滑る（壁・角で完全停止しない）
 function kenMove(m, dx, dz) {
   const pos = m.vrm.scene.position;
   const nx = pos.x + dx, nz = pos.z + dz;
-  if (vampFree(nx, nz)) { pos.x = nx; pos.z = nz; return true; }
-  if (vampFree(nx, pos.z)) { pos.x = nx; return true; }
-  if (vampFree(pos.x, nz)) { pos.z = nz; return true; }
+  const follow = () => { pos.y += (floorYAt(pos.x, pos.z, pos.y) - pos.y) * 0.35; };   // 階段・2階の床に足を合わせる
+  if (vampFree(nx, nz, pos.y)) { pos.x = nx; pos.z = nz; follow(); return true; }
+  if (vampFree(nx, pos.z, pos.y)) { pos.x = nx; follow(); return true; }
+  if (vampFree(pos.x, nz, pos.y)) { pos.z = nz; follow(); return true; }
   // 完全に詰まった（壁の角にめり込み等）：自セル中心へ少しずつ押し戻して脱出させる
   const cx = Math.round(pos.x / TILE) * TILE, cz = Math.round(pos.z / TILE) * TILE;
   const ex = cx - pos.x, ez = cz - pos.z;
@@ -1112,12 +1256,14 @@ function startKenDissolve(m) {
   const c = hips ? hips.getWorldPosition(_ktmp) : m.vrm.scene.position;
   if (m.dis) {
     m.dis.setArmed(true); m.dis.setProgress(0);
-    m.dis.setPuddleCenter(c.x, c.z); m.dis.setGroundY(0.02);   // 床上面(y0)のわずか上＝Z-fight回避
+    m.dis.setPuddleCenter(c.x, c.z);
+    m.dis.setGroundY(floorYAt(c.x, c.z, c.y) + 0.02);   // その階の床上面のわずか上＝Z-fight回避
     try { m.dis.recenter(); } catch { /* noop */ }   // 倒れた後の実バウンディングで溶かす
   }
 }
 function removeKen(m) {
   m._remove = true;
+  if (m.eyeTgt) scene.remove(m.eyeTgt);
   if (speechUI) speechUI.clearBubble(m);
   try { m.dis?.dispose(); } catch { /* noop */ }
   try { disposeRagdoll(m.ragdoll); } catch { /* noop */ }
@@ -1133,7 +1279,7 @@ function updateKens(dt) {
 }
 function updateOneKen(m, dt) {
   const pos = m.vrm.scene.position;
-  const vd = Math.hypot(vamp.root.position.x - pos.x, vamp.root.position.z - pos.z);
+  const vd = Math.hypot(vamp.root.position.x - pos.x, vamp.root.position.y - pos.y, vamp.root.position.z - pos.z);
 
   if (m.state === 'dissolving') {
     m.dissT += dt;
@@ -1147,26 +1293,32 @@ function updateOneKen(m, dt) {
     vamp.root.getWorldQuaternion(_bq); _kd2.copy(bodyFwd).applyQuaternion(_bq); _kd2.y = 0; _kd2.normalize();
     const mouthY = vamp.head ? vamp.head.getWorldPosition(_ktmp).y + (KISS.up || 0) : 1.32;
     _kpin.set(vamp.root.position.x + _kd2.x * 0.42, mouthY, vamp.root.position.z + _kd2.z * 0.42);
-    updateRagdoll(m.ragdoll, dt, { floorY: 0, pinBone: m.pinBone || 'neck', pinPos: _kpin });
-    m.vrm.update(dt);
+    updateRagdoll(m.ragdoll, dt, { floorY: floorYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y), pinBone: m.pinBone || 'neck', pinPos: _kpin });
     if (m.speech) { m.speech.onState('downed'); m.speech.update(dt); }
+    m.vrm.update(dt);
     return;
   }
   if (m.state === 'downed') {
     // 吸い尽くされた：ラグドールのまま床へ落ち、崩れて落ち着いたらその場でディソルブ（CityFlyのken方式）
+    if (!m._dropped) {   // 手榴弾とライフルを落とす
+      m._dropped = true;
+      dropGrenadeAt(pos.x + 0.4, pos.z + 0.3, pos.y);
+      dropPropAt('rifle', pos.x - 0.4, pos.z - 0.2, pos.y);
+    }
     m.downT = (m.downT || 0) + dt;
-    updateRagdoll(m.ragdoll, dt, { floorY: 0 });
+    const fy = floorYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y);
+    updateRagdoll(m.ragdoll, dt, { floorY: fy });
     m.vrm.update(dt);
     if (m.downT > 0.8) {
       let low = Infinity;
       for (const pt of m.ragdoll.particles) if (pt.pos.y < low) low = pt.pos.y;
-      if (low < 0.22 || m.downT > 4) { setRagdollActive(m.ragdoll, false); startKenDissolve(m); }
+      if (low - fy < 0.22 || m.downT > 4) { setRagdollActive(m.ragdoll, false); startKenDissolve(m); }
     }
     return;
   }
   if (m.recoverT > 0) {   // 解放後：しばらくラグドールのまま倒れて回復
     m.recoverT -= dt;
-    updateRagdoll(m.ragdoll, dt, { floorY: 0 });
+    updateRagdoll(m.ragdoll, dt, { floorY: floorYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y) });
     m.vrm.update(dt);
     if (m.recoverT <= 0) { setRagdollActive(m.ragdoll, false); m.state = 'patrol'; m.path = null; }
     return;
@@ -1187,10 +1339,10 @@ function updateOneKen(m, dt) {
       m.fleeRepathT = 1.5;
       let best = null, bd = -1;
       for (const r of dg.rooms) {
-        const d = Math.hypot(r.cx * TILE - vamp.root.position.x, r.cz * TILE - vamp.root.position.z);
+        const d = Math.hypot(r.cx * TILE - vamp.root.position.x, (r.level || 0) * STORY_H - vamp.root.position.y, r.cz * TILE - vamp.root.position.z);
         if (d > bd) { bd = d; best = r; }
       }
-      const pth = best ? findPath(nav, kenCell(m), { x: best.cx, z: best.cz }) : null;
+      const pth = best ? findPath(nav, kenCell(m), { x: best.cx, z: best.cz, level: best.level || 0 }) : null;
       m.path = (pth && pth.length > 1) ? pth : null; m.seg = 1;
     }
     if (m.path && m.seg < m.path.length) {
@@ -1209,7 +1361,7 @@ function updateOneKen(m, dt) {
     // 発砲（視線が通り・彼女が硬直していなければ）
     if (vd < KEN.shootRange && m.shootCd <= 0 && vamp.stunT <= 0) {
       const a = kenCell(m), bcell = vampCell();
-      if (hasLineOfSight(nav, a.x, a.z, bcell.x, bcell.z)) {
+      if (hasLineOfSight(nav, a.x, a.z, bcell.x, bcell.z, a.level, bcell.level)) {
         m.shootCd = KEN.shootCd + Math.random() * 2;
         staffShoot(m);
       }
@@ -1218,7 +1370,7 @@ function updateOneKen(m, dt) {
     m.repathT -= dt;
     if (!m.path || m.repathT <= 0) {
       m.repathT = 3 + Math.random() * 2;
-      if (!m.patrolTo || Math.random() < 0.3) { const r = dg.rooms[(Math.random() * dg.rooms.length) | 0]; m.patrolTo = { x: r.cx, z: r.cz }; }
+      if (!m.patrolTo || Math.random() < 0.3) { const r = dg.rooms[(Math.random() * dg.rooms.length) | 0]; m.patrolTo = { x: r.cx, z: r.cz, level: r.level || 0 }; }
       const pth = findPath(nav, kenCell(m), m.patrolTo);
       m.path = (pth && pth.length > 1) ? pth : null; m.seg = 1;
     }
@@ -1239,14 +1391,22 @@ function updateOneKen(m, dt) {
   let dyaw = m.faceYaw - m.vrm.scene.rotation.y;
   while (dyaw > Math.PI) dyaw -= Math.PI * 2; while (dyaw < -Math.PI) dyaw += Math.PI * 2;
   m.vrm.scene.rotation.y += dyaw * Math.min(1, dt * 8);
+  // 目線：彼女が近い/逃走中は VRM の lookAt で目だけ追う（首は体の向きのまま＝可動域の狭い順）
+  if (m.vrm.lookAt) {
+    if (!m.eyeTgt) { m.eyeTgt = new THREE.Object3D(); scene.add(m.eyeTgt); m.vrm.lookAt.target = m.eyeTgt; }
+    if ((m.state === 'flee' || vd < 8) && vamp.head) vamp.head.getWorldPosition(m.eyeTgt.position);
+    else m.eyeTgt.position.set(pos.x + Math.sin(m.faceYaw) * 3, pos.y + 1.35, pos.z + Math.cos(m.faceYaw) * 3);
+  }
   if (m.action) m.action.timeScale = Math.max(0.25, speed / 1.4);
   if (m.mixer) m.mixer.update(dt);
-  m.vrm.update(dt);
+  // 口パク（viseme）は vrm.update の前に適用（npc-speech の設計順）
   if (m.speech) { m.speech.onState(m.state === 'flee' ? 'flee' : 'idle'); m.speech.update(dt); }
+  m.vrm.update(dt);
 }
 
 // 職員の発砲：彼女を硬直させる（ビームの見た目は既存 shotFx を流用）
 function staffShoot(m) {
+  playGunshot(m.vrm.scene.position);
   if (m.speech) m.speech.bark('shoot');
   const from = m.vrm.scene.position.clone(); from.y = 1.35;
   const to = vamp.root.position.clone(); to.y = 1.2;
@@ -1301,15 +1461,17 @@ function bubbleScreenPos(holder) {
   return { x: (_bubV.x * 0.5 + 0.5) * innerWidth, y: (-_bubV.y * 0.5 + 0.5) * innerHeight, visible };
 }
 
-function pickPatrol() {   // 屋敷の中を「生活」して巡回：部屋とゴール周辺をランダムに巡る
+function pickPatrol() {   // 屋敷の中を「生活」して巡回：部屋とゴール周辺をランダムに巡る（全階）
   const r = dg.rooms[(Math.random() * dg.rooms.length) | 0];
-  return { x: r.cx, z: r.cz };
+  return { x: r.cx, z: r.cz, level: r.level || 0 };
 }
 
 // ── プレイヤーのショット（ヒットスキャン。当てると硬直） ──
 const shotFx = [];
 function fireShot() {
-  if (phase !== 'playing' || !vamp.ready) return;
+  if (phase !== 'playing' || !vamp.ready || cutscene.on) return;
+  if (!heldWeapon()) return;   // ライフルかショックガンを持っている時だけ撃てる
+  playGunshot(player.pos);
   const origin = camera.getWorldPosition(new THREE.Vector3());
   const dir = camera.getWorldDirection(new THREE.Vector3());
   // 吸血鬼を球として判定（胸の高さ）
@@ -1344,7 +1506,7 @@ function startGame() { phase = 'playing'; nightT = 0; won = false; drain = 0;
   if (vamp.ready) { vamp.state = 'patrol'; vamp.path = null; vamp.stunT = 0; vamp.patrolTo = null; }   // 布が飛ぶのでテレポートはしない
   resetPlayer(); $('overlay').style.display = 'none'; if (!touchMode) canvas.requestPointerLock(); }
 function showOverlay(title, sub, col) { $('ov-title').textContent = title; $('ov-title').style.color = col; $('ov-sub').textContent = sub; $('overlay').style.display = 'flex'; $('btn-start').textContent = 'もう一度'; $('btn-start').disabled = false; $('overlay').style.display = 'flex'; }
-function win(reason) { if (won) return; won = true; phase = 'win'; document.exitPointerLock?.(); showOverlay('ESCAPED', reason, '#8f8'); }
+function win(reason) { if (won) return; won = true; phase = 'win'; achSet('clear', true); document.exitPointerLock?.(); showOverlay('ESCAPED', reason, '#8f8'); }
 function lose() { if (won) return; won = true; phase = 'lose'; document.exitPointerLock?.(); showOverlay('DRAINED', '彼女に捕まった…', '#f66'); }
 
 let frames = 0, lastFps = performance.now(), fps = 0;
@@ -1542,7 +1704,38 @@ async function loadLighting() {
 
 
 // ══════════ ステージ編集モード（観察カメラの上に構築。パーツ移動/回転・等間隔配置・ユニット・ゴール移動） ══════════
-const edit = { on: false, busy: false, sel: [], gizmo: null, group: null, snap: true, mode: 'translate' };
+const edit = { on: false, busy: false, sel: [], gizmo: null, group: null, snap: true, mode: 'translate', helpers: new Map(), hover: null, drag: null, altDown: false, ptr: null, lights: null, fogSave: null, paletteBuilt: false };
+
+// トリガーボックスの編集用メッシュ（半透明箱・編集モードのみ）。ゲーム中はメッシュ自体を作らない
+const trigMeshes = new Map();   // data → mesh
+const TRIG_COLORS = { speech: 0x44aaff, bgm: 0xaa66ff, vampWake: 0xff5566, thunder: 0xffcc44, cutscene: 0x55dd88 };
+function makeTriggerMesh(t) {
+  if (!edit.trigGroup) return null;
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(TILE, 1.4, TILE),
+    new THREE.MeshBasicMaterial({ color: TRIG_COLORS[t.event?.type] || 0x888888, transparent: true, opacity: 0.3, depthWrite: false }));
+  m.scale.set(t.w || 1, 1, t.d || 1);
+  m.position.set(t.x * TILE, (t.level || 0) * STORY_H + 0.7, t.z * TILE);
+  m.userData.item = t;
+  edit.trigGroup.add(m);
+  trigMeshes.set(t, m);
+  return m;
+}
+function trigRecolor(t) { const m = trigMeshes.get(t); if (m) m.material.color.setHex(TRIG_COLORS[t.event?.type] || 0x888888); }
+function makeCsMarker(cs) {   // カットシーン地点マーカー（緑の円錐・編集モードのみ）
+  if (!edit.trigGroup) return null;
+  const m = new THREE.Mesh(new THREE.ConeGeometry(0.35, 1.0, 10), new THREE.MeshBasicMaterial({ color: 0x55dd88, transparent: true, opacity: 0.75 }));
+  m.position.set(cs.x * TILE, (cs.level || 0) * STORY_H + 0.5, cs.z * TILE);
+  m.userData.item = cs;
+  edit.trigGroup.add(m);
+  trigMeshes.set(cs, m);
+  return m;
+}
+function buildTriggerMeshes() {
+  trigMeshes.clear();
+  for (const t of (dg.triggers || [])) makeTriggerMesh(t);
+  for (const cs of (dg.cutscenes || [])) makeCsMarker(cs);
+}
 
 function editItemMesh(it) {   // 編集用の個別メッシュ（選択・ギズモ操作対象）
   const part = partsCache[it.model];
@@ -1561,6 +1754,8 @@ async function editEnter() {
   edit.on = true;
   if (!obs.on) obsToggle(true);
   if (!edit.group) { edit.group = new THREE.Group(); scene.add(edit.group); }
+  if (!edit.trigGroup) { edit.trigGroup = new THREE.Group(); scene.add(edit.trigGroup); }
+  buildTriggerMeshes();
   // アイテムを個別メッシュ化（インスタンス表示は隠す）
   itemGroup.visible = false;
   for (const it of dg.items) {
@@ -1571,19 +1766,38 @@ async function editEnter() {
   }
   if (!edit.gizmo) {
     edit.gizmo = new TransformControls(camera, renderer.domElement);
-    edit.gizmo.addEventListener('dragging-changed', (e) => { edit.busy = e.value; if (!e.value) editWriteBack(); });
-    edit.gizmo.addEventListener('objectChange', () => { if (edit.mode === 'translate' && edit.gizmo.object === goalMesh) goalMesh.position.y = 1.6; });
+    edit.gizmo.addEventListener('dragging-changed', (e) => {
+      edit.busy = e.value;
+      if (e.value) editDragStart(); else { editWriteBack(); edit.drag = null; }
+    });
+    edit.gizmo.addEventListener('objectChange', () => editDragFollow());
     scene.add(edit.gizmo.getHelper ? edit.gizmo.getHelper() : edit.gizmo);
   }
   editApplySnap();
+  // 全体が見えるようフラット照明へ（夜の演出照明・フォグは編集の邪魔）
+  if (!edit.lights) {
+    edit.lights = new THREE.Group();
+    edit.lights.add(new THREE.AmbientLight(0xffffff, 1.8));
+    const dl = new THREE.DirectionalLight(0xffffff, 1.2); dl.position.set(30, 60, 20); edit.lights.add(dl);
+  }
+  scene.add(edit.lights);
+  edit.fogSave = scene.fog; scene.fog = null;
+  if (!edit.paletteBuilt) { edit.paletteBuilt = true; buildEditPalette(); }
+  const achTa = $('ed-ach-events');
+  if (achTa) achTa.value = JSON.stringify(dg.achEvents || []);
   $('edit-panel').style.display = 'block';
-  setStatus('ステージ編集中：クリック=選択 / Shift+クリック=追加選択 / G移動 R回転 / Delete削除');
+  setStatus('ステージ編集中：クリック=選択 / Shift+クリック=追加選択 / Alt+ドラッグ=複製 / G移動 R回転 / Del削除');
 }
 function editExit() {
   if (!edit.on) return;
   edit.on = false;
   editSelect(null);
+  if (edit.lights) scene.remove(edit.lights);
+  scene.fog = edit.fogSave;
+  applyLighting();
+  if (edit.hover) edit.hover.visible = false;
   if (edit.group) { for (const o of [...edit.group.children]) edit.group.remove(o); }
+  if (edit.trigGroup) { for (const o of [...edit.trigGroup.children]) edit.trigGroup.remove(o); trigMeshes.clear(); }
   itemGroup.visible = true;
   rebuildItemInstances();
   $('edit-panel').style.display = 'none';
@@ -1603,18 +1817,21 @@ function editSetMode(m) {
 }
 function editSelect(obj, additive) {
   if (!additive) {
-    for (const o of edit.sel) setEditHighlight(o, false);
+    for (const o of edit.sel) { setEditHighlight(o, false); removeSelHelper(o); }
     edit.sel = [];
   }
   if (obj) {
-    if (!edit.sel.includes(obj)) { edit.sel.push(obj); setEditHighlight(obj, true); }
+    if (!edit.sel.includes(obj)) { edit.sel.push(obj); setEditHighlight(obj, true); addSelHelper(obj); }
   }
   const prim = edit.sel[edit.sel.length - 1] || null;
   if (edit.gizmo) { if (prim) { edit.gizmo.attach(prim); editSetMode(edit.mode); } else edit.gizmo.detach(); }
   const inf = $('edit-info');
   if (inf) inf.textContent = edit.sel.length === 0 ? '（未選択）'
-    : edit.sel.length === 1 ? (prim === goalMesh ? '🏁 ゴール地点' : (prim.userData.item?.model || '?'))
+    : edit.sel.length === 1 ? (prim === goalMesh ? '🏁 ゴール地点' : (prim.userData.item?.model || prim.userData.item?.id || '?'))
     : edit.sel.length + '個選択中';
+  const csIt = prim?.userData.item;
+  const csTa = $('ed-cs-script');
+  if (csTa && csIt && dg.cutscenes?.includes(csIt)) csTa.value = JSON.stringify({ actors: csIt.actors || [], script: csIt.script || [] }, null, 1);
 }
 // マテリアルは同じ見た目のものを共有しているので、選択色を直接書くと同じ部材が全部光ってしまう。
 // ハイライト中だけ複製に差し替え、解除で共有マテリアルへ戻す。
@@ -1633,20 +1850,110 @@ function setEditHighlight(obj, on) {
     }
   });
 }
-// ギズモ操作の結果をアイテムデータへ書き戻す
-function editWriteBack() {
+// 選択枠（黄）とホバー枠（水色）。壁越しでも見えるよう depthTest を切る
+function addSelHelper(obj) {
+  if (edit.helpers.has(obj)) return;
+  const h = new THREE.BoxHelper(obj, 0xffdd33);
+  h.material.depthTest = false; h.renderOrder = 999;
+  scene.add(h); edit.helpers.set(obj, h);
+}
+function removeSelHelper(obj) {
+  const h = edit.helpers.get(obj);
+  if (h) { scene.remove(h); h.geometry.dispose(); h.material.dispose(); edit.helpers.delete(obj); }
+}
+function editHitAt(cx, cy) {   // 画面座標→編集対象（アイテムのルートまで遡る）
+  const r = renderer.domElement.getBoundingClientRect();
+  _ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+  _ray.setFromCamera(_ndc, camera);
+  const hits = _ray.intersectObjects([...(edit.group ? edit.group.children : []), ...(edit.trigGroup ? edit.trigGroup.children : []), ...props.map((pr) => pr.mesh), goalMesh].filter(Boolean), true);
+  if (!hits.length) return null;
+  let obj = hits[0].object;
+  if (obj !== goalMesh) { while (obj.parent && obj.parent !== edit.group && obj.parent !== scene) obj = obj.parent; }
+  if (obj === goalMesh || obj.parent === edit.group) return obj;
+  if (obj.userData.prop || (obj.userData.item && (dg.props?.includes(obj.userData.item) || dg.doors?.includes(obj.userData.item) || dg.triggers?.includes(obj.userData.item) || dg.cutscenes?.includes(obj.userData.item)))) return obj;
+  return null;
+}
+// 毎フレーム：選択枠の追従と、どれが選択対象になるかのホバー表示
+function editFrame() {
+  for (const h of edit.helpers.values()) h.update();
+  if (edit.ptr && !edit.busy) {
+    const obj = editHitAt(edit.ptr[0], edit.ptr[1]);
+    if (obj) {
+      if (!edit.hover) { edit.hover = new THREE.BoxHelper(obj, 0x66ccff); edit.hover.material.depthTest = false; edit.hover.renderOrder = 998; scene.add(edit.hover); }
+      edit.hover.visible = true;
+      edit.hover.setFromObject(obj);
+    } else if (edit.hover) edit.hover.visible = false;
+  } else if (edit.hover) edit.hover.visible = false;
+}
+// ドラッグ開始：Alt＝元の位置にコピーを残す（UE式複製）。複数選択の基準位置も記録
+function editDragStart() {
   const prim = edit.gizmo && edit.gizmo.object;
   if (!prim) return;
-  if (prim === goalMesh) {
-    setGoalCell(Math.round(prim.position.x / TILE), Math.round(prim.position.z / TILE));
-    return;
+  if (edit.altDown) {
+    for (const o of edit.sel) {
+      const it = o.userData.item; if (!it) continue;
+      const copy = { ...it };
+      dg.items.push(copy);
+      const m = editItemMesh(copy); if (m) edit.group.add(m);
+    }
   }
-  const it = prim.userData.item;
-  if (!it) return;
-  it.ry = prim.rotation.y;
-  const pl = itemPlacement(it);            // ry確定後のオフセット（腰板など）で逆算
-  it.x = (prim.position.x - pl.ox) / TILE;
-  it.z = (prim.position.z - pl.oz) / TILE;
+  edit.drag = {
+    pos: prim.position.clone(), ry: prim.rotation.y,
+    others: edit.sel.filter((o) => o !== prim).map((o) => ({ o, pos: o.position.clone(), ry: o.rotation.y })),
+  };
+}
+// ドラッグ中：主対象の差分を他の選択物へ適用（回転は主対象を軸に公転＋自転）
+function editDragFollow() {
+  const prim = edit.gizmo && edit.gizmo.object;
+  if (!prim) return;
+  if (prim === goalMesh && edit.mode === 'translate') prim.position.y = 1.6;
+  if (!edit.drag) return;
+  if (edit.mode === 'translate') {
+    const dx = prim.position.x - edit.drag.pos.x, dz = prim.position.z - edit.drag.pos.z;
+    for (const r of edit.drag.others) {
+      r.o.position.x = r.pos.x + dx; r.o.position.z = r.pos.z + dz;
+      if (r.o === goalMesh) r.o.position.y = 1.6;
+    }
+  } else {
+    const dry = prim.rotation.y - edit.drag.ry;
+    const c = Math.cos(dry), sn = Math.sin(dry);
+    for (const r of edit.drag.others) {
+      const ox = r.pos.x - edit.drag.pos.x, oz = r.pos.z - edit.drag.pos.z;
+      r.o.position.x = edit.drag.pos.x + ox * c + oz * sn;
+      r.o.position.z = edit.drag.pos.z - ox * sn + oz * c;
+      r.o.rotation.y = r.ry + dry;
+    }
+  }
+}
+// ギズモ操作の結果をアイテムデータへ書き戻す
+function editWriteBack() {
+  const objs = edit.sel.length ? edit.sel : (edit.gizmo && edit.gizmo.object ? [edit.gizmo.object] : []);
+  for (const o of objs) {
+    if (o === goalMesh) { setGoalCell(Math.round(o.position.x / TILE), Math.round(o.position.z / TILE)); continue; }
+    const it = o.userData.item; if (!it) continue;
+    it.ry = o.rotation.y;
+    if (dg.cutscenes && dg.cutscenes.includes(it)) {   // カットシーン地点
+      it.x = o.position.x / TILE; it.z = o.position.z / TILE;
+      it.level = lvlOfY(o.position.y);
+      o.position.y = it.level * STORY_H + 0.5;
+      continue;
+    }
+    if (dg.triggers && dg.triggers.includes(it)) {   // トリガー：セル座標＋階
+      it.x = o.position.x / TILE; it.z = o.position.z / TILE;
+      it.level = lvlOfY(o.position.y);
+      o.position.y = it.level * STORY_H + 0.7;
+      continue;
+    }
+    if (dg.props && dg.props.includes(it)) {   // プロップ：セル座標＋床高へ再着地
+      it.x = o.position.x / TILE; it.z = o.position.z / TILE;
+      it.level = lvlOfY(o.position.y);
+      o.position.y = propRestY(it);
+      continue;
+    }
+    const pl = itemPlacement(it);            // ry確定後のオフセット（腰板など）で逆算
+    it.x = (o.position.x - pl.ox) / TILE;
+    it.z = (o.position.z - pl.oz) / TILE;
+  }
   // 高さは chandelier / rug 等は自動。手動Yは維持しない（床置き前提）
 }
 function editDeleteSel() {
@@ -1655,18 +1962,30 @@ function editDeleteSel() {
     const it = o.userData.item;
     const i = dg.items.indexOf(it);
     if (i >= 0) dg.items.splice(i, 1);
+    const ti2 = dg.triggers ? dg.triggers.indexOf(it) : -1;
+    if (ti2 >= 0) { dg.triggers.splice(ti2, 1); trigMeshes.delete(it); if (edit.trigGroup) edit.trigGroup.remove(o); continue; }
+    const ci = dg.cutscenes ? dg.cutscenes.indexOf(it) : -1;
+    if (ci >= 0) { dg.cutscenes.splice(ci, 1); trigMeshes.delete(it); if (edit.trigGroup) edit.trigGroup.remove(o); continue; }
+    const pi = dg.props ? dg.props.indexOf(it || o.userData.prop) : -1;
+    if (pi >= 0) {
+      dg.props.splice(pi, 1);
+      const k = props.findIndex((pr) => pr.data === (it || o.userData.prop));
+      if (k >= 0) { scene.remove(props[k].mesh); props.splice(k, 1); }
+      continue;
+    }
     edit.group.remove(o);
   }
   editSelect(null);
 }
 function editDuplicateSel() {
-  const src = edit.sel[edit.sel.length - 1];
-  const it = src && src.userData.item;
-  if (!it) return;
-  const copy = { ...it, x: it.x + 1 };
-  dg.items.push(copy);
-  const m = editItemMesh(copy);
-  if (m) { edit.group.add(m); editSelect(m); }
+  const made = [];
+  for (const o of edit.sel) {
+    const it = o.userData.item; if (!it) continue;
+    const copy = { ...it, x: it.x + 1 };
+    dg.items.push(copy);
+    const m = editItemMesh(copy); if (m) { edit.group.add(m); made.push(m); }
+  }
+  if (made.length) { editSelect(null); for (const m of made) editSelect(m, true); }
 }
 // 等間隔配置：選択パーツを N 個、指定セル間隔・方向に並べる（パーツは共通寸法＝セル単位なのできれいに揃う）
 function editArray(count, stepCells, dir) {
@@ -1687,20 +2006,14 @@ function editArray(count, stepCells, dir) {
 // クリック選択（obsのドラッグ回転と両立：動かさずに離した時だけ選択）
 const _ray = new THREE.Raycaster(), _ndc = new THREE.Vector2();
 let _downXY = null;
-function editPointerDown(e) { if (edit.on && e.button === 0 && !edit.busy) _downXY = [e.clientX, e.clientY]; }
+function editPointerDown(e) { edit.altDown = e.altKey; if (edit.on && e.button === 0 && !edit.busy) _downXY = [e.clientX, e.clientY]; }
+function editPointerMove(e) { if (edit.on) edit.ptr = [e.clientX, e.clientY]; }
 function editPointerUp(e) {
   if (!edit.on || !_downXY || edit.busy) { _downXY = null; return; }
   const moved = Math.hypot(e.clientX - _downXY[0], e.clientY - _downXY[1]);
   _downXY = null;
   if (moved > 4) return;   // ドラッグ＝カメラ回転
-  const r = renderer.domElement.getBoundingClientRect();
-  _ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-  _ray.setFromCamera(_ndc, camera);
-  const hits = _ray.intersectObjects([...(edit.group ? edit.group.children : []), goalMesh].filter(Boolean), true);
-  if (!hits.length) { editSelect(null); return; }
-  let obj = hits[0].object;
-  if (obj !== goalMesh) { while (obj.parent && obj.parent !== edit.group) obj = obj.parent; }
-  editSelect(obj === goalMesh || obj.parent === edit.group ? obj : null, e.shiftKey);
+  editSelect(editHitAt(e.clientX, e.clientY), e.shiftKey);
 }
 // 選択グループをユニットとして保存（room-editor 互換の .unit.json）
 async function editSaveUnit(name) {
@@ -1744,7 +2057,7 @@ async function editAddModel(name) {
   if (m) { edit.group.add(m); editSelect(m); }
 }
 async function editSaveStage() {
-  const data = { version: 1, seed: dg.seed, roomsX: 3, roomsZ: 3, goal: dg.goal, items: dg.items };
+  const data = { version: 1, seed: dg.seed, layout: dg.layout || 'mansion', roomsX: 3, roomsZ: 3, goal: dg.goal, items: dg.items, props: dg.props || [], doors: dg.doors || [], achEvents: dg.achEvents || [], triggers: (dg.triggers || []).map((t) => { const c = { ...t }; delete c._fired; return c; }), cutscenes: dg.cutscenes || [] };
   try {
     const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'vamp_param', filename: 'mansion-stage.json', content: JSON.stringify(data) }) });
     return r.ok;
@@ -1767,18 +2080,40 @@ function setupEditUI() {
     '間隔<input type="number" id="ed-step" value="1" min="0.5" step="0.5" style="width:44px;">セル</div>',
     '<div style="display:flex;gap:4px;align-items:center;margin-top:3px;">方向<select id="ed-dir" style="flex:1;"><option value="x+">X+</option><option value="x-">X-</option><option value="z+">Z+</option><option value="z-">Z-</option><option value="fwd">向いている方向</option></select>',
     '<button id="ed-array">並べる</button></div>',
-    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">パーツ追加</div>',
-    '<div style="display:flex;gap:4px;margin-top:3px;"><select id="ed-models" style="flex:1;"></select><button id="ed-add">追加</button></div>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">パーツ追加（クリックで配置）</div>',
+    '<div id="ed-thumbs"></div>',
     '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">ユニット</div>',
     '<div style="display:flex;gap:4px;margin-top:3px;"><select id="ed-units" style="flex:1;"></select><button id="ed-unit-place">配置</button></div>',
     '<div style="display:flex;gap:4px;margin-top:3px;"><input type="text" id="ed-unit-name" placeholder="ユニット名" style="flex:1;"><button id="ed-unit-save">選択を保存</button></div>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">アイテム（プロップ）</div>',
+    '<div style="display:flex;gap:4px;margin-top:3px;"><button id="ed-prop-key">🔑 鍵</button><button id="ed-prop-grenade">💣 手榴弾</button><button id="ed-prop-memo">📄 メモ</button></div>',
+    '<div style="display:flex;gap:4px;margin-top:3px;"><button id="ed-prop-rifle">🔫 ライフル</button><button id="ed-prop-shockgun">⚡ ショックガン</button></div>',
+    '<label style="display:flex;align-items:center;gap:5px;margin-top:4px;cursor:pointer;"><input type="checkbox" id="ed-grabbable" checked> 掴める（grabbable）</label>',
+    '<div style="display:flex;gap:4px;margin-top:4px;"><button id="ed-door">🚪 扉</button><button id="ed-keylink">選択した鍵を最寄りの扉に連動</button></div>',
+    '<div style="margin-top:4px;">メモ内容（"---"の行でページ区切り）<textarea id="ed-memo-pages" rows="3" style="width:100%;"></textarea></div>',
+    '<div style="display:flex;gap:4px;align-items:center;">実績ID <input type="text" id="ed-memo-ach" style="flex:1;" placeholder="readNote など"></div>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">トリガーボックス（ゲーム中不可視）</div>',
+    '<div style="display:flex;gap:4px;margin-top:3px;"><button id="ed-trig-add">＋トリガー</button>',
+    '<select id="ed-trig-type" style="flex:1;"><option value="speech">会話（字幕）</option><option value="bgm">BGM変更</option><option value="vampWake">吸血鬼出現</option><option value="thunder">雷</option><option value="cutscene">カットシーン</option></select></div>',
+    '<input type="text" id="ed-trig-param" placeholder="セリフ / BGMファイル名 / シーンID" style="width:100%;margin-top:3px;">',
+    '<div style="display:flex;gap:4px;align-items:center;margin-top:3px;">範囲(セル) 幅<input type="number" id="ed-trig-w" value="1" min="1" style="width:44px;"> 奥<input type="number" id="ed-trig-d" value="1" min="1" style="width:44px;"></div>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">カットシーン（キャンバス右クリックで作成）</div>',
+    '<div style="font-size:11px;color:#9ab;">actors/script は story-editor 形式（x,z はセル）</div>',
+    '<textarea id="ed-cs-script" rows="5" style="width:100%;margin-top:3px;font-size:11px;" placeholder="マーカー選択でスクリプト表示"></textarea>',
+    '<div style="display:flex;gap:4px;margin-top:3px;"><button id="ed-cs-apply">スクリプト反映</button><button id="ed-cs-test">▶ テスト再生</button></div>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">実績イベント</div>',
+    '<div style="font-size:11px;color:#9ab;">[{"when":{"id":"readNote","op":"==","value":true},"event":{"type":"thunder"}}] 形式。実績はメモ閲覧/clear などで更新</div>',
+    '<textarea id="ed-ach-events" rows="3" style="width:100%;margin-top:3px;font-size:11px;"></textarea>',
+    '<button id="ed-ach-apply" style="margin-top:3px;">反映</button>',
+    '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;color:#9fe6ff;font-weight:bold;">ステージ生成</div>',
+    '<div style="display:flex;gap:4px;margin-top:3px;"><select id="ed-layout" style="flex:1;"><option value="mansion">本館のみ</option><option value="annex">別棟つき（渡り廊下）</option><option value="floors2">2階建て（階段）</option><option value="basement">地下棟つき（階段）</option></select><button id="ed-regen">🎲 生成</button></div>',
     '<div style="border-top:1px solid #345;margin-top:8px;padding-top:6px;display:flex;gap:4px;">',
     '<button id="ed-save" style="flex:1;background:#2b6a4a;">💾 ステージ保存</button>',
     '<button id="ed-play" style="flex:1;background:#6a2b4a;">▶ シミュレーション</button></div>',
   ].join('');
   document.body.appendChild(panel);
   const st = document.createElement('style');
-  st.textContent = '#edit-panel button{background:#25304a;border:1px solid #46608c;color:#cfe;border-radius:4px;padding:3px 7px;font-size:11px;cursor:pointer;} #edit-panel input,#edit-panel select{background:#1a2030;color:#cfe;border:1px solid #345;border-radius:3px;padding:2px 4px;font-size:11px;}';
+  st.textContent = '#edit-panel button{background:#25304a;border:1px solid #46608c;color:#cfe;border-radius:4px;padding:3px 7px;font-size:11px;cursor:pointer;} #edit-panel input,#edit-panel select{background:#1a2030;color:#cfe;border:1px solid #345;border-radius:3px;padding:2px 4px;font-size:11px;} #ed-thumbs{max-height:210px;overflow-y:auto;background:#12182a;border:1px solid #263452;border-radius:6px;padding:4px;display:flex;flex-wrap:wrap;gap:3px;align-content:flex-start;margin-top:3px;} #ed-thumbs .cat{width:100%;font-size:10px;color:#8fa9cc;margin:4px 2px 1px;} #ed-thumbs img{width:44px;height:44px;border-radius:4px;background:#1c2436;cursor:pointer;border:1px solid transparent;} #ed-thumbs img:hover{border-color:#5580cc;background:#24304a;}';
   document.head.appendChild(st);
   // 編集開始ボタンを観察パネルへ注入
   const obsPanel = $('obs-panel');
@@ -1791,12 +2126,11 @@ function setupEditUI() {
   }
   $('ed-move').addEventListener('click', () => editSetMode('translate'));
   $('ed-rot').addEventListener('click', () => editSetMode('rotate'));
-  $('ed-rot90').addEventListener('click', () => { const o = edit.sel[edit.sel.length - 1]; if (o && o !== goalMesh) { o.rotation.y += Math.PI / 2; edit.gizmo.attach(o); const it = o.userData.item; if (it) { it.ry = o.rotation.y; } } });
+  $('ed-rot90').addEventListener('click', () => { for (const o of edit.sel) { if (o === goalMesh) continue; o.rotation.y += Math.PI / 2; const it = o.userData.item; if (it) it.ry = o.rotation.y; } });
   $('ed-dup').addEventListener('click', editDuplicateSel);
   $('ed-del').addEventListener('click', editDeleteSel);
   $('ed-snap').addEventListener('change', (e) => { edit.snap = e.target.checked; editApplySnap(); });
   $('ed-array').addEventListener('click', () => editArray(+$('ed-n').value || 2, +$('ed-step').value || 1, $('ed-dir').value));
-  $('ed-add').addEventListener('click', () => { const v = $('ed-models').value; if (v) editAddModel(v); });
   $('ed-unit-place').addEventListener('click', () => { const v = $('ed-units').value; if (v) editPlaceUnit(v); });
   $('ed-unit-save').addEventListener('click', async () => {
     const name = ($('ed-unit-name').value || '').replace(/[^\w\-]/g, '');
@@ -1806,11 +2140,159 @@ function setupEditUI() {
     setTimeout(() => { btn.textContent = '選択を保存'; refreshUnitList(); }, 1200);
   });
   $('ed-save').addEventListener('click', async () => { const b2 = $('ed-save'); b2.textContent = (await editSaveStage()) ? '✓ 保存しました' : '✗ 失敗'; setTimeout(() => { b2.textContent = '💾 ステージ保存'; }, 1400); });
+  const addProp = (model) => {
+    if (!dg.props) dg.props = [];
+    const d = { model, x: Math.round(obs.tgt.x / TILE), z: Math.round(obs.tgt.z / TILE), ry: 0, level: lvlOfY(obs.tgt.y), grabbable: model !== 'memo' };
+    if (model === 'memo') d.memo = { pages: ['ここに内容を書く'] };
+    dg.props.push(d);
+    const pr = { data: d, mesh: makePropMesh(d), held: false, vel: null };
+    scene.add(pr.mesh); props.push(pr);
+    pr.mesh.userData.item = d;   // 既存のギズモ選択/移動/回転と互換にする
+    editSelect(pr.mesh);
+  };
+  $('ed-prop-key').addEventListener('click', () => addProp('key'));
+  $('ed-prop-grenade').addEventListener('click', () => addProp('grenade'));
+  $('ed-prop-memo').addEventListener('click', () => addProp('memo'));
+  $('ed-prop-rifle').addEventListener('click', () => addProp('rifle'));
+  $('ed-prop-shockgun').addEventListener('click', () => addProp('shockgun'));
+  $('ed-door').addEventListener('click', () => {
+    if (!dg.doors) dg.doors = [];
+    const d = { id: 'd' + (dg.doors.length + 1), x: Math.round(obs.tgt.x / TILE), z: Math.round(obs.tgt.z / TILE), ry: 0, level: lvlOfY(obs.tgt.y) };
+    dg.doors.push(d); buildDoors();
+    const dr = doorObjs.find((o) => o.data === d);
+    if (dr) editSelect(dr.group);
+  });
+  $('ed-keylink').addEventListener('click', () => {
+    const o = edit.sel[edit.sel.length - 1];
+    const it = o?.userData.item;
+    if (!it || it.model !== 'key' || !dg.doors?.length) { setStatus('鍵を選択してから押してください'); return; }
+    let best = null, bd = 1e9;
+    for (const d of dg.doors) { const dd = Math.hypot(d.x - it.x, d.z - it.z); if (dd < bd) { bd = dd; best = d; } }
+    it.doorId = best.id;
+    setStatus('鍵を扉 ' + best.id + ' に連動しました');
+  });
+  $('ed-memo-pages').addEventListener('change', (e) => {
+    const it = edit.sel[edit.sel.length - 1]?.userData.item;
+    if (it?.model === 'memo') { if (!it.memo) it.memo = {}; it.memo.pages = e.target.value.split('\n---\n'); }
+  });
+  $('ed-memo-ach').addEventListener('change', (e) => {
+    const it = edit.sel[edit.sel.length - 1]?.userData.item;
+    if (it?.model === 'memo') { if (!it.memo) it.memo = {}; it.memo.achievement = e.target.value.trim() || undefined; }
+  });
+  $('ed-trig-add').addEventListener('click', () => {
+    if (!dg.triggers) dg.triggers = [];
+    const t = { id: 't' + (dg.triggers.length + 1), x: Math.round(obs.tgt.x / TILE), z: Math.round(obs.tgt.z / TILE), w: 1, d: 1, level: lvlOfY(obs.tgt.y), event: { type: 'speech', text: '……' } };
+    dg.triggers.push(t);
+    const m = makeTriggerMesh(t);
+    if (m) { editSelect(m); }
+  });
+  const trigOfSel = () => { const it = edit.sel[edit.sel.length - 1]?.userData.item; return (it && dg.triggers?.includes(it)) ? it : null; };
+  $('ed-trig-type').addEventListener('change', (e) => {
+    const t = trigOfSel(); if (!t) return;
+    t.event = { type: e.target.value };
+    if (t.event.type === 'speech') t.event.text = $('ed-trig-param').value || '……';
+    else if (t.event.type === 'bgm') t.event.name = $('ed-trig-param').value;
+    else if (t.event.type === 'cutscene') t.event.id = $('ed-trig-param').value;
+    trigRecolor(t);
+  });
+  $('ed-trig-param').addEventListener('change', (e) => {
+    const t = trigOfSel(); if (!t || !t.event) return;
+    if (t.event.type === 'speech') t.event.text = e.target.value;
+    else if (t.event.type === 'bgm') t.event.name = e.target.value;
+    else if (t.event.type === 'cutscene') t.event.id = e.target.value;
+  });
+  const trigResize = () => {
+    const t = trigOfSel(); if (!t) return;
+    t.w = Math.max(1, +$('ed-trig-w').value || 1); t.d = Math.max(1, +$('ed-trig-d').value || 1);
+    const m = trigMeshes.get(t); if (m) m.scale.set(t.w, 1, t.d);
+  };
+  $('ed-trig-w').addEventListener('change', trigResize);
+  $('ed-trig-d').addEventListener('change', trigResize);
+  $('ed-ach-apply').addEventListener('click', () => {
+    try {
+      const j = JSON.parse($('ed-ach-events').value || '[]');
+      if (Array.isArray(j)) { dg.achEvents = j; setStatus('実績イベントを反映しました（' + j.length + '件）'); }
+    } catch (e) { setStatus('JSONエラー: ' + e.message); }
+  });
+  const csOfSel = () => { const it = edit.sel[edit.sel.length - 1]?.userData.item; return (it && dg.cutscenes?.includes(it)) ? it : null; };
+  $('ed-cs-apply').addEventListener('click', () => {
+    const cs = csOfSel(); if (!cs) { setStatus('カットシーンのマーカーを選択してください'); return; }
+    try {
+      const j = JSON.parse($('ed-cs-script').value);
+      if (Array.isArray(j)) cs.script = j;
+      else { if (j.script) cs.script = j.script; if (j.actors) cs.actors = j.actors; }
+      setStatus('スクリプトを反映しました');
+    } catch (e) { setStatus('JSONエラー: ' + e.message); }
+  });
+  $('ed-cs-test').addEventListener('click', () => {
+    const cs = csOfSel(); if (!cs) { setStatus('カットシーンのマーカーを選択してください'); return; }
+    editExit(); obsToggle(false);
+    if (phase !== 'playing') startGame();
+    setTimeout(() => playCutscene(cs), 300);
+  });
+  // 右クリック→「カットシーンをつくる」メニュー
+  let csMenu = null;
+  renderer.domElement.addEventListener('contextmenu', (e) => {
+    if (!edit.on || edit.busy) return;
+    e.preventDefault();
+    if (!csMenu) {
+      csMenu = document.createElement('div');
+      csMenu.style.cssText = 'position:fixed;z-index:50;background:#1c2436;border:1px solid #46608c;border-radius:5px;padding:4px;display:none;';
+      csMenu.innerHTML = '<button id="cs-make" style="background:#25304a;border:none;color:#cfe;padding:5px 12px;cursor:pointer;border-radius:3px;">🎬 カットシーンをつくる</button>';
+      document.body.appendChild(csMenu);
+      csMenu.querySelector('#cs-make').addEventListener('click', () => {
+        csMenu.style.display = 'none';
+        const pt = csMenu._pt; if (!pt) return;
+        if (!dg.cutscenes) dg.cutscenes = [];
+        const cs = {
+          id: 'cs' + (dg.cutscenes.length + 1),
+          x: Math.round(pt.x / TILE), z: Math.round(pt.z / TILE), level: lvlOfY(pt.y),
+          actors: [{ npc: 'vamp', x: Math.round(pt.x / TILE), z: Math.round(pt.z / TILE) - 2, ry: 180 }],
+          script: [
+            { op: 'say', actor: 'vamp', lines: ['ようこそ……私の屋敷へ'], cps: 8 },
+            { op: 'end' },
+          ],
+        };
+        dg.cutscenes.push(cs);
+        const m = makeCsMarker(cs);
+        if (m) editSelect(m);
+        $('ed-cs-script').value = JSON.stringify({ actors: cs.actors, script: cs.script }, null, 1);
+        setStatus('カットシーン ' + cs.id + ' を作成（トリガーの「カットシーン」種別でIDを指定して発火）');
+      });
+    }
+    // 床平面（注視高さ）との交点
+    const r = renderer.domElement.getBoundingClientRect();
+    _ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    _ray.setFromCamera(_ndc, camera);
+    const planeY = (lvlOfY(obs.tgt.y)) * STORY_H;
+    const tt = (planeY - _ray.ray.origin.y) / _ray.ray.direction.y;
+    if (!(tt > 0)) return;
+    csMenu._pt = { x: _ray.ray.origin.x + _ray.ray.direction.x * tt, y: planeY, z: _ray.ray.origin.z + _ray.ray.direction.z * tt };
+    csMenu.style.left = e.clientX + 'px'; csMenu.style.top = e.clientY + 'px';
+    csMenu.style.display = 'block';
+    const hide = () => { csMenu.style.display = 'none'; removeEventListener('pointerdown', hide, true); };
+    setTimeout(() => addEventListener('pointerdown', hide, true), 10);
+  });
+  $('ed-grabbable').addEventListener('change', (e) => {
+    const o = edit.sel[edit.sel.length - 1];
+    if (o?.userData.item && dg.props?.includes(o.userData.item)) o.userData.item.grabbable = e.target.checked;
+  });
+  if (stageCfg?.layout) $('ed-layout').value = stageCfg.layout;
+  $('ed-regen').addEventListener('click', async () => {
+    if (!confirm('保存済みステージを置き換えて新しく生成します。よろしいですか？')) return;
+    const data = { version: 1, seed: (Math.random() * 99999) | 0, layout: $('ed-layout').value };
+    try {
+      await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'vamp_param', filename: 'mansion-stage.json', content: JSON.stringify(data) }) });
+      location.reload();   // レイアウト変更は再構築が多いのでリロードで反映
+    } catch { setStatus('保存に失敗（devサーバなし）'); }
+  });
   $('ed-play').addEventListener('click', () => { editExit(); obsToggle(false); if (phase !== 'playing') startGame(); });
   renderer.domElement.addEventListener('pointerdown', editPointerDown);
   renderer.domElement.addEventListener('pointerup', editPointerUp);
+  renderer.domElement.addEventListener('pointermove', editPointerMove);
   addEventListener('keydown', (e) => {
     if (!edit.on) return;
+    if (e.key === 'Alt') e.preventDefault();   // ブラウザのメニューフォーカスを防ぐ
     const tag = (e.target && e.target.tagName) || '';
     if (/INPUT|TEXTAREA|SELECT/.test(tag)) return;
     if (e.code === 'KeyG') editSetMode('translate');
@@ -1818,18 +2300,64 @@ function setupEditUI() {
     else if (e.code === 'Delete' || e.code === 'Backspace') editDeleteSel();
     else if (e.code === 'KeyD' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); editDuplicateSel(); }
   });
-  refreshModelList(); refreshUnitList();
+  refreshUnitList();
 }
-async function refreshModelList() {
-  const sel = $('ed-models');
-  if (!sel) return;
-  let names = ['table', 'chair', 'bench', 'bookcaseClosed', 'pottedPlant', 'rugRectangle', 'lampSquareFloor'];
+// ── パーツパレット（room-editor と同方式：各モデルをオフスクリーンWebGLで1枚ずつ描いてカテゴリ別に並べる）──
+let thumbR = null, thumbScene = null, thumbCam = null;
+function initThumbRenderer() {
+  thumbR = new WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  thumbR.setSize(64, 64);
+  thumbScene = new THREE.Scene();
+  thumbScene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(2, 3, 2); thumbScene.add(dl);
+  thumbCam = new THREE.PerspectiveCamera(40, 1, 0.01, 50);
+}
+async function makeThumb(name) {
+  const part = await ensurePart(name);
+  if (!part) throw new Error('no model: ' + name);
+  const c = part.obj.clone(true);
+  thumbScene.add(c);
+  const r = Math.max(part.size.x, part.size.y, part.size.z) || 1;   // 斜め上から全体が収まる距離
+  thumbCam.position.set(r * 1.4, r * 1.1, r * 1.4);
+  thumbCam.lookAt(0, part.size.y * 0.45, 0);
+  thumbR.render(thumbScene, thumbCam);
+  const url = thumbR.domElement.toDataURL();
+  thumbScene.remove(c);
+  return url;
+}
+async function buildEditPalette() {
+  const box = $('ed-thumbs');
+  if (!box) return;
+  let names = [];
   try {
     const all = await (await fetch('../models/manifest.json')).json();
-    const kit = all.filter((f) => f.includes('kenney_furniture-kit')).map((f) => f.split('/').pop().replace(/\.glb$/i, ''));
-    if (kit.length) names = kit;
-  } catch { /* devサーバ無 */ }
-  sel.innerHTML = names.map((n) => '<option value="' + n + '">' + n + '</option>').join('');
+    names = all.filter((f) => f.includes('kenney_furniture-kit')).map((f) => f.split('/').pop().replace(/\.glb$/i, ''));
+  } catch { box.textContent = '（devサーバ無し）'; return; }
+  initThumbRenderer();
+  const groups = new Map();
+  for (const n of names) {
+    const cat = categorize(n) || 'shell';
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(n);
+  }
+  const queue = [];
+  for (const cat of [...groups.keys()].sort()) {
+    const h = document.createElement('div'); h.className = 'cat'; h.textContent = cat; box.appendChild(h);
+    for (const n of groups.get(cat)) {
+      const img = document.createElement('img');
+      img.title = n; img.alt = n;
+      img.addEventListener('click', () => { editAddModel(n); });
+      box.appendChild(img);
+      queue.push({ n, img });
+    }
+  }
+  const step = () => {   // 1枚ずつ順次生成（編集開始を固めない）
+    const job = queue.shift();
+    if (!job) return;
+    makeThumb(job.n).then((url) => { job.img.src = url; }).catch(() => { /* 失敗はプレースホルダのまま */ })
+      .finally(() => setTimeout(step, 10));
+  };
+  step();
 }
 async function refreshUnitList() {
   const sel = $('ed-units');
@@ -1841,10 +2369,651 @@ async function refreshUnitList() {
   } catch { sel.innerHTML = ''; }
 }
 
+// ══════════ プロップ（拾えるアイテム：鍵/手榴弾/メモ）══════════
+// 仮モデルはプリミティブ（後で objUrl で .obj に差し替えられる想定のフィールドだけ確保）
+const props = [];                  // {data, mesh, held, vel:THREE.Vector3|null}
+let heldProp = null, hoverProp = null, propHover = null;   // propHover=視線枠(BoxHelper)
+const PROP_MAKERS = {
+  key() {   // 金の鍵
+    const g = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: 0xd8b23a, metalness: 0.8, roughness: 0.35 });
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.016, 8, 16), mat);
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.16, 8), mat);
+    shaft.rotation.z = Math.PI / 2; shaft.position.x = 0.1;
+    const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 0.016), mat);
+    tooth.position.set(0.16, -0.035, 0);
+    g.add(ring, shaft, tooth);
+    return g;
+  },
+  grenade() {   // 手榴弾
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 10), new THREE.MeshStandardMaterial({ color: 0x33452e, roughness: 0.6, metalness: 0.3 }));
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.05, 8), new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.7, roughness: 0.4 }));
+    cap.position.y = 0.08;
+    g.add(body, cap);
+    return g;
+  },
+  rifle() {   // アサルトライフル（仮モデル）
+    const g = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: 0x2b2f33, metalness: 0.6, roughness: 0.5 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.07, 0.05), mat); body.position.y = 0.06;
+    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.14, 0.04), mat); mag.position.set(0.04, -0.02, 0);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 0.04), mat); grip.position.set(-0.14, -0.01, 0); grip.rotation.z = 0.3;
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.04), mat); stock.position.set(-0.3, 0.05, 0);
+    g.add(body, mag, grip, stock);
+    return g;
+  },
+  shockgun() {   // ショックガン（仮モデル）
+    const g = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: 0x24505c, metalness: 0.5, roughness: 0.4, emissive: 0x0a3d4a, emissiveIntensity: 0.7 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.1, 0.08), mat); body.position.y = 0.06;
+    const coil = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.02, 8, 14), new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x2299cc, emissiveIntensity: 1.4 }));
+    coil.position.set(0.22, 0.06, 0); coil.rotation.y = Math.PI / 2;
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, 0.05), mat); grip.position.set(-0.1, -0.02, 0); grip.rotation.z = 0.3;
+    g.add(body, coil, grip);
+    return g;
+  },
+  memo() {   // メモ（紙）
+    const g = new THREE.Group();
+    const paper = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.32), new THREE.MeshStandardMaterial({ color: 0xf2edda, roughness: 0.9, side: THREE.DoubleSide }));
+    paper.rotation.x = -Math.PI / 2; paper.rotation.z = 0.4;
+    paper.position.y = 0.012;
+    g.add(paper);
+    return g;
+  },
+};
+function propRestY(d) { return floorYAt(d.x * TILE, d.z * TILE, ((d.level || 0) * STORY_H) + 0.5) + 0.06; }
+function makePropMesh(d) {
+  const mk = PROP_MAKERS[d.model] || PROP_MAKERS.key;
+  const m = mk();
+  m.position.set(d.x * TILE, propRestY(d), d.z * TILE);
+  m.rotation.y = d.ry || 0;
+  m.userData.prop = d;
+  return m;
+}
+function buildProps() {
+  for (const pr of props) scene.remove(pr.mesh);
+  props.length = 0;
+  heldProp = null; hoverProp = null;
+  for (const d of (dg.props || [])) {
+    const mesh = makePropMesh(d);
+    scene.add(mesh);
+    props.push({ data: d, mesh, held: false, vel: null });
+  }
+}
+// 視線→拾う/読む/放る。レイキャストは登録プロップのみ（毎フレーム1回・少数）
+const _propRay = new THREE.Raycaster(); _propRay.far = 2.8;
+const _ndc0 = new THREE.Vector2(0, 0);
+let propHint = null;
+function setPropHint(text) {
+  if (!propHint) {
+    propHint = document.createElement('div');
+    propHint.style.cssText = 'position:fixed;left:50%;top:56%;transform:translateX(-50%);z-index:16;color:#ffe;font-size:13px;background:rgba(0,0,0,0.45);padding:3px 10px;border-radius:4px;pointer-events:none;display:none;';
+    document.body.appendChild(propHint);
+  }
+  if (text) { propHint.textContent = text; propHint.style.display = 'block'; }
+  else propHint.style.display = 'none';
+}
+function updateProps(dt) {
+  // 投げられたプロップの弾道（重力＋床/壁で停止）
+  for (const pr of props) {
+    if (!pr.vel) continue;
+    const m = pr.mesh;
+    pr.vel.y -= 14 * dt;
+    const nx = m.position.x + pr.vel.x * dt, nz = m.position.z + pr.vel.z * dt;
+    if (vampFree(nx, nz, m.position.y)) { m.position.x = nx; m.position.z = nz; }
+    else { pr.vel.x = 0; pr.vel.z = 0; }
+    m.position.y += pr.vel.y * dt;
+    const fy = floorYAt(m.position.x, m.position.z, m.position.y) + 0.06;
+    if (m.position.y <= fy) {
+      m.position.y = fy;
+      pr.vel = null;   // 着地＝静止
+      pr.data.x = m.position.x / TILE; pr.data.z = m.position.z / TILE;
+      gameEvent('propLanded', pr);
+    }
+  }
+  // 持っているプロップは目の前に追従
+  if (heldProp) {
+    const m = heldProp.mesh;
+    m.position.set(
+      player.pos.x - Math.sin(player.yaw) * 0.55 + Math.cos(player.yaw) * 0.22,
+      player.pos.y - 0.32,
+      player.pos.z - Math.cos(player.yaw) * 0.55 - Math.sin(player.yaw) * 0.22);
+    m.rotation.y = player.yaw;
+  }
+  // 視線ハイライト（プレイ中・非捕縛・メモ閲覧中でない時のみ）
+  hoverProp = null;
+  if (phase === 'playing' && !edit.on && !isCaptured() && !memoOpen) {
+    _propRay.setFromCamera(_ndc0, camera);
+    let best = null, bd = 1e9;
+    for (const pr of props) {
+      if (pr.held || pr.vel) continue;
+      const d2 = pr.mesh.position.distanceToSquared(player.pos);
+      if (d2 > 2.8 * 2.8) continue;
+      const hits = _propRay.intersectObject(pr.mesh, true);
+      if (hits.length && hits[0].distance < bd) { bd = hits[0].distance; best = pr; }
+    }
+    hoverProp = best;
+  }
+  // 視線枠（黄）。ステージ編集と同じ BoxHelper 方式
+  if (hoverProp) {
+    if (!propHover) { propHover = new THREE.BoxHelper(hoverProp.mesh, 0xffe066); propHover.material.depthTest = false; propHover.renderOrder = 997; scene.add(propHover); }
+    propHover.visible = true;
+    propHover.setFromObject(hoverProp.mesh);
+  } else if (propHover) propHover.visible = false;
+  // ヒント表示
+  if (heldProp) {
+    const w = heldWeapon();
+    setPropHint(w === 'rifle' ? 'クリック: ショット / E: 捨てる' : w === 'shockgun' ? '左: ショット / 右: 引き寄せ / E: 捨てる' : 'E: 投げる');
+  }
+  else if (hoverProp) setPropHint(hoverProp.data.model === 'memo' ? 'E: 読む' : (hoverProp.data.grabbable !== false ? 'E: 拾う' : ''));
+  else setPropHint(null);
+}
+function propInteract() {   // Eキー
+  if (memoOpen) { closeMemo(); return; }
+  if (heldProp) {   // 前へ放る
+    const pr = heldProp;
+    heldProp = null; pr.held = false;
+    pr.vel = new THREE.Vector3(-Math.sin(player.yaw) * 6.5, 2.2, -Math.cos(player.yaw) * 6.5);
+    gameEvent('propThrown', pr);
+    return;
+  }
+  if (!hoverProp) return;
+  const d = hoverProp.data;
+  if (d.model === 'memo') { openMemo(d); return; }
+  if (d.grabbable === false) return;
+  heldProp = hoverProp; heldProp.held = true;
+  gameEvent('propTaken', heldProp);
+}
+addEventListener('keydown', (e) => {
+  if (e.code === 'KeyE' && phase === 'playing' && !edit.on && !cutscene.on) propInteract();
+});
+// メモ閲覧（P3で内容編集UIと実績連動を拡張。閲覧中はプレイヤー停止＝ループ側で参照）
+let memoOpen = false, memoEl = null, memoPage = 0, memoData = null;
+function openMemo(d) {
+  memoOpen = true; memoData = d; memoPage = 0;
+  document.exitPointerLock?.();
+  if (!memoEl) {
+    memoEl = document.createElement('div');
+    memoEl.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:40;background:#f2edda;color:#332;padding:28px 34px;border-radius:4px;width:min(420px,80vw);min-height:260px;font-size:14px;line-height:1.9;box-shadow:0 8px 40px rgba(0,0,0,0.6);white-space:pre-wrap;font-family:serif;';
+    memoEl.innerHTML = '<div id="memo-body"></div><div style="text-align:center;margin-top:14px;"><button id="memo-prev">◀</button> <span id="memo-pg"></span> <button id="memo-next">▶</button> <button id="memo-close" style="margin-left:14px;">閉じる</button></div>';
+    document.body.appendChild(memoEl);
+    memoEl.querySelector('#memo-prev').addEventListener('click', () => memoNav(-1));
+    memoEl.querySelector('#memo-next').addEventListener('click', () => memoNav(1));
+    memoEl.querySelector('#memo-close').addEventListener('click', closeMemo);
+  }
+  memoEl.style.display = 'block';
+  memoRender();
+  gameEvent('memoRead', d);
+}
+function memoPages() { return (memoData?.memo?.pages && memoData.memo.pages.length) ? memoData.memo.pages : ['（何も書かれていない）']; }
+function memoNav(d) { const n = memoPages().length; memoPage = Math.max(0, Math.min(n - 1, memoPage + d)); memoRender(); }
+function memoRender() {
+  const pgs = memoPages();
+  memoEl.querySelector('#memo-body').textContent = pgs[memoPage];
+  memoEl.querySelector('#memo-pg').textContent = (memoPage + 1) + '/' + pgs.length;
+}
+function closeMemo() { memoOpen = false; if (memoEl) memoEl.style.display = 'none'; if (!touchMode && phase === 'playing') canvas.requestPointerLock(); }
+
+// ══════════ 銃器：アサルトライフル＋ショックガン ══════════
+// ライフル/ショックガンを持っている時だけショットが撃てる。ショックガンは右クリックで
+// swing-catch 方式の引き寄せ（プロップ=ばね / 吸血鬼=ラグドール化して部位ピン / マント=布頂点ピン）
+const heldWeapon = () => heldProp && (heldProp.data.model === 'rifle' || heldProp.data.model === 'shockgun') ? heldProp.data.model : null;
+const _sgAnchor = new THREE.Vector3(), _sgDir = new THREE.Vector3(), _sgV = new THREE.Vector3();
+const SG_RANGE = 16, SG_HOLD = 2.3, SG_BONES = ['head', 'neck', 'chest', 'spine', 'hips', 'leftHand', 'rightHand', 'leftLowerArm', 'rightLowerArm', 'leftFoot', 'rightFoot', 'leftLowerLeg', 'rightLowerLeg'];
+let sgPullProp = null;   // 引き寄せ中のプロップ
+function sgUpdateAnchor() {
+  _sgDir.set(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
+  _sgAnchor.copy(player.pos).addScaledVector(_sgDir, SG_HOLD);
+}
+function vampBoneAtRay() {   // 視線レイに近い彼女のボーンを探す（swing-catch の findMeguBone 方式）
+  if (!vamp.ready || !vamp.vrm.humanoid) return null;
+  const orig = player.pos;
+  let best = null, bestAlong = SG_RANGE;
+  for (const bn of SG_BONES) {
+    const node = vamp.vrm.humanoid.getNormalizedBoneNode(bn);
+    if (!node) continue;
+    node.getWorldPosition(_sgV).sub(orig);
+    const along = _sgV.dot(_sgDir);
+    if (along < 0.5 || along > SG_RANGE) continue;
+    const perp2 = _sgV.lengthSq() - along * along;
+    if (perp2 < 0.36 && along < bestAlong) { bestAlong = along; best = bn; }
+  }
+  return best;
+}
+function ensureVampRagdoll() {
+  if (!vamp.ragdoll) { try { vamp.ragdoll = createRagdoll(vamp.vrm, { gravity: -12, boundsMargin: 0.4 }); } catch (e) { console.warn('vampラグドール生成失敗:', e.message); } }
+  return vamp.ragdoll;
+}
+function tryShockGrab() {
+  sgUpdateAnchor();
+  // ① マント（布メッシュの頂点を直接ピン）
+  if (vamp.ready && vamp.cape?.clothMesh) {
+    _propRay.far = SG_RANGE;
+    _propRay.setFromCamera(_ndc0, camera);
+    const hits = _propRay.intersectObject(vamp.cape.clothMesh, false);
+    if (hits.length && hits[0].face) {
+      if (!ensureVampRagdoll()) return;
+      stopKiss();
+      try { vamp.cape.grab(hits[0].face.a, _sgAnchor); } catch (e) { console.warn('マント掴み失敗:', e.message); }
+      setRagdollActive(vamp.ragdoll, true);
+      vamp.grabState = 'cloth'; vamp.rdRecover = 0;
+      if (vamp.holding) releaseHeldKen();
+      if (vampSpeech) vampSpeech.bark('repelled');
+      return;
+    }
+  }
+  // ② 彼女の体（部位ピン）
+  const bone = vampBoneAtRay();
+  if (bone) {
+    if (!ensureVampRagdoll()) return;
+    stopKiss();
+    setRagdollActive(vamp.ragdoll, true);
+    vamp.grabState = 'body'; vamp.grabBone = bone; vamp.rdRecover = 0;
+    if (vamp.holding) releaseHeldKen();
+    if (vampSpeech) vampSpeech.bark('repelled');
+    return;
+  }
+  // ③ プロップ（ばね引き寄せ）
+  _propRay.far = SG_RANGE;
+  _propRay.setFromCamera(_ndc0, camera);
+  let best = null, bd = 1e9;
+  for (const pr of props) {
+    if (pr.held || pr === heldProp || pr.data.grabbable === false) continue;
+    const hits = _propRay.intersectObject(pr.mesh, true);
+    if (hits.length && hits[0].distance < bd) { bd = hits[0].distance; best = pr; }
+  }
+  if (best) { sgPullProp = best; best.vel = best.vel || new THREE.Vector3(); }
+}
+function shockRelease() {
+  if (vamp.grabState) {
+    if (vamp.grabState === 'cloth') { try { vamp.cape.releaseGrab(); } catch { /* noop */ } }
+    vamp.grabState = null;
+    vamp.rdRecover = 1.2;   // しばらくラグドールのまま落下→復帰（swing-catch の releaseMegu 方式）
+  }
+  sgPullProp = null;
+}
+function updateShock(dt) {
+  if (heldWeapon() !== 'shockgun') { if (vamp.grabState) shockRelease(); sgPullProp = null; }
+  if (!vamp.grabState && !sgPullProp) return;
+  sgUpdateAnchor();
+  if (vamp.grabState === 'cloth' && vamp.cape) { try { vamp.cape.moveGrab(_sgAnchor); } catch { /* noop */ } }
+  if (sgPullProp) {   // ばねで引き寄せ（swing-catch のオブジェクト搬送と同じ考え方）
+    const m = sgPullProp.mesh;
+    _sgV.copy(_sgAnchor).sub(m.position);
+    sgPullProp.vel.addScaledVector(_sgV, 26 * dt);          // ばね
+    sgPullProp.vel.multiplyScalar(Math.exp(-6 * dt));       // 減衰
+    m.position.addScaledVector(sgPullProp.vel, dt);
+    if (_sgV.lengthSq() > SG_RANGE * SG_RANGE * 4) sgPullProp = null;   // 千切れた
+  }
+}
+
+// ══════════ 実績・手榴弾・鍵/扉 ══════════
+// 実績：bool/int のパラメータ。変化時に achEvents の条件を評価してイベント発火
+const ACH = {};
+function achSet(id, v) {
+  if (!id || ACH[id] === v) return;
+  ACH[id] = v;
+  for (const ae of (dg.achEvents || [])) {
+    if (ae._done || !ae.when || ae.when.id !== id) continue;
+    const val = ACH[ae.when.id];
+    const ok = ae.when.op === '>=' ? val >= ae.when.value : val === (ae.when.value ?? true);
+    if (ok) { ae._done = true; gameEvent(ae.event?.type, ae.event); }
+  }
+}
+
+// 手榴弾：投げてから2.5秒で爆発。近くの彼女を長めに硬直させる。職員ダウン時にドロップ
+// 爆発の見た目は CityFly と同じ「プール＋ビルボード/スプライトFX」方式（ライト無し・大量爆発に耐える）
+const IMPACT_POOL = 4, IMPACT_LIFE = 1.4, IMPACT_SCALE = 1.6;
+const impactFx = [];   // { fire, smoke, until }
+async function loadImpactFx() {
+  let spec = null;
+  try { spec = await (await fetch('../fx/explosion.fx.json')).json(); } catch { /* 無し */ }
+  if (spec && Array.isArray(spec.layers)) for (const l of spec.layers) { if (l.type === 'particle') { l.spawnRate = 0; if (l.maxParticles == null) l.maxParticles = 24; } }
+  for (let i = 0; i < IMPACT_POOL; i++) {
+    try {
+      const fire = spec ? createMeshFx(spec) : null;
+      const sCfg = cloneFxConfig(FX_PRESETS.smoke); sCfg.spawnRate = 0;
+      if (sCfg.size) { sCfg.size.start = (sCfg.size.start || 1) * IMPACT_SCALE; sCfg.size.end = (sCfg.size.end || 1) * IMPACT_SCALE; }
+      const smoke = createFxSystem(sCfg);
+      if (fire) { fire.object3D.scale.setScalar(IMPACT_SCALE); fire.setEmitting(false); fire.object3D.visible = false; scene.add(fire.object3D); }
+      smoke.setEmitting(false); smoke.object3D.visible = false; scene.add(smoke.object3D);
+      impactFx.push({ fire, smoke, until: 0 });
+    } catch (e) { console.warn('爆発FXプール生成失敗:', e.message); break; }
+  }
+}
+function spawnImpactFx(pos, scale = 1) {
+  if (!impactFx.length) return;
+  let slot = impactFx.find((sl) => sl.until <= 0);
+  if (!slot) { slot = impactFx[0]; for (const sl of impactFx) if (sl.until < slot.until) slot = sl; }
+  if (slot.fire) {
+    slot.fire.object3D.scale.setScalar(IMPACT_SCALE * scale);
+    slot.fire.object3D.position.copy(pos);
+    slot.fire.object3D.visible = true;
+    slot.fire.burst(3);
+  }
+  slot.smoke.object3D.position.copy(pos);
+  slot.smoke.object3D.visible = true;
+  slot.smoke.burst(10);
+  slot.until = IMPACT_LIFE;
+}
+function updateImpactFx(dt) {
+  for (const sl of impactFx) {
+    if (sl.until <= 0) continue;
+    if (sl.fire) sl.fire.update(dt);
+    sl.smoke.update(dt);
+    sl.until -= dt;
+    if (sl.until <= 0) { if (sl.fire) sl.fire.object3D.visible = false; sl.smoke.object3D.visible = false; }
+  }
+}
+let explAudio = null;
+function explodeGrenade(pr) {
+  const m = pr.mesh.position;
+  if (!explAudio) { explAudio = new Audio(); explAudio.src = '../audio/' + encodeURIComponent('爆破・爆発10.mp3'); explAudio.preload = 'auto'; }
+  const a = explAudio.cloneNode();
+  a.volume = Math.max(0.2, Math.min(1, 1 - m.distanceTo(player.pos) / 30));
+  a.play().catch(() => {});
+  spawnImpactFx(m, 1);
+  if (vamp.ready && vamp.root.position.distanceTo(m) < 4.5) {
+    if (vamp.holding) releaseHeldKen();
+    vamp.stunT = (VAMP.stunSec || 2.2) * 2.2; vamp.state = 'stunned';
+    if (vampSpeech) vampSpeech.bark('repelled');
+  }
+  const i = props.indexOf(pr); if (i >= 0) props.splice(i, 1);
+  const di = dg.props ? dg.props.indexOf(pr.data) : -1; if (di >= 0) dg.props.splice(di, 1);
+  scene.remove(pr.mesh);
+}
+function dropPropAt(model, x, z, y) {
+  const d = { model, x: x / TILE, z: z / TILE, ry: Math.random() * Math.PI * 2, level: lvlOfY(y), grabbable: true };
+  if (!dg.props) dg.props = [];
+  dg.props.push(d);
+  const pr = { data: d, mesh: makePropMesh(d), held: false, vel: null };
+  scene.add(pr.mesh); props.push(pr);
+}
+function dropGrenadeAt(x, z, y) { dropPropAt('grenade', x, z, y); }
+
+// 鍵/扉：扉はセルを塞ぐ（プレイヤー衝突＋NPCナビ両方）。鍵を持って近づくと開く
+const doorObjs = [];   // {data, group, open}
+function buildDoors() {
+  for (const dr of doorObjs) scene.remove(dr.group);
+  doorObjs.length = 0;
+  if (nav) nav.doorSolid = new Set();
+  for (const d of (dg.doors || [])) {
+    const part = partsCache.door;
+    if (!part) continue;
+    const g = new THREE.Group();                       // ヒンジ＝セル端
+    const leaf = part.obj.clone(true);
+    leaf.position.x = TILE / 2;                        // 扉本体を蝶番からずらす
+    g.add(leaf);
+    g.scale.set(SCALE, SCALE, SCALE);
+    g.position.set(d.x * TILE - Math.cos(d.ry || 0) * TILE / 2, (d.level || 0) * STORY_H, d.z * TILE + Math.sin(d.ry || 0) * TILE / 2);
+    g.rotation.y = (d.ry || 0) + WALL_RY_OFFSET;
+    g.userData.item = d;
+    scene.add(g);
+    doorObjs.push({ data: d, group: g, open: false });
+    if (nav?.doorSolid) nav.doorSolid.add(Math.round(d.x) + ',' + Math.round(d.z));
+  }
+}
+function doorSolidAt(cx, cz) { return doorObjs.some((dr) => !dr.open && Math.round(dr.data.x) === cx && Math.round(dr.data.z) === cz); }
+function openDoor(dr) {
+  dr.open = true; dr.anim = 0;
+  if (nav?.doorSolid) nav.doorSolid.delete(Math.round(dr.data.x) + ',' + Math.round(dr.data.z));
+  gameEvent('doorOpened', dr.data);
+}
+function updateDoors(dt) {
+  updateImpactFx(dt);
+  for (const pr of props) {   // 手榴弾の信管
+    if (pr.fuse == null) continue;
+    pr.fuse -= dt;
+    if (pr.fuse <= 0) { pr.fuse = null; explodeGrenade(pr); break; }
+  }
+  for (const dr of doorObjs) {
+    if (dr.open && dr.anim != null && dr.anim < 1) {   // 開閉アニメ（蝶番回転）
+      dr.anim = Math.min(1, dr.anim + dt * 1.6);
+      dr.group.rotation.y = (dr.data.ry || 0) + WALL_RY_OFFSET + dr.anim * 1.9;
+    }
+    if (!dr.open && heldProp && heldProp.data.model === 'key' && (heldProp.data.doorId == null || heldProp.data.doorId === dr.data.id)) {
+      const dx = dr.data.x * TILE - player.pos.x, dz = dr.data.z * TILE - player.pos.z;
+      if (dx * dx + dz * dz < 4 && Math.abs((dr.data.level || 0) * STORY_H + EYE_H - player.pos.y) < 2) {
+        openDoor(dr);
+        const pr = heldProp; heldProp = null;   // 鍵は消費
+        const i = props.indexOf(pr); if (i >= 0) props.splice(i, 1);
+        const di = dg.props ? dg.props.indexOf(pr.data) : -1; if (di >= 0) dg.props.splice(di, 1);
+        scene.remove(pr.mesh);
+      }
+    }
+  }
+}
+
+// ══════════ イベントバス＋雷演出 ══════════
+// gameEvent('名前', 引数) で発火。トリガーボックス/実績/カットシーンから共通で使う
+const EVENT_HANDLERS = {};
+function onGameEvent(name, fn) { EVENT_HANDLERS[name] = fn; }
+function gameEvent(name, arg) {
+  const fn = EVENT_HANDLERS[name];
+  if (fn) { try { fn(arg); } catch (e) { console.warn('イベント失敗:', name, e.message); } }
+}
+
+// 雷：音＋既存ライトの intensity 変調のみ（ライト追加なし＝負荷ゼロ）。ランダム＋イベント発火可
+const thunder = { t: 0, seq: null, audio: null, nextAt: 18 + Math.random() * 35 };
+function triggerThunder() {
+  if (thunder.seq) return;   // 明滅中は重ねない
+  thunder.seq = [[0, 4.5], [0.08, 0.6], [0.17, 6], [0.32, 2.2], [0.55, 0.6], [0.9, 0]];   // [秒, 強さ]
+  thunder.t = 0;
+  if (!thunder.audio) {
+    const a = new Audio();
+    a.src = '../sound/Thunder-Real_Ambi03-1.ogg';
+    a.addEventListener('error', () => { if (!a.src.endsWith('./sound/Thunder-Real_Ambi03-1.ogg')) a.src = './sound/Thunder-Real_Ambi03-1.ogg'; }, { once: true });
+    a.preload = 'auto';
+    thunder.audio = a;
+  }
+  const a = thunder.audio.cloneNode(); a.volume = 0.85; a.play().catch(() => { /* 自動再生制限 */ });
+}
+function updateThunder(dt) {
+  if (phase === 'playing' && !edit.on) {   // ランダム発生はプレイ中のみ
+    thunder.nextAt -= dt;
+    if (thunder.nextAt <= 0) { thunder.nextAt = 25 + Math.random() * 50; triggerThunder(); }
+  }
+  if (!thunder.seq) return;
+  thunder.t += dt;
+  const sq = thunder.seq;
+  if (thunder.t >= sq[sq.length - 1][0]) { thunder.seq = null; applyLighting(); return; }   // 終了＝基準へ戻す
+  let mul = 0;
+  for (let i = 0; i < sq.length - 1; i++) {
+    const t0 = sq[i][0], v0 = sq[i][1], t1 = sq[i + 1][0], v1 = sq[i + 1][1];
+    if (thunder.t >= t0 && thunder.t < t1) { mul = v0 + (v1 - v0) * ((thunder.t - t0) / (t1 - t0)); break; }
+  }
+  if (LIGHTS.hemi) LIGHTS.hemi.intensity = lightCfg.hemi * (1 + mul * 2.2);
+  if (LIGHTS.moon) LIGHTS.moon.intensity = lightCfg.moon * (1 + mul * 6);
+}
+onGameEvent('thunder', triggerThunder);
+
+// ══════════ トリガーボックス＋イベント実装 ══════════
+// ゲーム中は不可視・AABB判定のみ（毎フレーム、未発火のものだけ）。一度触れたら消滅
+let subEl = null, subT = 0;
+function showSubtitle(text) {
+  if (!subEl) {
+    subEl = document.createElement('div');
+    subEl.style.cssText = 'position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:26;color:#fff;font-size:15px;background:rgba(0,0,0,0.62);padding:8px 18px;border-radius:6px;pointer-events:none;display:none;max-width:70vw;line-height:1.7;';
+    document.body.appendChild(subEl);
+  }
+  subEl.textContent = text;
+  subEl.style.display = 'block';
+  subT = Math.max(2.5, (text || '').length / 6);
+}
+let bgmAudio = null;
+function playBgmFile(name, loop = true, vol = 0.5) {
+  if (bgmAudio) { try { bgmAudio.pause(); } catch { /* noop */ } bgmAudio = null; }
+  if (!name) return;
+  const a = new Audio();
+  a.src = '../bgm/' + encodeURIComponent(name);
+  a.addEventListener('error', () => { if (!a.src.includes('/bgm/') || a.src.startsWith(location.origin + '/htdocs')) a.src = './bgm/' + encodeURIComponent(name); }, { once: true });
+  a.loop = loop; a.volume = vol;
+  a.play().catch(() => { /* 自動再生制限 */ });
+  bgmAudio = a;
+}
+onGameEvent('speech', (ev) => showSubtitle((ev && ev.text) || ''));
+onGameEvent('bgm', (ev) => playBgmFile(ev && ev.name, !ev || ev.loop !== false, (ev && ev.vol) ?? 0.5));
+onGameEvent('vampWake', () => {
+  if (!vamp.inactive) return;
+  vamp.inactive = false;
+  if (vamp.vrm) vamp.vrm.scene.visible = true;
+  vamp.state = 'patrol'; vamp.path = null; vamp.repathT = 0;
+});
+onGameEvent('cutscene', (ev) => { const cs = (dg.cutscenes || []).find((c) => c.id === (ev && ev.id)); if (cs) playCutscene(cs); else console.warn('カットシーンが見つからない:', ev && ev.id); });
+
+function updateTriggers(dt) {
+  if (subT > 0) { subT -= dt; if (subT <= 0 && subEl) subEl.style.display = 'none'; }
+  if (!dg.triggers) return;
+  const px = player.pos.x / TILE, pz = player.pos.z / TILE, pl = lvlOfY(player.pos.y - EYE_H);
+  for (const t of dg.triggers) {
+    if (t._fired || (t.level || 0) !== pl) continue;
+    const hw = (t.w || 1) / 2, hd = (t.d || 1) / 2;
+    if (px >= t.x - hw && px <= t.x + hw && pz >= t.z - hd && pz <= t.z + hd) {
+      t._fired = true;   // 一度きり（保存データには残る＝再スタートで復活）
+      gameEvent(t.event?.type, t.event);
+    }
+  }
+}
+
+// ══════════ カットシーン（story-runner / story-ops 流用。既存NPCをアクターとして動かす）══════════
+// 視点はプレイヤーのまま。クリック＝会話送りのみ受け付け。終了時はその位置・姿勢から行動再開（シームレス）
+const cutscene = { on: false, runner: null, lips: new Map(), advance: null, fadeEl: null };
+const csMoves = [];   // {root, fx, fz, tx, tz, t, dur, face, m?, done?}
+function csActorOf(id) {
+  if (!id || id === 'vamp' || id === '彼女') return vamp.ready ? { root: vamp.root, vrm: vamp.vrm, kind: 'vamp' } : null;
+  if (id.startsWith('ken')) { const m = kens[+id.slice(3) || 0]; return (m && !m._remove) ? { root: m.vrm.scene, vrm: m.vrm, kind: 'ken', m } : null; }
+  return null;
+}
+function csWaitClick() { return new Promise((res) => { cutscene.advance = res; }); }
+function csFade(toBlack, dur, color) {
+  if (!cutscene.fadeEl) {
+    cutscene.fadeEl = document.createElement('div');
+    cutscene.fadeEl.style.cssText = 'position:fixed;inset:0;z-index:35;pointer-events:none;opacity:0;background:#000;';
+    document.body.appendChild(cutscene.fadeEl);
+  }
+  const el = cutscene.fadeEl;
+  el.style.background = color || '#000';
+  el.style.transition = 'opacity ' + ((dur || 500) / 1000) + 's';
+  el.style.opacity = toBlack ? '1' : '0';
+  return new Promise((res) => setTimeout(res, dur || 500));
+}
+function csLipOf(vrm) {
+  let lip = cutscene.lips.get(vrm);
+  if (!lip) { lip = createLipSync(vrm); cutscene.lips.set(vrm, lip); }
+  return lip;
+}
+function csHooks() {
+  return {
+    say(op) {
+      const a = csActorOf(op.actor);
+      const lines = Array.isArray(op.lines) ? op.lines : [op.lines];
+      return (async () => {
+        for (const ln of lines) {
+          const text = typeof ln === 'string' ? ln : (ln && ln.text) || '';
+          showSubtitle(text); subT = 1e9;   // クリックで送るまで表示し続ける
+          if (a) {
+            csLipOf(a.vrm).play(text, op.cps || 8);
+            if (ln && typeof ln === 'object' && ln.expression) { try { a.vrm.expressionManager?.setValue(ln.expression, ln.weight ?? 1); } catch { /* noop */ } }
+          }
+          await csWaitClick();
+        }
+        subT = 0.01;
+      })();
+    },
+    wait() { return csWaitClick(); },
+    delay(op) { return new Promise((r) => setTimeout(r, op.duration || 500)); },
+    'actor.move'(op) {   // x/z はセル座標（ステージエディタと同じ単位）
+      const a = csActorOf(op.id); if (!a) return;
+      const mv = { root: a.root, fx: a.root.position.x, fz: a.root.position.z, tx: (op.x || 0) * TILE, tz: (op.z || 0) * TILE, t: 0, dur: Math.max(0.05, (op.duration || 1000) / 1000), face: op.face !== false, m: a.m, kind: a.kind };
+      csMoves.push(mv);
+      if (op.wait === false) return;
+      return new Promise((res) => { mv.done = res; });
+    },
+    'actor.face'(op) {
+      const a = csActorOf(op.id); if (!a) return;
+      const t = (!op.target || op.target === 'camera') ? player.pos : (csActorOf(op.target)?.root.position || player.pos);
+      const yaw = Math.atan2(t.x - a.root.position.x, t.z - a.root.position.z);
+      if (a.kind === 'vamp') a.root.rotation.y = yaw - Math.atan2(bodyFwd.x, bodyFwd.z);
+      else { a.root.rotation.y = yaw; if (a.m) a.m.faceYaw = yaw; }
+    },
+    'actor.show'(op) {   // 既存アクターの再配置として扱う（新規スポーンはしない）
+      const a = csActorOf(op.id); if (!a) return;
+      a.root.position.set((op.x || 0) * TILE, floorYAt((op.x || 0) * TILE, (op.z || 0) * TILE, 99), (op.z || 0) * TILE);
+      if (op.ry != null) a.root.rotation.y = op.ry * Math.PI / 180;
+    },
+    'actor.expression'(op) {
+      const a = csActorOf(op.id); if (!a) return;
+      try { a.vrm.expressionManager?.setValue(op.expression, op.weight ?? 1); } catch { /* noop */ }
+    },
+    'bgm.play'(op) { playBgmFile(op.name, op.loop !== false, op.volume ?? 0.6); },
+    'bgm.stop'() { playBgmFile(null); },
+    se(op) {
+      const a = new Audio('../sound/' + encodeURIComponent(op.name || ''));
+      a.addEventListener('error', () => { a.src = '../audio/' + encodeURIComponent(op.name || ''); a.play().catch(() => {}); }, { once: true });
+      a.volume = op.volume ?? 1; a.play().catch(() => { /* noop */ });
+    },
+    'fade.out'(op) { return csFade(true, op.duration, op.color); },
+    'fade.in'(op) { return csFade(false, op.duration, op.color); },
+    end() { /* runner 側で停止 */ },
+  };
+}
+// テレポート直後はマントの粒子が旧位置に残り、バネが伸び切って弾ける。
+// 非表示のまま小刻みに数十ステップ回して収束させ、落ち着いてから見せる（lib変更なし・再生成なし）
+let capeSettleT = 0;
+function capeSettle(sec = 0.7) {
+  if (!vamp.cape) return;
+  capeSettleT = sec;
+  if (vamp.cape.clothMesh) vamp.cape.clothMesh.visible = false;
+  try { for (let i = 0; i < 30; i++) vamp.cape.update(1 / 60, vamp.action ? vamp.action.time * 30 : 0); } catch { /* noop */ }
+}
+
+async function playCutscene(cs) {
+  if (cutscene.on || !cs || !Array.isArray(cs.script) || phase !== 'playing') return;
+  cutscene.on = true;
+  document.exitPointerLock?.();
+  for (const ac of (cs.actors || [])) {   // 立ち位置の初期配置（設定があるアクターだけ）
+    const a = csActorOf(ac.npc); if (!a) continue;
+    const jump = Math.hypot(a.root.position.x - ac.x * TILE, a.root.position.z - ac.z * TILE);
+    a.root.position.set(ac.x * TILE, floorYAt(ac.x * TILE, ac.z * TILE, 99), ac.z * TILE);
+    if (ac.ry != null) a.root.rotation.y = ac.ry * Math.PI / 180;
+    if (a.kind === 'ken' && a.m) { a.m.path = null; a.m.faceYaw = a.root.rotation.y; }
+    if (a.kind === 'vamp' && jump > 2) { a.root.updateMatrixWorld(true); if (vamp.vrm) vamp.vrm.scene.updateMatrixWorld(true); capeSettle(0.7); }
+  }
+  if (vamp.ready) vamp.path = null;
+  cutscene.runner = createStoryRunner(cs.script, csHooks());
+  try { await cutscene.runner.run(0); } catch (e) { console.warn('カットシーン失敗:', e.message); }
+  for (const lip of cutscene.lips.values()) lip.stop();
+  subT = 0.01;
+  csMoves.length = 0;
+  cutscene.on = false; cutscene.advance = null;
+  if (vamp.ready) vamp.repathT = 0;   // 終了時の位置から行動再開
+  for (const m of kens) if (!m._remove) m.repathT = 0;
+  if (!touchMode && phase === 'playing') canvas.requestPointerLock();
+}
+function updateCutscene(dt) {
+  for (let i = csMoves.length - 1; i >= 0; i--) {
+    const mv = csMoves[i];
+    mv.t += dt;
+    const u = Math.min(1, mv.t / mv.dur);
+    mv.root.position.x = mv.fx + (mv.tx - mv.fx) * u;
+    mv.root.position.z = mv.fz + (mv.tz - mv.fz) * u;
+    mv.root.position.y = floorYAt(mv.root.position.x, mv.root.position.z, mv.root.position.y + 0.6);
+    if (mv.face) {
+      const yaw = Math.atan2(mv.tx - mv.fx, mv.tz - mv.fz);
+      if (mv.kind === 'vamp') mv.root.rotation.y = yaw - Math.atan2(bodyFwd.x, bodyFwd.z);
+      else { mv.root.rotation.y = yaw; if (mv.m) mv.m.faceYaw = yaw; }
+    }
+    if (u >= 1) { if (mv.done) mv.done(); csMoves.splice(i, 1); }
+  }
+}
+onGameEvent('propThrown', (pr) => { if (pr.data.model === 'grenade') pr.fuse = 2.5; });
+onGameEvent('memoRead', (d) => { if (d.memo && d.memo.achievement) achSet(d.memo.achievement, true); });
+
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 1 / 20);
-  if (phase === 'playing' && !edit.on) {
+  if (phase === 'playing' && !edit.on && !cutscene.on) {
     nightT += dt;
     updatePlayer(dt);
     updateVamp(dt);
@@ -1852,17 +3021,25 @@ renderer.setAnimationLoop(() => {
     updateCaptureView(dt);
     if (goalMesh) {
       goalMesh.rotation.y += dt * 0.8;
-      if (Math.hypot(player.pos.x - goalMesh.position.x, player.pos.z - goalMesh.position.z) < 2.0) win('ゴールに到達した！');
+      if (Math.hypot(player.pos.x - goalMesh.position.x, player.pos.z - goalMesh.position.z) < 2.0 && Math.abs(player.pos.y - goalMesh.position.y) < 2.5) win('ゴールに到達した！');
     }
     if (nightT >= NIGHT_SEC) win('夜を耐え抜いた！');
   }
   // VRM/マントの更新（状態機械の後）
   if (vamp.ready) {
-    if (vamp.mixer) vamp.mixer.update(dt);
-    if (vamp.hips) { vamp.hips.position.x = hipsRest.x; vamp.hips.position.z = hipsRest.z; }   // 腰はその場（前進はフットロック）。ミキサーの後に効かせる
+    if (!vamp.grabState && vamp.rdRecover <= 0 && vamp.mixer) vamp.mixer.update(dt);
+    if (vamp.hips && !vamp.grabState && vamp.rdRecover <= 0) { vamp.hips.position.x = hipsRest.x; vamp.hips.position.z = hipsRest.z; }   // 腰はその場（前進はフットロック）。ミキサーの後に効かせる
     vamp.vrm.scene.updateMatrixWorld(true);
-    if (phase === 'playing') headLook((vamp.state === 'capture' || vamp.state === 'holdKen') ? 1 : (vamp.state === 'chase' ? 0.6 : 0.25));
+    if (phase === 'playing' && !vamp.grabState && vamp.rdRecover <= 0) headLook((vamp.state === 'capture' || vamp.state === 'holdKen') ? 1 : (vamp.state === 'chase' ? 0.6 : 0.25));
     updateVampExpr(dt);
+    // 口パク＋行表情は状態表情の「後」・vrm.update の「前」（viseme が最後に勝つ＝npc-speech の設計順）
+    if (cutscene.on) { const lip = cutscene.lips.get(vamp.vrm); if (lip) lip.update(dt * 1000); }
+    else if (vampSpeech && phase === 'playing') { vampSpeech.onState(vamp.state); vampSpeech.update(dt); }
+    if ((vamp.grabState || vamp.rdRecover > 0) && vamp.ragdoll) {
+      const env = { floorY: floorYAt(vamp.root.position.x, vamp.root.position.z, vamp.root.position.y) };
+      if (vamp.grabState === 'body') { sgUpdateAnchor(); env.pinBone = vamp.grabBone || 'chest'; env.pinPos = _sgAnchor; }
+      updateRagdoll(vamp.ragdoll, dt, env);
+    }
     vamp.vrm.update(dt);
     if (vamp.state === 'capture' && phase === 'playing') updateHandIK();   // 腕IKはアニメ適用後に上書き
     else if (vamp.state === 'holdKen' && vamp.holding && phase === 'playing') {   // 両手で獲物の肩を掴む
@@ -1875,11 +3052,23 @@ renderer.setAnimationLoop(() => {
       applyArmIK(vamp.armR, _gpR);
       vamp.vrm.scene.updateMatrixWorld(true);
     }
-    if (vampSpeech && phase === 'playing') { vampSpeech.onState(vamp.state); vampSpeech.update(dt); }
     if (speechUI) speechUI.update(dt, bubbleScreenPos);
     if (vamp.cape) { try { vamp.cape.update(dt, vamp.action ? vamp.action.time * 30 : 0); } catch { /* noop */ } }
+    if (capeSettleT > 0) { capeSettleT -= dt; if (capeSettleT <= 0 && vamp.cape?.clothMesh) vamp.cape.clothMesh.visible = true; }
+  }
+  if (cutscene.on) {   // カットシーン中：移動補間＋職員の最小更新（アニメ・口パク）
+    updateCutscene(dt);
+    for (const m of kens) {
+      if (m._remove) continue;
+      const lip = cutscene.lips.get(m.vrm); if (lip) lip.update(dt * 1000);
+      if (m.mixer) m.mixer.update(dt);
+      m.vrm.update(dt);
+    }
   }
   updateShotFx(dt);
+  updateThunder(dt);
+  if (phase === 'playing') { updateProps(dt); updateDoors(dt); updateTriggers(dt); updateShock(dt); }
+  if (edit.on) editFrame();   // 選択枠・ホバー枠の更新
   applyObsCamera(dt);   // 観察モード時はプレイ視点を上書き
   renderer.render(scene, camera);
   frames++; const now = performance.now();
@@ -1888,7 +3077,7 @@ renderer.setAnimationLoop(() => {
 
 // ── 起動 ──
 setupTouch();
-Promise.all([loadPaintingCfg(), loadTune(), loadEnemyCfg(), loadLighting(), loadStageCfg()]).then(() => { initKissAudio(); return buildDungeon(); }).then(() => { nav = buildNav(dg); return loadVamp(); }).then(() => {
+Promise.all([loadPaintingCfg(), loadTune(), loadEnemyCfg(), loadLighting(), loadStageCfg()]).then(() => { initKissAudio(); initGunAudio(); return buildDungeon(); }).then(async () => { dg.props = stageCfg?.props || []; dg.doors = stageCfg?.doors || []; dg.achEvents = stageCfg?.achEvents || []; dg.triggers = (stageCfg?.triggers || []).map((t) => ({ ...t, _fired: false })); dg.cutscenes = stageCfg?.cutscenes || []; vamp.inactive = dg.triggers.some((t) => t.event?.type === 'vampWake'); buildProps(); await ensurePart('door'); buildDoors(); loadImpactFx(); }).then(() => { nav = buildNav(dg); return loadVamp(); }).then(() => {
   initSpeech();
   prepareKenAssets().then(spawnStaff).catch((e) => console.warn('職員配置失敗:', e));
   resetPlayer();
@@ -1902,13 +3091,21 @@ $('btn-start').addEventListener('click', startGame);
 window.__game = {
   get phase() { return phase; }, get player() { return player; }, get dg() { return dg; },
   startGame, camera, renderer, get goal() { return goalMesh; },
-  teleport(cx, cz) { player.pos.set(cx * TILE, EYE_H, cz * TILE); player.vel.set(0, 0, 0); },
+  teleport(cx, cz, lvl = 0) { player.pos.set(cx * TILE, lvl * STORY_H + EYE_H, cz * TILE); player.vel.set(0, 0, 0); },
   get vamp() { return vamp; }, get nav() { return nav; }, get drain() { return drain; },
   vampTo(cx, cz) { placeVampAt({ x: cx, z: cz }); vamp.path = null; vamp.repathT = 0; },
   fireShot, get KISS() { return KISS; }, get GRAB() { return GRAB; },
   get obs() { return obs; }, get lightCfg() { return lightCfg; },
   curAnim() { return vampAnimName; }, get enemyCfg() { return ENEMY_CFG; }, get kens() { return kens; }, get KEN() { return KEN; }, startHoldKen,
   get edit() { return edit; }, editEnter, editExit, editSelect, editArray, editSaveStage, setGoalCell, get stageCfg() { return stageCfg; },
+  get bodyFwd() { return bodyFwd; }, get headFace() { return headFace; },
+  staffShoot, playGunshot,
+  gameEvent, triggerThunder, get props() { return props; }, propInteract, get heldProp() { return heldProp; }, get hoverProp() { return hoverProp; }, get memoOpen() { return memoOpen; }, capeSettle,
+  get ACH() { return ACH; }, achSet, get doorObjs() { return doorObjs; }, openDoor, dropGrenadeAt, explodeGrenade,
+  get triggers() { return dg?.triggers; }, showSubtitle, playBgmFile, get vampInactive() { return vamp.inactive; },
+  playCutscene, get cutscene() { return cutscene; }, get cutscenes() { return dg?.cutscenes; },
+  tryShockGrab, shockRelease, get vampGrab() { return { state: vamp.grabState, bone: vamp.grabBone, recover: vamp.rdRecover }; }, dropPropAt,
+  get partsCache() { return partsCache; },
   mouthWorld() { if (!vamp.head) return null; const hp=vamp.head.getWorldPosition(new THREE.Vector3()), hq=vamp.head.getWorldQuaternion(new THREE.Quaternion());
     return headFace.clone().multiplyScalar(KISS.fwd).setY(KISS.up).applyQuaternion(hq).add(hp); },
   kissSrc() { return kissAudio.el ? kissAudio.el.src.split('/').pop() : null; },

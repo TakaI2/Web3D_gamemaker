@@ -27,7 +27,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "build:cityfly": "node scripts/build-plateau-fly.mjs",
     "build:ar-vampire": "node scripts/build-ar-vampire.mjs",
-    "split-npc": "node scripts/split-npc.mjs"
+    "split-npc": "node scripts/split-npc.mjs",
+    "build:vamp-dungeon": "node scripts/build-vamp-dungeon.mjs"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.4.0",
