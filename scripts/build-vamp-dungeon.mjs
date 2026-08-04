@@ -38,16 +38,17 @@ cpDir('public/models/kenney_furniture-kit/Models/GLTF format', path.join(OUT, 'm
 cpDir('public/models/GLB retro_fantasy', path.join(OUT, 'models', 'GLB retro_fantasy'));
 
 // ── NPC（吸血鬼と職員のみ）＋ラグドール ──
-for (const f of ['JOY_vamp.npc.json', 'JOY_vamp.vrm', 'JOY_vamp.meta.json', 'ken.npc.json', 'ken.vrm', 'ken.meta.json', 'char-light.json'])
+for (const f of ['JOY_vamp.npc.json', 'JOY_vamp.vrm', 'JOY_vamp.meta.json', 'ken.npc.json', 'ken.vrm', 'ken.meta.json', 'soldier.meta.json', 'char-light.json'])
   cp(path.join('public/npc', f), path.join(OUT, 'npc', f));
 cp('public/ragdoll/ken.ragdoll.json', path.join(OUT, 'ragdoll', 'ken.ragdoll.json'));
+cp('public/vrm/soldier.vrm', path.join(OUT, 'vrm', 'soldier.vrm'));
 
 // ── アニメ：敵設定から必要な timeline/vrma を収集＋職員の歩き ──
 let enemy = null;
 try { enemy = JSON.parse(fs.readFileSync('public/vamp_param/vamp-enemy.json', 'utf8')); } catch { /* 既定 */ }
 const anims = new Set(['eri_model_walk.timeline.json', 'eri_Fly_idle.timeline.json']);
 if (enemy) for (const st of Object.values(enemy.states || {})) if (st.anim) anims.add(st.anim);
-const vrmas = new Set(['Catwalk_Walk_Forward.vrma']);   // 職員の歩き
+const vrmas = new Set(['Catwalk_Walk_Forward.vrma', 'Run Forward.vrma', 'Firing Rifle.vrma', 'Dying.vrma']);   // 職員の歩き/走り/射撃/死亡
 for (const a of anims) {
   if (a.endsWith('.timeline.json')) {
     if (cp(path.join('public/timeline', a), path.join(OUT, 'timeline', a))) {
@@ -67,6 +68,7 @@ cpDir('public/rooms', path.join(OUT, 'rooms'));   // ユニット（エディタ
 cpDir('public/audio', path.join(OUT, 'audio'));
 cpDir('public/sound', path.join(OUT, 'sound'));
 cpDir('public/bgm', path.join(OUT, 'bgm'));
+cpDir('public/image', path.join(OUT, 'image'));   // 絵画差し替え用画像
 
 fs.writeFileSync(path.join(OUT, 'favicon.ico'), Buffer.alloc(4));
 

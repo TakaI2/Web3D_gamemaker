@@ -138,7 +138,7 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content, encoding } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma', vamp_param: 'vamp_param' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma', vamp_param: 'vamp_param', image: 'image' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
@@ -306,6 +306,16 @@ export default defineConfig({
           if (!url.endsWith('/ragdoll/manifest.json')) return next();
           const dir = path.join(pub, 'ragdoll');
           const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.ragdoll.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
+        // 画像一覧（public/image/ 直下。絵画差し替え用）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/image/manifest.json')) return next();
+          const dir = path.join(pub, 'image');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)) : [];
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
         });
