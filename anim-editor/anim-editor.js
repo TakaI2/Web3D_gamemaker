@@ -9,6 +9,7 @@ import { VRMLoaderPlugin, VRMUtils } from 'https://esm.sh/@pixiv/three-vrm@3.5.3
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 import { solveTwoBoneIK, solveSpineIK } from '../lib/pose-kit.js';
 import { createAnimTimeline } from '../lib/anim-timeline.js';
+import { createHeadLook } from '../lib/vrm-look.js';
 
 const $ = (id) => document.getElementById(id);
 const setStatus = (m) => { $('status').textContent = m; };
@@ -20,6 +21,7 @@ let curHandle = 'hips';
 let fkBone = null;
 let jointsOn = false;
 let hipPins = null, dragPoles = null;
+let headLook = null, lookOn = false;   // 視線（lib/vrm-look.js 共用）
 const handles = new Map();
 const jointDots = new Map();
 const clock = new THREE.Clock();
@@ -31,6 +33,7 @@ const HANDLE_DEFS = {
   handR: { color: 0x80ff80, bone: 'rightHand', rotate: false },
   footL: { color: 0xff80c0, bone: 'leftFoot', rotate: false },
   footR: { color: 0xff80c0, bone: 'rightFoot', rotate: false },
+  look: { color: 0xff40ff, bone: null, rotate: false },   // 視線ターゲット
 };
 const FK_BONES = ['hips', 'spine', 'chest', 'upperChest', 'neck', 'head', 'leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand', 'rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand', 'leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'rightUpperLeg', 'rightLowerLeg', 'rightFoot'];
 
@@ -58,6 +61,10 @@ async function loadVrmBlob(blob, label) {
     const b = nb(name);
     if (b) restPose[name] = { q: b.quaternion.clone(), p: name === 'hips' ? b.position.clone() : null };
   }
+  vrm.scene.updateMatrixWorld(true);
+  headLook = createHeadLook(vrm);
+  handles.get('look')?.position.set(0.8, 1.4, 1.6);
+  window.__animDbg = { get vrm() { return vrm; }, get look() { return headLook; }, handles, THREE };
   buildJointDots();
   selectHandle('hips');
   timeline.refreshBsList();
@@ -109,6 +116,7 @@ function makeHandles() {
 function syncHandles() {
   for (const [name, def] of Object.entries(HANDLE_DEFS)) {
     if (gizmo.dragging && name === curHandle) continue;
+    if (name === 'look') continue;   // 視線ターゲットは置いた場所に留まる
     const b = nb(def.bone);
     if (b) b.getWorldPosition(handles.get(name).position);
   }
@@ -157,6 +165,7 @@ function applyHandle() {
   if (!vrm || curHandle === 'fk') return;
   const name = curHandle;
   const target = gizmoProxy.position;
+  if (name === 'look') { handles.get('look').position.copy(target); return; }
   if (name === 'hips') {
     const hips = nb('hips');
     if (gizmo.mode === 'rotate') {
@@ -394,6 +403,7 @@ async function init() {
   renderer.setAnimationLoop(() => {
     const dt = Math.min(clock.getDelta(), 1 / 20);
     timeline.update(dt);
+    if (vrm && lookOn && headLook) headLook.update(handles.get('look').position, 1);   // アニメ適用後・vrm.update前
     if (vrm) { vrm.update(dt); syncHandles(); }
     renderer.render(scene, camera);
   });

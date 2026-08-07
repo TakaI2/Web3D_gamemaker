@@ -20,6 +20,7 @@ import { categorize } from '../lib/room-gen.js';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { solveTwoBoneIK } from '../lib/vrm-ik.js';
 import { solveSpineIK, solveTwoBoneIK as poseTwoBoneIK } from '../lib/pose-kit.js';
+import { createHeadLook } from '../lib/vrm-look.js';
 import { sampleExpr, applyExpr } from '../lib/expr-timeline.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 import { createDissolve } from '../lib/fx-dissolve.js';
@@ -1569,6 +1570,7 @@ async function spawnKen(cell) {
   try { dis = createDissolve(kvrm.scene, { rimColor: '#8ff0ff', liquidColor: '#bfeaff', rimIntensity: 2.6, groundY: 0.02, puddleScale: 1.4, doubleSide: false, armed: false }); dis.setProgress(0); } catch (e) { console.warn('dissolve生成失敗:', e.message); }
   const m = {
     vrm: kvrm, mixer, action, actions, curAnim: 'walk', ragdoll, dis,
+    look: createHeadLook(kvrm, { maxDownDeg: 75 }),   // 視線（lib/vrm-look.js 共用。休止ポーズで顔向きを実測ベイク）
     state: 'patrol', path: null, seg: 1, repathT: 0, patrolTo: null,
     hp: KEN.hp, shootCd: 2 + Math.random() * 3, recoverT: 0, dissT: 0, _remove: false,
     speech: null, faceYaw: 0, scanT: 1 + Math.random() * 2, fireT: 0,
@@ -1804,8 +1806,8 @@ function updateOneKen(m, dt) {
   }
   if (m.fireT > 0) { anim = 'fire'; freeze = false; }
   setKenAnim(m, anim, { freeze, timeScale: (anim === 'run' && !freeze) ? Math.max(0.45, speed / KEN.runSpeed) : 1 });
-  // 向きと歩きアニメ
-  let dyaw = m.faceYaw - m.vrm.scene.rotation.y;
+  // 向きと歩きアニメ（VRMAごとに腰の向き規約が違うため、脚の実測＝見た目の向きを基準に回す）
+  let dyaw = m.faceYaw - kenVisualYaw(m);
   while (dyaw > Math.PI) dyaw -= Math.PI * 2; while (dyaw < -Math.PI) dyaw += Math.PI * 2;
   m.vrm.scene.rotation.y += dyaw * Math.min(1, dt * 8);
   // 目線：彼女が近い/逃走中は VRM の lookAt で目だけ追う（首は体の向きのまま＝可動域の狭い順）
@@ -4111,34 +4113,19 @@ function csFocusOn(a, durMs) {   // プレイヤーの視線を対象へ向け�
 // NPCの首・体を対象へ向ける（覗き込み用。吸血鬼の headLook と同じ考え方）
 const _klp = new THREE.Vector3(), _kld = new THREE.Vector3(), _kbf = new THREE.Vector3(), _khf = new THREE.Vector3();
 const _khq = new THREE.Quaternion(), _khd = new THREE.Quaternion(), _khw = new THREE.Quaternion(), _khp = new THREE.Quaternion();
+const _kvL = new THREE.Vector3(), _kvR = new THREE.Vector3(), _kvF = new THREE.Vector3(), _kvUp = new THREE.Vector3(0, 1, 0);
+function kenVisualYaw(m) {   // 実際に見えている体の向き（アニメが腰をどう回していても正しい）
+  const nb = (n) => m.vrm.humanoid?.getNormalizedBoneNode(n);
+  const l = nb('leftUpperLeg'), r = nb('rightUpperLeg');
+  if (!l || !r) return m.vrm.scene.rotation.y;
+  l.getWorldPosition(_kvL); r.getWorldPosition(_kvR);
+  _kvF.crossVectors(_kvL.sub(_kvR), _kvUp);
+  if (_kvF.lengthSq() < 1e-8) return m.vrm.scene.rotation.y;
+  return Math.atan2(_kvF.x, _kvF.z);
+}
 function kenLookAt(m, tgt, w) {
-  const hh = m.vrm?.humanoid;
-  const head = hh && hh.getNormalizedBoneNode('head');
-  if (!head) return;
-  // 体を少しだけ対象へ（覗き込み）。1フレームの変化量は小さく抑える
-  if (!m._spine) m._spine = ['spine', 'chest', 'upperChest'].map((n) => hh.getNormalizedBoneNode(n)).filter(Boolean);
-  if (m._spine.length) solveSpineIK(m._spine, head, tgt, { iterations: 1, maxStepDeg: 1.6 * w });
-  // 首：モデルの顔向き規約に依存しないよう、ワールド空間の「現在の顔向き→目標方向」で回す
-  head.getWorldPosition(_klp);
-  _kld.set(tgt.x - _klp.x, tgt.y - _klp.y, tgt.z - _klp.z);
-  if (_kld.lengthSq() < 1e-8) return;
-  _kld.normalize();
-  // 体の正面を基準に可動域でクランプ（真後ろを向かない・下は深めに許可）
-  _kbf.set(Math.sin(m.vrm.scene.rotation.y), 0, Math.cos(m.vrm.scene.rotation.y));
-  const bodyYaw = Math.atan2(_kbf.x, _kbf.z);
-  let dyaw = Math.atan2(_kld.x, _kld.z) - bodyYaw;
-  while (dyaw > Math.PI) dyaw -= Math.PI * 2; while (dyaw < -Math.PI) dyaw += Math.PI * 2;
-  dyaw = Math.max(-1.15, Math.min(1.15, dyaw));
-  const pitch = Math.max(-0.95, Math.min(0.5, Math.asin(Math.max(-1, Math.min(1, _kld.y)))));
-  const cy = bodyYaw + dyaw, cp = Math.cos(pitch);
-  _kld.set(Math.sin(cy) * cp, Math.sin(pitch), Math.cos(cy) * cp);
-  head.getWorldQuaternion(_khq);
-  _khf.copy(headFace).applyQuaternion(_khq).normalize();
-  if (_khf.angleTo(_kld) < 1e-4) return;
-  _khd.setFromUnitVectors(_khf, _kld);
-  _khw.identity().slerp(_khd, w).multiply(_khq);
-  head.parent.getWorldQuaternion(_khp);
-  head.quaternion.copy(_khp.invert().multiply(_khw)).normalize();
+  if (!m.look) return;
+  m.look.update(tgt, w);
   if (m.eyeTgt) m.eyeTgt.position.copy(tgt);
 }
 
@@ -4270,6 +4257,8 @@ async function playCutscene(cs, force = false) {
   csCam.floorY = floorYAt(player.pos.x, player.pos.z, player.pos.y);
   csCam.yaw = csCam.pitch = csCam.h = csCam.blur = null;
   csShowSkip(true);
+  const ch = document.getElementById('crosshair');
+  if (ch) ch.style.display = 'none';   // 会話相手を見る時に照準が邪魔にならないように
   if (edit.on) pipShow(true);
   // 通常のフキダシ発話は止める（カットシーンのセリフは会話ウィンドウに出す）
   for (const m of kens) {
@@ -4296,6 +4285,7 @@ async function playCutscene(cs, force = false) {
   for (const lip of cutscene.lips.values()) lip.stop();
   subT = 0.01;
   csHideDialog(); csShowSkip(false);
+  { const ch = document.getElementById('crosshair'); if (ch) ch.style.display = ''; }
   if (cutscene.fadeEl) { cutscene.fadeEl.style.transition = 'opacity 0.3s'; cutscene.fadeEl.style.opacity = '0'; }   // スキップ時に暗転が残らないように
   csCam.yaw = csCam.pitch = csCam.h = csCam.blur = null;
   csCam.blurCur = 0; renderer.domElement.style.filter = '';
@@ -4476,6 +4466,12 @@ renderer.setAnimationLoop(() => {
       if (m._remove) continue;
       if (m.mixer) m.mixer.update(dt);
       const lip = cutscene.lips.get(m.vrm); if (lip) lip.update(dt * 1000);   // 口パクはミキサーの後（表情トラックに消されないように）
+      {   // 立ち位置の向き(faceYaw)を見た目基準で維持
+        m.vrm.scene.updateMatrixWorld(true);
+        let dy2 = m.faceYaw - kenVisualYaw(m);
+        while (dy2 > Math.PI) dy2 -= Math.PI * 2; while (dy2 < -Math.PI) dy2 += Math.PI * 2;
+        m.vrm.scene.rotation.y += dy2 * Math.min(1, dt * 10);
+      }
       if (m.csLook) {
         m.vrm.scene.updateMatrixWorld(true);
         const t = csLookTargetOf(m.csLook);

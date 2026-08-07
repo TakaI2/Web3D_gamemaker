@@ -11,6 +11,7 @@ import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from 'https://esm.sh
 import { categorize } from '../lib/room-gen.js';
 import { solveTwoBoneIK, solveSpineIK } from '../lib/pose-kit.js';
 import { createAnimTimeline } from '../lib/anim-timeline.js';
+import { createHeadLook } from '../lib/vrm-look.js';
 
 const KIT_DIR = '../models/kenney_furniture-kit/Models/GLTF format/';
 const SCALE = 1.5;   // ゲーム内装と同縮尺
@@ -25,6 +26,7 @@ let vrm = null, hipsRestY = 1, restPose = null;
 let timeline = null;   // lib/anim-timeline.js（ポーズキー＋表情トラック）
 let curHandle = 'anchor';
 let hipPins = null;    // 腰ドラッグ中の手足ピン留め位置（腰IK用）
+let headLook = null, lookOn = false;   // 視線（lib/vrm-look.js 共用）
 let dragPoles = null;  // ドラッグ中の肘/膝ポールベクタ（曲がる方向をドラッグ開始時に固定＝逆曲がり防止）
 const handles = new Map();   // name -> sphere mesh
 const loader = new GLTFLoader();
@@ -98,6 +100,7 @@ const HANDLE_DEFS = {
   handR: { color: 0x80ff80, bone: 'rightHand', rotate: false },
   footL: { color: 0xff80c0, bone: 'leftFoot', rotate: false },
   footR: { color: 0xff80c0, bone: 'rightFoot', rotate: false },
+  look: { color: 0xff40ff, bone: null, rotate: false },   // 視線ターゲット（球の位置を見る）
 };
 function makeHandles() {
   for (const [name, def] of Object.entries(HANDLE_DEFS)) {
@@ -112,6 +115,7 @@ function makeHandles() {
 function syncHandles() {   // ドラッグ中以外はボーン位置へ追従
   for (const [name, def] of Object.entries(HANDLE_DEFS)) {
     if (gizmo.dragging && name === curHandle) continue;
+    if (name === 'look') continue;   // 視線ターゲットは置いた場所に留まる
     const m = handles.get(name);
     if (name === 'anchor') m.position.copy(vrm.scene.position).y += 0.02;
     else def.bone && nb(def.bone)?.getWorldPosition(m.position);
@@ -197,6 +201,7 @@ function applyHandle() {   // ギズモ操作をアンカー/IKへ反映
     }
     return;
   }
+  if (name === 'look') { handles.get('look').position.copy(target); return; }   // 球を動かすだけ（毎フレーム注視）
   if (name === 'head') {
     const chain = ['spine', 'chest', 'upperChest', 'neck'].map(nb).filter(Boolean);
     solveSpineIK(chain, nb('head'), target, { iterations: 6, maxStepDeg: 10 });
@@ -356,11 +361,16 @@ async function init() {
   setCategory(CATS[0]);
   await loadNpc();
   makeHandles();
+  handles.get('look').position.set(0.8, 1.4, 1.6);
+  headLook = createHeadLook(vrm);
+  $('cb-look')?.addEventListener('change', () => { lookOn = $('cb-look').checked; if (!lookOn) resetPose(); });
+  window.__animDbg = { get vrm() { return vrm; }, get look() { return headLook; }, handles, THREE };
   selectHandle('anchor');
   timeline.draw();
   renderer.setAnimationLoop(() => {
     const dt = Math.min(clock.getDelta(), 1 / 20);
     timeline.update(dt);
+    if (vrm && lookOn && headLook) headLook.update(handles.get('look').position, 1);   // アニメ適用後・vrm.update前
     if (vrm) { vrm.update(dt); syncHandles(); }
     renderer.render(scene, camera);
   });
