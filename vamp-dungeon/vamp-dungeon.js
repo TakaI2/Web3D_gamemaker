@@ -21,6 +21,8 @@ import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { solveTwoBoneIK } from '../lib/vrm-ik.js';
 import { solveSpineIK, solveTwoBoneIK as poseTwoBoneIK } from '../lib/pose-kit.js';
 import { createHeadLook } from '../lib/vrm-look.js';
+import { PROC_TOOLS } from '../lib/tool-models.js';
+import { holdTool } from '../lib/vrm-tool.js';
 import { sampleExpr, applyExpr } from '../lib/expr-timeline.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 import { createDissolve } from '../lib/fx-dissolve.js';
@@ -1524,6 +1526,7 @@ async function prepareKenAssets() {
     kenAssets.anims = { run: ar, fire: af, die: ad };
     const j = await fetchFirst(['./ken.ragdoll.json', '../ragdoll/ken.ragdoll.json'], true);
     if (j) kenAssets.ragOpts = { ...(j.params || {}), boneMaxBend: j.boneMaxBend || {}, boundsMargin: 0.4 };
+    kenAssets.toolDef = await fetchFirst(['./tools/rifle.tool.json', '../tools/rifle.tool.json'], true);   // 職員の武器（tool-editorで調整）
     const sd = (await fetchSpeechSet('staff.speech.json')) || (await fetchSpeechSet('ken.speech.json'));
     if (sd) kenAssets.speechChar = buildSpeechCharacter(sd, '職員');
     kenAssets.ready = true;
@@ -1571,6 +1574,7 @@ async function spawnKen(cell) {
   const m = {
     vrm: kvrm, mixer, action, actions, curAnim: 'walk', ragdoll, dis,
     look: createHeadLook(kvrm, { maxDownDeg: 75 }),   // 視線（lib/vrm-look.js 共用。休止ポーズで顔向きを実測ベイク）
+    heldTool: kenAssets.toolDef ? holdTool(kvrm, (PROC_TOOLS[kenAssets.toolDef.ref?.proc] || PROC_TOOLS.rifle)(), kenAssets.toolDef) : null,
     state: 'patrol', path: null, seg: 1, repathT: 0, patrolTo: null,
     hp: KEN.hp, shootCd: 2 + Math.random() * 3, recoverT: 0, dissT: 0, _remove: false,
     speech: null, faceYaw: 0, scanT: 1 + Math.random() * 2, fireT: 0,
@@ -1817,6 +1821,7 @@ function updateOneKen(m, dt) {
     else m.eyeTgt.position.set(pos.x + Math.sin(m.faceYaw) * 3, pos.y + 1.35, pos.z + Math.cos(m.faceYaw) * 3);
   }
   if (m.mixer) m.mixer.update(dt);
+  kenToolIK(m);
   // 口パク（viseme）は vrm.update の前に適用（npc-speech の設計順）
   if (m.speech) { m.speech.onState(m.state === 'flee' ? 'flee' : 'idle'); m.speech.update(dt); }
   m.vrm.update(dt);
@@ -4114,6 +4119,22 @@ function csFocusOn(a, durMs) {   // プレイヤーの視線を対象へ向け�
 const _klp = new THREE.Vector3(), _kld = new THREE.Vector3(), _kbf = new THREE.Vector3(), _khf = new THREE.Vector3();
 const _khq = new THREE.Quaternion(), _khd = new THREE.Quaternion(), _khw = new THREE.Quaternion(), _khp = new THREE.Quaternion();
 const _kvL = new THREE.Vector3(), _kvR = new THREE.Vector3(), _kvF = new THREE.Vector3(), _kvUp = new THREE.Vector3(0, 1, 0);
+const _tgp = new THREE.Vector3(), _tgq = new THREE.Quaternion(), _tpq = new THREE.Quaternion();
+function kenToolIK(m) {   // 道具の添え手を IK で銃へ（tool-editor のプレビューと同じ挙動）
+  if (!m.heldTool || !m.heldTool.def.sub) return;
+  const boneName = m.heldTool.subGrip(_tgp, _tgq);
+  if (!boneName) return;
+  const side = boneName.startsWith('left') ? 'left' : 'right';
+  const hh = m.vrm.humanoid;
+  const limb = m._subLimb || (m._subLimb = {
+    root: hh.getNormalizedBoneNode(side + 'UpperArm'), mid: hh.getNormalizedBoneNode(side + 'LowerArm'), end: hh.getNormalizedBoneNode(side + 'Hand') });
+  if (!limb.root || !limb.mid || !limb.end) return;
+  const r = poseTwoBoneIK(limb, _tgp);
+  if (r) { limb.root.quaternion.copy(r.rootQuat); limb.mid.quaternion.copy(r.midQuat); }
+  limb.end.updateWorldMatrix(true, false);
+  limb.end.parent.getWorldQuaternion(_tpq);
+  limb.end.quaternion.copy(_tpq.invert().multiply(_tgq)).normalize();
+}
 function kenVisualYaw(m) {   // 実際に見えている体の向き（アニメが腰をどう回していても正しい）
   const nb = (n) => m.vrm.humanoid?.getNormalizedBoneNode(n);
   const l = nb('leftUpperLeg'), r = nb('rightUpperLeg');
@@ -4466,6 +4487,7 @@ renderer.setAnimationLoop(() => {
       if (m._remove) continue;
       if (m.mixer) m.mixer.update(dt);
       const lip = cutscene.lips.get(m.vrm); if (lip) lip.update(dt * 1000);   // 口パクはミキサーの後（表情トラックに消されないように）
+      kenToolIK(m);
       {   // 立ち位置の向き(faceYaw)を見た目基準で維持
         m.vrm.scene.updateMatrixWorld(true);
         let dy2 = m.faceYaw - kenVisualYaw(m);

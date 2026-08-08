@@ -69,6 +69,7 @@ cpDir('public/audio', path.join(OUT, 'audio'));
 cpDir('public/sound', path.join(OUT, 'sound'));
 cpDir('public/bgm', path.join(OUT, 'bgm'));
 cpDir('public/image', path.join(OUT, 'image'));   // 絵画差し替え用画像
+cpDir('public/tools', path.join(OUT, 'tools'));   // 道具（持ち方定義）
 
 fs.writeFileSync(path.join(OUT, 'favicon.ico'), Buffer.alloc(4));
 

@@ -334,6 +334,7 @@ async function init() {
   // UI
   for (const name of Object.keys(HANDLE_DEFS)) $('h-' + name)?.addEventListener('click', () => selectHandle(name));
   $('btn-joints').addEventListener('click', () => { jointsOn = !jointsOn; $('btn-joints').className = jointsOn ? 'on' : 'sub'; });
+  $('cb-look')?.addEventListener('change', () => { lookOn = $('cb-look').checked; if (!lookOn) resetPose(); });
   $('btn-mode').addEventListener('click', () => {
     if (curHandle === 'fk') return;
     if (!HANDLE_DEFS[curHandle]?.rotate && gizmo.mode === 'translate') return;
