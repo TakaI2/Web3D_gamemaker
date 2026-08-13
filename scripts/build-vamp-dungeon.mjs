@@ -70,6 +70,7 @@ cpDir('public/sound', path.join(OUT, 'sound'));
 cpDir('public/bgm', path.join(OUT, 'bgm'));
 cpDir('public/image', path.join(OUT, 'image'));   // 絵画差し替え用画像
 cpDir('public/tools', path.join(OUT, 'tools'));   // 道具（持ち方定義）
+cp('public/electric.png', path.join(OUT, 'electric.png'));   // 念力ビームのスプライトシート
 
 fs.writeFileSync(path.join(OUT, 'favicon.ico'), Buffer.alloc(4));
 

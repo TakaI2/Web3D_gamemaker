@@ -41,4 +41,6 @@ SwingCatchの掴む動作と同じで、視線を合わせた持てるオブジ�
 ・カットシーンを再生（詳しくは別資料）
 
 
-# 
+# 大扉
+
+構成要素は、左上：wall-wood-arch-top-detail　　左下： wall-wood-arch  右上: wall-wood-arch-top-detail(反転)　右下:wall-wood-arch(反転)

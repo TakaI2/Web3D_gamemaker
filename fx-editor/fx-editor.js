@@ -24,6 +24,9 @@ import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.j
 import { createTornado } from '../lib/fx-tornado.js';
 import { createMeshFx } from '../lib/fx-mesh.js';
 import { createBeamFx } from '../lib/fx-beam.js';
+import { VRMLoaderPlugin as TkVRMLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
+import { GLTFLoader as TkGLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
+import { createTkBeam, tkArmRaise, tkHoverStep } from '../lib/vrm-tk.js';
 import { BUILTIN_TEXTURES } from '../lib/fx-textures.js';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { createDissolve } from '../lib/fx-dissolve.js';
@@ -1831,6 +1834,7 @@ function updateFPS() {
 }
 
 function render() {
+  tkPreviewTick();
   timer.update();
   const dt = Math.min(timer.getDelta(), 1 / 20);
   updateFPS();
@@ -1981,3 +1985,127 @@ async function init() {
 }
 
 init().catch(err => { console.error(err); const l = document.getElementById('loading'); if (l) l.textContent = `初期化失敗: ${err.message}`; });
+
+// ══════════ 念力プレビュー（吸血鬼＋標的NPC＋周囲オブジェクトで動きを観察） ══════════
+const tkPrev = { on: false, ready: false, caster: null, target: null, objs: [], beam: null,
+  state: 'idle', t: 0, cur: null, vel: new THREE.Vector3(), hover: new THREE.Vector3(), spin: new THREE.Vector3(),
+  hand: 'right', cycle: 0, stagger: 0, clock: null };
+const _tkA = new THREE.Vector3(), _tkB = new THREE.Vector3(), _tkC = new THREE.Vector3();
+
+async function tkLoadVrm(file, x, ry) {
+  const l = new TkGLTFLoader();
+  l.register((pl) => new TkVRMLoaderPlugin(pl));
+  const g = await l.loadAsync('../vrm/' + encodeURIComponent(file));
+  const vrm = g.userData.vrm;
+  vrm.scene.position.set(x, 0, 0);
+  vrm.scene.rotation.y = ry;
+  scene.add(vrm.scene);
+  vrm.scene.updateMatrixWorld(true);
+  return vrm;
+}
+async function tkSetup() {
+  if (tkPrev.ready) return;
+  tkPrev.caster = await tkLoadVrm('JOY_vamp.vrm', -1.6, Math.PI / 2);
+  tkPrev.target = await tkLoadVrm('soldier.vrm', 1.8, Math.PI / 2);   // 正面向き規約はどちらでも見た目確認には十分
+  // 周囲オブジェクト（把持対象）
+  const mats = [0xc23b2e, 0x3a7dc2, 0xd8b23a].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.5 }));
+  const geos = [new THREE.SphereGeometry(0.09, 14, 10), new THREE.BoxGeometry(0.14, 0.14, 0.14), new THREE.IcosahedronGeometry(0.1)];
+  for (let i = 0; i < 3; i++) {
+    const m = new THREE.Mesh(geos[i], mats[i]);
+    m.position.set(-1.6 + (i - 1) * 0.7, 0.08, 0.8 + (i % 2) * 0.5);
+    m.userData.home = m.position.clone();
+    scene.add(m);
+    tkPrev.objs.push(m);
+  }
+  tkPrev.beam = createTkBeam({ ...(beamSpec || {}), frames: { ...((beamSpec || {}).frames || {}), fps: 24 } });
+  for (const o of tkPrev.beam.objects) scene.add(o);
+  tkPrev.clock = new THREE.Timer ? null : null;
+  tkPrev.ready = true;
+}
+function tkHandPos(out) {
+  const h = tkPrev.caster?.humanoid?.getNormalizedBoneNode(tkPrev.hand + 'Hand');
+  if (h) h.getWorldPosition(out); else out.set(-1.6, 1.2, 0);
+  return out;
+}
+function tkTargetChest(out) {
+  const c = tkPrev.target?.humanoid?.getNormalizedBoneNode('chest');
+  if (c) c.getWorldPosition(out); else out.set(1.8, 1.2, 0);
+  return out;
+}
+function tkPreviewTick() {
+  if (!tkPrev.on || !tkPrev.ready) return;
+  const dt = 1 / 60;
+  const tk = tkPrev;
+  tk.t += dt;
+  // 標的ののけぞり（被弾表現）
+  if (tk.stagger > 0) {
+    tk.stagger = Math.max(0, tk.stagger - dt);
+    tk.target.scene.rotation.z = -Math.sin(tk.stagger * 18) * 0.12 * tk.stagger;
+  }
+  if (tk.state === 'idle') {
+    if (tk.t > 0.8) {
+      tk.t = 0;
+      tk.cycle++;
+      tk.hand = Math.random() < 0.5 ? 'left' : 'right';
+      if (tk.cycle % 3 === 0) { tk.state = 'zap'; }
+      else {
+        tk.cur = tk.objs[(Math.random() * tk.objs.length) | 0];
+        tk.vel.set(0, 0, 0);
+        tk.spin.set((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5);
+        tk.state = 'lift';
+      }
+    }
+  } else if (tk.state === 'lift') {
+    tk.hover.set(tk.caster.scene.position.x + (tk.hand === 'left' ? -0.7 : 0.7), 1.9, tk.caster.scene.position.z + 0.35);
+    tkHoverStep(tk.cur, tk.hover, tk.spin, tk.vel, dt);
+    tkArmRaise(tk.caster, tk.hand, tk.cur.position);
+    tk.beam.show(tkHandPos(_tkA), tk.cur.position, dt, camera.position);
+    if (tk.t > 1.7) {   // 投げ
+      tkTargetChest(_tkB);
+      tk.vel.subVectors(_tkB, tk.cur.position).normalize().multiplyScalar(9);
+      tk.vel.y += 1.2;
+      tk.state = 'throw'; tk.t = 0;
+      tk.beam.hide();
+    }
+  } else if (tk.state === 'throw') {
+    tk.vel.y -= 9.8 * dt;
+    tk.cur.position.addScaledVector(tk.vel, dt);
+    tk.cur.rotation.x += tk.spin.x * dt; tk.cur.rotation.y += tk.spin.y * dt;
+    tkArmRaise(tk.caster, tk.hand, tk.cur.position);
+    tkTargetChest(_tkB);
+    if (tk.cur.position.distanceTo(_tkB) < 0.4 || tk.cur.position.y < 0.05 || tk.t > 2) {
+      if (tk.cur.position.distanceTo(_tkB) < 0.6) tk.stagger = 0.9;   // 命中でのけぞり
+      tk.cur.position.copy(tk.cur.userData.home);   // 置き場所へ戻す（ループ観察用）
+      tk.cur.rotation.set(0, 0, 0);
+      tk.state = 'idle'; tk.t = 0;
+    }
+  } else if (tk.state === 'zap') {
+    tkArmRaise(tk.caster, tk.hand, tkTargetChest(_tkB));
+    tk.beam.show(tkHandPos(_tkA), _tkB, dt, camera.position);
+    tk.stagger = 0.4;
+    if (tk.t > 1.1) { tk.state = 'idle'; tk.t = 0; tk.beam.hide(); tk.stagger = 1.2; }
+  }
+  tk.caster.update(dt);
+  tk.target.update(dt);
+}
+// UI: 右下にトグルボタン
+{
+  const btn = document.createElement('button');
+  btn.textContent = '🧠 念力プレビュー';
+  btn.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:30;background:#25304a;border:1px solid #46608c;color:#cfe;border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer;';
+  btn.addEventListener('click', async () => {
+    if (!tkPrev.ready) { btn.textContent = '読込中…'; await tkSetup().catch((e) => { btn.textContent = '読込失敗: ' + e.message.slice(0, 30); throw e; }); }
+    else if (!tkPrev.on) {   // 再ONのたび、現在編集中の beamSpec でビームを作り直す（FX調整を即反映）
+      if (tkPrev.beam) { for (const o of tkPrev.beam.objects) scene.remove(o); tkPrev.beam.dispose?.(); }
+      tkPrev.beam = createTkBeam({ ...(beamSpec || {}), frames: { ...((beamSpec || {}).frames || {}), fps: 24 } });
+      for (const o of tkPrev.beam.objects) scene.add(o);
+    }
+    tkPrev.on = !tkPrev.on;
+    btn.textContent = tkPrev.on ? '⏸ 念力プレビュー停止' : '🧠 念力プレビュー';
+    btn.style.background = tkPrev.on ? '#3d6b46' : '#25304a';
+    if (tkPrev.on) { camera.position.set(0.2, 2.0, 4.6); camera.lookAt(0, 1.1, 0); }
+    else { tkPrev.beam?.hide(); }
+  });
+  document.body.appendChild(btn);
+}
+
