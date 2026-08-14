@@ -261,6 +261,7 @@ const KIT_RETRO = '../models/GLB retro_fantasy/';
 // 地下の配置物（タル・木箱）はレトロキットから
 for (const n of ['barrels', 'detail-barrel', 'detail-crate', 'detail-crate-ropes', 'detail-crate-small']) MODEL_MAP[n] = [KIT_RETRO, n];
 Object.assign(MODEL_MAP, {
+  gatearchside: [KIT, 'wall-wood-arch'], gatearchtop: [KIT, 'wall-wood-arch-top-detail'], gateleaf: [KIT, 'wall-wood'],
   water: [KIT_RETRO, 'water'], fence: [KIT_RETRO, 'fence'], gatearch: [KIT_RETRO, 'wall-gate'],
   stepblock: [KIT_RETRO, 'floor-stairs'], retrofloor: [KIT_RETRO, 'floor-flat'],
   stepcorner: [KIT_RETRO, 'floor-stairs-corner-outer'],
@@ -1861,6 +1862,178 @@ function staffShoot(m) {
   if (vampSpeech) vampSpeech.bark('repelled');
 }
 
+// ══════════ ゾンビ（doctor.vrm）: cs2後に屋敷へ湧く。プレイヤー/職員を襲う。銃で倒せる ══════════
+const zombies = [];
+const ZOMBIE = { count: 5, hp: 3, speed: 1.1, sight: 12, attackR: 1.5, dmg: 9, atkCd: 2.0, impulse: 0.3 };
+const zombieAssets = { ready: false, vrmBlobUrl: null, anims: null };
+let zombiesSpawned = false;
+async function prepareZombieAssets() {
+  if (zombieAssets.ready) return true;
+  try {
+    const buf = await fetchFirst(['./vrm/doctor.vrm', '../vrm/doctor.vrm'], false);
+    if (!buf) return false;
+    zombieAssets.vrmBlobUrl = URL.createObjectURL(new Blob([buf]));
+    const loadAnim = async (file) => {
+      const ab = await fetchFirst(['./vrma/' + file, '../vrma/' + file], false);
+      if (!ab) return null;
+      const al = new GLTFLoader(); al.register((pl) => new VRMAnimationLoaderPlugin(pl));
+      const ag = await al.loadAsync(URL.createObjectURL(new Blob([ab])));
+      return ag.userData.vrmAnimations?.[0] || null;
+    };
+    const [walk, atk] = await Promise.all([loadAnim('zombie_walk.vrma'), loadAnim('zombie_attack.vrma')]);
+    zombieAssets.anims = { walk, attack: atk };
+    zombieAssets.ready = !!walk;
+    return zombieAssets.ready;
+  } catch (e) { console.warn('ゾンビ素材の準備失敗:', e.message); return false; }
+}
+async function spawnZombie(cell) {
+  const gl2 = new GLTFLoader();
+  gl2.register((pl) => new VRMLoaderPlugin(pl, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(pl, { materialType: MToonNodeMaterial }) }));
+  const gltf = await gl2.loadAsync(zombieAssets.vrmBlobUrl);
+  const zvrm = gltf.userData.vrm;
+  VRMUtils.removeUnnecessaryVertices(gltf.scene); VRMUtils.combineSkeletons(gltf.scene);
+  if (zvrm.lookAt?.faceFront && zvrm.lookAt.faceFront.z > 0.5) {   // +Z正面規約へ（kenと同じ）
+    const inner = new THREE.Group();
+    inner.rotation.y = Math.PI;
+    while (zvrm.scene.children.length) inner.add(zvrm.scene.children[0]);
+    zvrm.scene.add(inner);
+  }
+  zvrm.scene.position.set(cell.x * TILE, (cell.level || 0) * STORY_H, cell.z * TILE);
+  scene.add(zvrm.scene);
+  const mixer = new THREE.AnimationMixer(zvrm.scene);
+  const mkAct = (anim) => anim ? mixer.clipAction(stripRootMotionXZ(createVRMAnimationClip(anim, zvrm))) : null;
+  const actions = { walk: mkAct(zombieAssets.anims.walk), attack: mkAct(zombieAssets.anims.attack) };
+  if (actions.attack) { actions.attack.setLoop(THREE.LoopOnce); actions.attack.clampWhenFinished = true; }
+  if (actions.walk) actions.walk.play();
+  const ragdoll = createRagdoll(zvrm, kenAssets.ragOpts || { gravity: -12, boundsMargin: 0.4 });
+  const z = { vrm: zvrm, mixer, actions, cur: 'walk', ragdoll,
+    hp: ZOMBIE.hp, state: 'wander', path: null, seg: 1, repathT: 0, wanderTo: null,
+    target: null, atkT: 0, atkCd: 1 + Math.random() * 2, deadT: 0 };
+  zombies.push(z);
+  return z;
+}
+function zombieAnim(z, name) {
+  if (z.cur === name || !z.actions[name]) return;
+  const prev = z.actions[z.cur];
+  const next = z.actions[name];
+  next.reset().fadeIn(0.2).play();
+  if (prev) prev.fadeOut(0.2);
+  z.cur = name;
+}
+async function spawnZombies() {
+  if (zombiesSpawned) return;
+  zombiesSpawned = true;
+  if (!(await prepareZombieAssets())) return;
+  const pc = playerCell();
+  const rs = dg.rooms.filter((r) => Math.hypot(r.cx - pc.x, r.cz - pc.z) > 8 || (r.level || 0) !== pc.level)
+    .sort(() => Math.random() - 0.5).slice(0, ZOMBIE.count);
+  for (const r of rs) { try { await spawnZombie({ x: r.cx, z: r.cz, level: r.level || 0 }); } catch (e) { console.warn('zombie spawn失敗:', e.message); } }
+}
+function zombieAlive(z) { return z.hp > 0 && z.state !== 'dead' && z.state !== 'corpse'; }
+function zombieCell(z) { return navCell(z.vrm.scene.position.x, z.vrm.scene.position.y, z.vrm.scene.position.z); }
+// 銃弾ヒット: hp を減らし、0で射線方向へラグドール化して倒れる
+function zombieShot(z, dir) {
+  if (!zombieAlive(z)) return;
+  z.hp -= 1;
+  if (z.hp <= 0) {
+    z.state = 'dead'; z.deadT = 0;
+    setRagdollActive(z.ragdoll, true);
+    _zi.copy(dir).multiplyScalar(ZOMBIE.impulse); _zi.y += 0.06;
+    applyRagdollImpulse(z.ragdoll, _zi);
+  }
+}
+const _zi = new THREE.Vector3(), _zd = new THREE.Vector3();
+function updateZombies(dt) {
+  for (const z of zombies) {
+    const pos = z.vrm.scene.position;
+    if (z.state === 'corpse') continue;   // 完全に倒れた後は放置（負荷ゼロ）
+    if (z.state === 'dead') {   // ラグドールで崩れ落ちる → 落ち着いたら固定
+      z.deadT += dt;
+      updateRagdoll(z.ragdoll, dt, { floorY: floorYAt(pos.x, pos.z, pos.y + 0.5) });
+      z.vrm.update(dt);
+      if (z.deadT > 3.5) { setRagdollActive(z.ragdoll, false); z.state = 'corpse'; }
+      continue;
+    }
+    // ターゲット選択: 視界内で最も近いプレイヤー or 職員（同一階＋視線）
+    const zc = zombieCell(z);
+    let tgt = null, tgtPos = null, td = ZOMBIE.sight;
+    const pc = playerCell();
+    if (pc.level === zc.level && !isCaptured()) {
+      const d = Math.hypot(player.pos.x - pos.x, player.pos.z - pos.z);
+      if (d < td && hasLineOfSight(nav, zc.x, zc.z, pc.x, pc.z, zc.level, pc.level)) { td = d; tgt = 'player'; tgtPos = player.pos; }
+    }
+    for (const m of kens) {
+      if (!kenAlive(m)) continue;
+      const kc = kenCell(m);
+      if (kc.level !== zc.level) continue;
+      const d = Math.hypot(m.vrm.scene.position.x - pos.x, m.vrm.scene.position.z - pos.z);
+      if (d < td && hasLineOfSight(nav, zc.x, zc.z, kc.x, kc.z, zc.level, kc.level)) { td = d; tgt = m; tgtPos = m.vrm.scene.position; }
+    }
+    z.atkCd = Math.max(0, z.atkCd - dt);
+    if (z.state === 'attack') {   // 攻撃モーション中: 中程で命中判定、終わったら戻る
+      z.atkT += dt;
+      const len = z.actions.attack?.getClip?.().duration || 1.2;
+      if (!z._hitDone && z.atkT > len * 0.45) {
+        z._hitDone = true;
+        if (tgtPos && Math.hypot(tgtPos.x - pos.x, tgtPos.z - pos.z) < ZOMBIE.attackR * 1.3) {
+          if (tgt === 'player') { drain = Math.min(100, drain + ZOMBIE.dmg); if (drain >= 100) lose(); }
+          else if (tgt && tgt.vrm) { tgt.hp -= ZOMBIE.dmg; if (tgt.hp <= 0) kenDie(tgt); }
+        }
+      }
+      if (z.atkT >= len) { z.state = tgt ? 'chase' : 'wander'; z.atkCd = ZOMBIE.atkCd; zombieAnim(z, 'walk'); }
+      z.mixer.update(dt); z.vrm.update(dt);
+      continue;
+    }
+    if (tgt && td < ZOMBIE.attackR && z.atkCd <= 0) {   // 襲い掛かる
+      z.state = 'attack'; z.atkT = 0; z._hitDone = false;
+      zombieAnim(z, 'attack');
+      if (tgtPos) z.vrm.scene.rotation.y = Math.atan2(tgtPos.x - pos.x, tgtPos.z - pos.z);
+      z.mixer.update(dt); z.vrm.update(dt);
+      continue;
+    }
+    // 移動: 追跡 or 屋敷を徘徊
+    z.repathT -= dt;
+    let goal = null;
+    if (tgt) { z.state = 'chase'; goal = { x: Math.round(tgtPos.x / TILE), z: Math.round(tgtPos.z / TILE), level: zc.level }; }
+    else {
+      z.state = 'wander';
+      if (!z.wanderTo || (Math.hypot(z.wanderTo.x - zc.x, z.wanderTo.z - zc.z) < 1.5)) {
+        const r = dg.rooms[(Math.random() * dg.rooms.length) | 0];
+        z.wanderTo = (r.level || 0) === zc.level ? { x: r.cx, z: r.cz, level: zc.level } : null;
+        z.repathT = 0;
+      }
+      goal = z.wanderTo;
+    }
+    if (goal && z.repathT <= 0) {
+      z.repathT = tgt ? 0.7 : 2.0;
+      z.path = findPath(nav, zc, goal);
+      z.seg = 1;
+    }
+    let mvx = 0, mvz = 0;
+    if (z.path && z.seg < z.path.length) {
+      const n = z.path[z.seg];
+      const tx = n.x * TILE, tz = n.z * TILE;
+      const dx = tx - pos.x, dz = tz - pos.z;
+      const dl = Math.hypot(dx, dz);
+      if (dl < 0.35) z.seg++;
+      else { mvx = dx / dl; mvz = dz / dl; }
+    } else if (tgt && td > ZOMBIE.attackR * 0.8) {
+      _zd.set(tgtPos.x - pos.x, 0, tgtPos.z - pos.z).normalize(); mvx = _zd.x; mvz = _zd.z;
+    }
+    if (mvx || mvz) {
+      const sp = ZOMBIE.speed * (tgt ? 1.25 : 1);
+      kenMove(z, mvx * sp * dt, mvz * sp * dt);
+      const wy = Math.atan2(mvx, mvz);
+      let dy = wy - z.vrm.scene.rotation.y;
+      while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+      z.vrm.scene.rotation.y += dy * Math.min(1, dt * 7);
+    }
+    stuckRescue(z, pos, dt, () => { z.path = null; z.wanderTo = null; z.repathT = 0; });
+    z.mixer.update(dt);
+    z.vrm.update(dt);
+  }
+}
+
 // 彼女が職員を捕まえて持ち上げる
 function startHoldKen(m) {
   if (m.hp <= 0 || m.state === 'downed' || m.state === 'dissolving') return;   // 事切れた相手は掴まない
@@ -1919,6 +2092,7 @@ function fireShot() {
   const origin = camera.getWorldPosition(new THREE.Vector3());
   const dir = camera.getWorldDirection(new THREE.Vector3());
   // 吸血鬼を球として判定（胸の高さ）
+  gunRecoil = 1;   // 発射の反動（updatePropsで減衰）
   const c = vamp.root.position.clone(); c.y = 1.1;
   const toC = c.sub(origin);
   const t = toC.dot(dir);
@@ -1927,8 +2101,20 @@ function fireShot() {
     const perp2 = toC.lengthSq() - t * t;
     if (perp2 <= 0.8 * 0.8) hit = true;   // 半径0.8m
   }
-  const end = origin.clone().addScaledVector(dir, hit ? t : 30);
-  const g = new THREE.BufferGeometry().setFromPoints([origin.clone().addScaledVector(dir, 0.3), end]);
+  // ゾンビ: 射線上の最も近い1体に命中（胸の高さの球）
+  let zHit = null, zT = hit ? t : 40;
+  for (const z of zombies) {
+    if (!zombieAlive(z)) continue;
+    const zc2 = z.vrm.scene.position.clone(); zc2.y += 1.15;
+    zc2.sub(origin);
+    const zt = zc2.dot(dir);
+    if (zt <= 0 || zt >= zT) continue;
+    if (zc2.lengthSq() - zt * zt <= 0.55 * 0.55) { zHit = z; zT = zt; }
+  }
+  if (zHit) { hit = false; zombieShot(zHit, dir); }
+  const end = origin.clone().addScaledVector(dir, zHit ? zT : (hit ? t : 30));
+  const mz = gunMuzzleWorld(_gunMz) || origin.clone().addScaledVector(dir, 0.3);
+  const g = new THREE.BufferGeometry().setFromPoints([mz.clone(), end]);
   const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: hit ? 0xfff0a0 : 0x88bbff, transparent: true, opacity: 0.9 }));
   scene.add(line); shotFx.push({ line, t: 0 });
   if (hit) {   // 撃たれても硬直しない。捕食中なら引き剥がして少し回復
@@ -3618,14 +3804,28 @@ function updateProps(dt) {
       gameEvent('propLanded', pr);
     }
   }
-  // 持っているプロップは目の前に追従
+  // 持っているプロップは目の前に追従（銃はカメラ基準＝ピッチ込みでクロスヘア方向を向く）
   if (heldProp) {
     const m = heldProp.mesh;
-    m.position.set(
-      player.pos.x - Math.sin(player.yaw) * 0.55 + Math.cos(player.yaw) * 0.22,
-      player.pos.y - 0.32,
-      player.pos.z - Math.cos(player.yaw) * 0.55 - Math.sin(player.yaw) * 0.22);
-    m.rotation.y = player.yaw;
+    if (heldWeapon()) {
+      camera.getWorldDirection(_gunF);
+      _gunR.crossVectors(_gunF, _yUp).normalize();
+      _gunU.crossVectors(_gunR, _gunF);
+      gunRecoil = Math.max(0, gunRecoil - dt * 7);
+      const rc = gunRecoil * gunRecoil;   // 戻りは滑らかに
+      m.position.copy(camera.position)
+        .addScaledVector(_gunR, 0.26)
+        .addScaledVector(_gunU, -0.2 + rc * 0.02)
+        .addScaledVector(_gunF, 0.42 - rc * 0.11);   // 発射時に手前へ引く
+      m.quaternion.copy(camera.quaternion).multiply(_gunAlign);   // モデル+X→視線前方
+      if (rc > 0.001) { _gunQ.setFromAxisAngle(_gunR, rc * 0.1); m.quaternion.premultiply(_gunQ); }   // 銃口が軽く跳ね上がる
+    } else {
+      m.position.set(
+        player.pos.x - Math.sin(player.yaw) * 0.55 + Math.cos(player.yaw) * 0.22,
+        player.pos.y - 0.32,
+        player.pos.z - Math.cos(player.yaw) * 0.55 - Math.sin(player.yaw) * 0.22);
+      m.rotation.set(0, player.yaw, 0);
+    }
   }
   // 視線ハイライト（プレイ中・非捕縛・メモ閲覧中でない時のみ）
   hoverProp = null;
@@ -3705,6 +3905,16 @@ function closeMemo() { memoOpen = false; if (memoEl) memoEl.style.display = 'non
 // ライフル/ショックガンを持っている時だけショットが撃てる。ショックガンは右クリックで
 // swing-catch 方式の引き寄せ（プロップ=ばね / 吸血鬼=ラグドール化して部位ピン / マント=布頂点ピン）
 const heldWeapon = () => heldProp && (heldProp.data.model === 'rifle' || heldProp.data.model === 'shockgun') ? heldProp.data.model : null;
+const _gunF = new THREE.Vector3(), _gunR = new THREE.Vector3(), _gunU = new THREE.Vector3(), _gunMz = new THREE.Vector3();
+let gunRecoil = 0;   // 1=発射直後 → 0 へ減衰
+const _gunAlign = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, 0)), _gunQ = new THREE.Quaternion();   // +X→-Z（カメラ前方）
+const GUN_MUZZLE = { rifle: [0.34, 0.06, 0], shockgun: [0.3, 0.06, 0] };
+function gunMuzzleWorld(out) {   // 現在の銃口ワールド座標（銃を持っていなければ null）
+  const w = heldWeapon();
+  if (!w) return null;
+  heldProp.mesh.updateMatrixWorld();
+  return heldProp.mesh.localToWorld(out.set(GUN_MUZZLE[w][0], GUN_MUZZLE[w][1], GUN_MUZZLE[w][2]));
+}
 const _sgAnchor = new THREE.Vector3(), _sgDir = new THREE.Vector3(), _sgV = new THREE.Vector3();
 const SG_RANGE = 16, SG_HOLD = 2.3, SG_BONES = ['head', 'neck', 'chest', 'spine', 'hips', 'leftHand', 'rightHand', 'leftLowerArm', 'rightLowerArm', 'leftFoot', 'rightFoot', 'leftLowerLeg', 'rightLowerLeg'];
 let sgPullProp = null;   // 引き寄せ中のプロップ
@@ -3906,7 +4116,42 @@ function buildDoors() {
     g.rotation.y = base;
     return g;
   };
+  // 大扉: 3セル幅の観音開きゲート（枠=アーチ左右反転+上段ディテール、扉=wall-wood上下2段×2枚）
+  const makeGateGroup = (d) => {
+    const arch = partsCache.gatearchside, top = partsCache.gatearchtop, wood = partsCache.gateleaf;
+    if (!arch || !top || !wood) return null;
+    const U = TILE / SCALE;          // 1セル幅（キット単位）
+    const H = wallH / SCALE;         // 壁1段の高さ（キット単位）
+    const g = new THREE.Group();
+    const put = (part, z, y, mirror, parent) => {   // 壁部材はネイティブでZ方向に伸びる（rotation=ry+π/2でワールドXへ）
+      const o = part.obj.clone(true);
+      o.position.set(0, y, z);
+      if (mirror) o.scale.z *= -1;
+      (parent || g).add(o);
+      return o;
+    };
+    put(arch, -U / 2, 0, true); put(top, -U / 2, H, true);        // 左列（反転＝開口を中央へ）
+    put(arch, U / 2, 0, false); put(top, U / 2, H, false);        // 右列
+    const leafL = new THREE.Group(); leafL.position.set(0, 0, -U); g.add(leafL);   // 左蝶番（外端）
+    const leafR = new THREE.Group(); leafR.position.set(0, 0, U); g.add(leafR);    // 右蝶番
+    put(wood, U / 2, 0, false, leafL); put(wood, U / 2, H, false, leafL);
+    put(wood, -U / 2, 0, true, leafR); put(wood, -U / 2, H, true, leafR);
+    g.scale.set(SCALE, SCALE, SCALE * 1.5);   // 3セル開口へ横1.5倍
+    g.position.set(d.x * TILE, (d.level || 0) * STORY_H, d.z * TILE);
+    g.rotation.y = (d.ry || 0) + WALL_RY_OFFSET;
+    g.userData.gate = { leafL, leafR };
+    return g;
+  };
   for (const d of (dg.doors || [])) {
+    if (d.type === 'gate') {
+      const g = makeGateGroup(d);
+      if (!g) continue;
+      g.userData.item = d;
+      scene.add(g);
+      doorObjs.push({ data: d, group: g, open: false, gate: true, anim: 0, leafL: g.userData.gate.leafL, leafR: g.userData.gate.leafR });
+      if (nav?.doorSolid && d.cells) for (const c of d.cells) nav.doorSolid.add(c[0] + ',' + c[1]);
+      continue;
+    }
     const g = makeDoorGroup(d.x, d.z, d.ry, d.level);
     if (!g) continue;
     g.userData.item = d;
@@ -3927,10 +4172,17 @@ function buildDoors() {
     doorObjs.push({ data: { x: sh.x, z: sh.z, ry: sh.ry || 0, level: sh.level || 0 }, group: g, open: false, auto: true, anim: 0 });
   }
 }
-function doorSolidAt(cx, cz) { return doorObjs.some((dr) => !dr.auto && !dr.open && Math.round(dr.data.x) === cx && Math.round(dr.data.z) === cz); }
+function doorSolidAt(cx, cz) {
+  return doorObjs.some((dr) => !dr.auto && !dr.open
+    && (dr.data.cells ? dr.data.cells.some((c) => c[0] === cx && c[1] === cz)
+      : (Math.round(dr.data.x) === cx && Math.round(dr.data.z) === cz)));
+}
 function openDoor(dr) {
   dr.open = true; dr.anim = 0;
-  if (nav?.doorSolid) nav.doorSolid.delete(Math.round(dr.data.x) + ',' + Math.round(dr.data.z));
+  if (nav?.doorSolid) {
+    if (dr.data.cells) for (const c of dr.data.cells) nav.doorSolid.delete(c[0] + ',' + c[1]);
+    else nav.doorSolid.delete(Math.round(dr.data.x) + ',' + Math.round(dr.data.z));
+  }
   gameEvent('doorOpened', dr.data);
 }
 function updateDoors(dt) {
@@ -3957,6 +4209,22 @@ function updateDoors(dt) {
   for (const dr of doorObjs) {
     const gd = GIMMICK.door;
     const openRad = (gd.angleDeg * Math.PI / 180) * (gd.dir >= 0 ? 1 : -1);
+    if (dr.gate) {   // 大扉: 専用鍵(gate:true)を持って近づくと観音開き（鍵は消費しない）
+      if (!dr.open && phase === 'playing' && heldProp?.data.model === 'key' && heldProp.data.gate) {
+        const gx = dr.data.x * TILE, gz = dr.data.z * TILE, gy = (dr.data.level || 0) * STORY_H;
+        if (Math.hypot(player.pos.x - gx, (player.pos.y - EYE_H) - gy, player.pos.z - gz) < 3.6) {
+          openDoor(dr);
+          gameEvent('gateOpened', dr.data);
+        }
+      }
+      if (dr.open && dr.anim < 1) {
+        dr.anim = Math.min(1, dr.anim + dt * 0.7);
+        const a = dr.anim * 115 * Math.PI / 180;   // 奥側（進行方向）へ開く
+        dr.leafL.rotation.y = a;
+        dr.leafR.rotation.y = -a;
+      }
+      continue;
+    }
     if (dr.auto) {   // 鍵なしドア：誰か（プレイヤー/職員/彼女）が近づくと開き、離れると閉じる
       const dx2 = dr.data.x * TILE, dz2 = dr.data.z * TILE, dy2 = (dr.data.level || 0) * STORY_H;
       let near = gimmickTestT > 0 && gimmickTestT % 3 > 1.2;   // テスト開閉中は全ドアが開閉
@@ -3966,6 +4234,11 @@ function updateDoors(dt) {
         if (!near) for (const m of kens) {
           if (m._remove) continue;
           const pp = m.vrm.scene.position;
+          if (Math.hypot(pp.x - dx2, pp.y - dy2, pp.z - dz2) < gd.range) { near = true; break; }
+        }
+        if (!near) for (const z of zombies) {
+          if (!zombieAlive(z)) continue;
+          const pp = z.vrm.scene.position;
           if (Math.hypot(pp.x - dx2, pp.y - dy2, pp.z - dz2) < gd.range) { near = true; break; }
         }
       }
@@ -4293,6 +4566,7 @@ onGameEvent('vampWake', (ev) => {
   }
   vamp.state = 'patrol'; vamp.path = null; vamp.repathT = 0;
 });
+onGameEvent('zombieWake', () => { spawnZombies(); });
 onGameEvent('cutscene', (ev) => { const cs = (dg.cutscenes || []).find((c) => c.id === (ev && ev.id)); if (cs) playCutscene(cs); else console.warn('カットシーンが見つからない:', ev && ev.id); });
 addEventListener('keydown', (e) => { if (e.code === 'Escape' && cutscene.on) csAbort(); });   // ESC＝カットシーン中断
 
@@ -4713,6 +4987,7 @@ renderer.setAnimationLoop(() => {
     updatePlayer(dt);
     updateVamp(dt);
     updateKens(dt);
+    updateZombies(dt);
     updateCaptureView(dt);
     if (goalMesh) {
       goalMesh.rotation.y += dt * 0.8;
@@ -4825,7 +5100,7 @@ renderer.setAnimationLoop(() => {
 
 // ── 起動 ──
 setupTouch();
-Promise.all([loadPaintingCfg(), loadTune(), loadEnemyCfg(), loadLighting(), loadStageCfg(), loadTkSpec()]).then(() => { initKissAudio(); initGunAudio(); return buildDungeon(); }).then(async () => { dg.props = stageCfg?.props || []; dg.doors = stageCfg?.doors || []; dg.achEvents = stageCfg?.achEvents || []; dg.triggers = (stageCfg?.triggers || []).map((t) => ({ ...t, _fired: false })); dg.cutscenes = stageCfg?.cutscenes || []; vamp.inactive = !!stageCfg?.vampInactive || dg.triggers.some((t) => t.event?.type === 'vampWake'); buildProps(); await ensurePart('door'); buildDoors(); loadImpactFx(); }).then(() => { nav = buildNav(dg); return loadVamp(); }).then(() => {
+Promise.all([loadPaintingCfg(), loadTune(), loadEnemyCfg(), loadLighting(), loadStageCfg(), loadTkSpec()]).then(() => { initKissAudio(); initGunAudio(); return buildDungeon(); }).then(async () => { dg.props = stageCfg?.props || []; dg.doors = stageCfg?.doors || []; dg.achEvents = stageCfg?.achEvents || []; dg.triggers = (stageCfg?.triggers || []).map((t) => ({ ...t, _fired: false })); dg.cutscenes = stageCfg?.cutscenes || []; vamp.inactive = !!stageCfg?.vampInactive || dg.triggers.some((t) => t.event?.type === 'vampWake'); buildProps(); await Promise.all([ensurePart('door'), ensurePart('gatearchside'), ensurePart('gatearchtop'), ensurePart('gateleaf')]); buildDoors(); loadImpactFx(); }).then(() => { nav = buildNav(dg); return loadVamp(); }).then(() => {
   initSpeech();
   prepareKenAssets().then(spawnStaff).catch((e) => console.warn('職員配置失敗:', e));
   resetPlayer();
@@ -4855,6 +5130,8 @@ window.__game = {
   editHitAt, dropPropAt,
   get tkSpec() { return tkSpec; }, tkEnsureBeams, updateTk,
   playCutscene, get cutscene() { return cutscene; }, get cutscenes() { return dg?.cutscenes; },
+  get doorObjs() { return doorObjs; }, openDoor,
+  get zombies() { return zombies; }, spawnZombies, get ZOMBIE() { return ZOMBIE; },
   tryShockGrab, shockRelease, get vampGrab() { return { state: vamp.grabState, bone: vamp.grabBone, recover: vamp.rdRecover }; },
   get partsCache() { return partsCache; },
   mouthWorld() { if (!vamp.head) return null; const hp=vamp.head.getWorldPosition(new THREE.Vector3()), hq=vamp.head.getWorldQuaternion(new THREE.Quaternion());
