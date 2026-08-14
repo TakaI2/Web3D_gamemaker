@@ -2017,7 +2017,7 @@ async function tkSetup() {
     scene.add(m);
     tkPrev.objs.push(m);
   }
-  tkPrev.beam = createTkBeam({ ...(beamSpec || {}), frames: { ...((beamSpec || {}).frames || {}), fps: 24 } });
+  tkPrev.beam = createTkBeam({ ...(beamSpec || {}) });
   for (const o of tkPrev.beam.objects) scene.add(o);
   tkPrev.clock = new THREE.Timer ? null : null;
   tkPrev.ready = true;
@@ -2097,7 +2097,7 @@ function tkPreviewTick() {
     if (!tkPrev.ready) { btn.textContent = '読込中…'; await tkSetup().catch((e) => { btn.textContent = '読込失敗: ' + e.message.slice(0, 30); throw e; }); }
     else if (!tkPrev.on) {   // 再ONのたび、現在編集中の beamSpec でビームを作り直す（FX調整を即反映）
       if (tkPrev.beam) { for (const o of tkPrev.beam.objects) scene.remove(o); tkPrev.beam.dispose?.(); }
-      tkPrev.beam = createTkBeam({ ...(beamSpec || {}), frames: { ...((beamSpec || {}).frames || {}), fps: 24 } });
+      tkPrev.beam = createTkBeam({ ...(beamSpec || {}) });
       for (const o of tkPrev.beam.objects) scene.add(o);
     }
     tkPrev.on = !tkPrev.on;

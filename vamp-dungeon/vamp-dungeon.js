@@ -26,7 +26,7 @@ import { holdTool, applyGrip } from '../lib/vrm-tool.js';
 import { createActionRunner } from '../lib/vrm-action.js';
 import { createTkBeam, tkArmRaise, tkHoverStep } from '../lib/vrm-tk.js';
 import { sampleExpr, applyExpr } from '../lib/expr-timeline.js';
-import { createRagdoll, setRagdollActive, updateRagdoll, disposeRagdoll } from '../lib/vrm-ragdoll.js';
+import { createRagdoll, setRagdollActive, updateRagdoll, disposeRagdoll, applyRagdollImpulse } from '../lib/vrm-ragdoll.js';
 import { createDissolve } from '../lib/fx-dissolve.js';
 import { createMeshFx } from '../lib/fx-mesh.js';
 import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
@@ -248,7 +248,7 @@ async function buildDungeon() {
   setStatus('');
 }
 let goalMesh = null, goalLight = null, wallH = 2.0, FLOOR_T = 0.1;
-const FURN_S = 1.4;   // 家具は建築(2.0)より小さめ＝人のスケールに合わせる
+const FURN_S = 2.1;   // 家具スケール（1.4だと小さすぎたため1.5倍。建築は2.0）
 // 抽象名 → 実モデル（キット指定）。部屋の家具は room-gen が返す実名をそのまま使う。
 const MODEL_MAP = {
   floor: [KIT_FURN, 'floorFull'], wall: [KIT, 'wall'], doorway: [KIT, 'wall-doorway-square'],
@@ -491,6 +491,7 @@ async function rebuildItemInstances(excludeFurn = false) {
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _sv = new THREE.Vector3();
   for (const it of dg.items) {
     if (it.model === 'painting') continue;
+    if (it.grabbable && !excludeFurn) continue;   // 掴める家具は物理プロップとして実体化される（編集中は通常表示）
     if (excludeFurn && it.furn) continue;   // 編集モード：家具系は個別メッシュ側で表示
     const pl = itemPlacement(it);
     _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), pl.ry);
@@ -1693,6 +1694,12 @@ function updateOneKen(m, dt) {
     m.vrm.update(dt);
     return;
   }
+  if (m.state === 'tkHeld') {   // 念力で宙吊り（ピン位置は updateTk が毎フレーム動かす）
+    if (m.tkPin) updateRagdoll(m.ragdoll, dt, { floorY: floorYAt(m.vrm.scene.position.x, m.vrm.scene.position.z, m.vrm.scene.position.y), pinBone: m.pinBone || 'chest', pinPos: m.tkPin });
+    if (m.speech) { m.speech.onState('downed'); m.speech.update(dt); }
+    m.vrm.update(dt);
+    return;
+  }
   if (m.state === 'downed') {
     // 吸い尽くされた：ラグドールのまま床へ落ち、崩れて落ち着いたらその場でディソルブ（CityFlyのken方式）
     if (!m._dropped) {   // 手榴弾とライフルを落とす
@@ -1864,6 +1871,7 @@ function startHoldKen(m) {
   if (m.speech) m.speech.bark('grabbed');
   setRagdollActive(m.ragdoll, true);
   setVampAnimForState('capture');
+  capeSettle(0.5);   // 抱え込みの急な姿勢変化でマントが暴れないように
 }
 function releaseHeldKen() {
   const m = vamp.holding;
@@ -2578,7 +2586,7 @@ function editExit() {
   buildWallColliders();
   nav = buildNav(dg);
   buildDoors();
-  rebuildItemInstances();
+  rebuildItemInstances().then(() => syncItemProps());
   $('edit-panel').style.display = 'none';
   setStatus('');
 }
@@ -2617,6 +2625,10 @@ function editSelect(obj, additive) {
   if (csIt && dg.cutscenes?.includes(csIt)) {
     $('ed-cs-open')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     if (csEd.open) openCsEditor(csIt);   // エディタ表示中は選択替えに追従
+  }
+  if (csIt && dg.items?.includes(csIt)) {   // 家具：grabbable の実状態をチェックボックスへ（既定は不可）
+    const gb = $('ed-grabbable');
+    if (gb) gb.checked = csIt.grabbable === true;
   }
   if (csIt && dg.props?.includes(csIt)) {   // プロップ：現在値をパネルへ反映して見える位置へ
     const gb = $('ed-grabbable');
@@ -3252,7 +3264,8 @@ function setupEditUI() {
   });
   $('ed-grabbable').addEventListener('change', (e) => {
     const o = edit.sel[edit.sel.length - 1];
-    if (o?.userData.item && dg.props?.includes(o.userData.item)) o.userData.item.grabbable = e.target.checked;
+    const it2 = o?.userData.item;
+    if (it2 && (dg.props?.includes(it2) || dg.items?.includes(it2))) it2.grabbable = e.target.checked;
   });
   if (stageCfg?.layout) $('ed-layout').value = stageCfg.layout;
   $('ed-part-apply').addEventListener('click', async () => {
@@ -3535,8 +3548,13 @@ const PROP_MAKERS = {
 };
 function propRestY(d) { return floorYAt(d.x * TILE, d.z * TILE, ((d.level || 0) * STORY_H) + 0.5) + 0.06 + (d.yOff || 0); }
 function makePropMesh(d) {
-  const mk = PROP_MAKERS[d.model] || PROP_MAKERS.key;
-  const m = mk();
+  let m;
+  if (PROP_MAKERS[d.model]) m = PROP_MAKERS[d.model]();
+  else if (partsCache[d.model]) {   // ステージ家具（KitchenCabinet等）を物理プロップ化
+    m = new THREE.Group();
+    m.add(partsCache[d.model].obj.clone(true));
+    m.scale.setScalar(FURN_S);   // 家具スケール
+  } else m = PROP_MAKERS.key();
   m.position.set(d.x * TILE, propRestY(d), d.z * TILE);
   m.rotation.y = d.ry || 0;
   m.userData.prop = d;
@@ -3547,6 +3565,23 @@ function buildProps() {
   props.length = 0;
   heldProp = null; hoverProp = null;
   for (const d of (dg.props || [])) {
+    const mesh = makePropMesh(d);
+    scene.add(mesh);
+    props.push({ data: d, mesh, held: false, vel: null });
+  }
+  syncItemProps();
+}
+// grabbable にした家具(items)を物理プロップとして実体化（プレイヤーのE拾い・念力の対象になる）
+async function syncItemProps() {
+  for (let i = props.length - 1; i >= 0; i--) {
+    if (props[i].data.itemProp) { scene.remove(props[i].mesh); props.splice(i, 1); }
+  }
+  for (const it of (dg.items || [])) {
+    if (!it.grabbable || it.model === 'painting') continue;
+    if (!partsCache[it.model] && !PROP_MAKERS[it.model]) await ensurePart(it.model);   // 起動直後は未ロードのことがある
+    if (!partsCache[it.model] && !PROP_MAKERS[it.model]) continue;   // 読込失敗のみ見送り
+    const d = { model: it.model, x: it.x, z: it.z, level: it.level || 0, ry: it.ry || 0,
+      grabbable: true, itemProp: true, yOff: it.y || 0 };
     const mesh = makePropMesh(d);
     scene.add(mesh);
     props.push({ data: d, mesh, held: false, vel: null });
@@ -3959,11 +3994,11 @@ function updateDoors(dt) {
 }
 
 // ══════════ 念力（テレキネシス）: 手からの電撃ビームで職員を撃つ／grabbableな物を浮かせて投げる ══════════
-const TK = { range: 11, propR: 7, cd: 6.5, liftSec: 1.6, zapSec: 0.9, throwSpeed: 15, hitR: 0.9, dmg: 9, kenDown: 2.6 };
+const TK = { range: 11, propR: 7, cd: 6.5, liftSec: 1.6, throwSpeed: 15, hitR: 0.9, dmg: 9, kenDown: 2.6, kenLiftSec: 1.5, kenThrow: 13, pullR: 0.55 };
 let tkSpec = null;
 async function loadTkSpec() {
   tkSpec = await fetchFirst(['./fx/electric_beam.fx.json', '../fx/electric_beam.fx.json'], true);
-  if (tkSpec) tkSpec.frames = { ...(tkSpec.frames || {}), fps: 24 };   // 帯コマ4x4はスペック側・fpsは指定の24へ
+  // 見た目は fx/electric_beam.fx.json が唯一の定義（City-Fly通常攻撃と同じ sheet スタイル・18fps）
 }
 function tkEnsureBeams() {
   const tk = vamp.tk;
@@ -3973,7 +4008,7 @@ function tkEnsureBeams() {
     for (const o of tk.beam.objects) scene.add(o);
   } catch (e) { console.warn('念力ビーム生成失敗:', e.message); }
 }
-const _tkFrom = new THREE.Vector3(), _tkTo = new THREE.Vector3(), _tkD = new THREE.Vector3(), _tkP1 = new THREE.Vector3(), _tkP2 = new THREE.Vector3();
+const _tkFrom = new THREE.Vector3(), _tkTo = new THREE.Vector3(), _tkD = new THREE.Vector3(), _tkP1 = new THREE.Vector3(), _tkP2 = new THREE.Vector3(), _tkQ = new THREE.Quaternion();
 function tkBeamShow(from, to, dt) { if (vamp.tk.beam) vamp.tk.beam.show(from, to, dt, camera.position); }
 function tkBeamHide() { if (vamp.tk.beam) vamp.tk.beam.hide(); }
 function tkHandPos(out) {
@@ -3981,7 +4016,13 @@ function tkHandPos(out) {
   if (h) h.getWorldPosition(out); else out.copy(vamp.root.position);
   return out;
 }
-function tkAbort() { const tk = vamp.tk; if (tk.prop) { tk.prop.tkHeld = false; tk.prop = null; } tk.state = 'idle'; tk.cd = TK.cd * 0.5; tkBeamHide(); }
+function tkAbort() {
+  const tk = vamp.tk;
+  if (tk.prop) { tk.prop.tkHeld = false; tk.prop = null; }
+  if (tk.targetKen?.state === 'tkHeld') { tk.targetKen.state = 'recover'; tk.targetKen.recoverT = 2.0; }
+  tk.targetKen = null;
+  tk.state = 'idle'; tk.cd = TK.cd * 0.5; tkBeamHide();
+}
 function updateTk(dt) {
   const tk = vamp.tk;
   if (!vamp.ready || vamp.inactive || cutscene.on || phase !== 'playing') { if (tk.state !== 'idle') tkAbort(); return; }
@@ -4025,7 +4066,18 @@ function updateTk(dt) {
       const d = m.vrm.scene.position.distanceTo(vp);
       if (d < bkd) { bkd = d; bk = m; }
     }
-    if (bk) { tk.state = 'zap'; tk.t = 0; tk.targetKen = bk; tk.hand = Math.random() < 0.5 ? 'left' : 'right'; }
+    if (bk) {   // 職員を吊り上げ → ぶん投げ or 引き寄せて吸血
+      tk.state = 'kenLift'; tk.t = 0; tk.targetKen = bk; tk.hand = Math.random() < 0.5 ? 'left' : 'right';
+      tk.plan = Math.random() < 0.5 ? 'throw' : 'kiss';
+      bk.state = 'tkHeld'; bk.path = null;
+      bk.pinBone = ['chest', 'neck', 'head'].find((b) => bk.ragdoll?.idxOf?.[b] != null) || 'chest';
+      bk.tkPin = bk.tkPin || new THREE.Vector3();
+      const cb = bk.vrm.humanoid?.getNormalizedBoneNode('chest');
+      if (cb) cb.getWorldPosition(bk.tkPin); else bk.tkPin.copy(bk.vrm.scene.position).setY(bk.vrm.scene.position.y + 1.1);
+      setRagdollActive(bk.ragdoll, true);
+      if (bk.speech) bk.speech.bark('grabbed');
+      if (vampSpeech) vampSpeech.bark('spot');
+    }
     return;
   }
   if (tk.state === 'lift') {
@@ -4050,23 +4102,48 @@ function updateTk(dt) {
     }
     return;
   }
-  if (tk.state === 'zap') {
+  if (tk.state === 'kenLift' || tk.state === 'kenPull') {
     tk.t += dt;
     const m = tk.targetKen;
-    if (!m || !kenAlive(m)) { tkAbort(); return; }
+    if (!m || m.state !== 'tkHeld' || m.hp <= 0) { tkAbort(); return; }
     if (kenCell(m).level !== vampCell().level) { tkAbort(); return; }
-    tkHandPos(_tkFrom);
-    const chest = m.vrm.humanoid?.getNormalizedBoneNode('chest');
-    if (chest) chest.getWorldPosition(_tkTo); else _tkTo.copy(m.vrm.scene.position).setY(m.vrm.scene.position.y + 1.2);
-    tkBeamShow(_tkFrom, _tkTo, dt);
-    if (tk.t >= TK.zapSec) {   // 感電: ラグドールで吹き飛び→しばらくで復帰
-      m.recoverT = TK.kenDown;
-      setRagdollActive(m.ragdoll, true);
-      if (m.speech) m.speech.bark('witness');
-      playGunshot(m.vrm.scene.position);
-      tk.targetKen = null; tk.state = 'idle'; tk.cd = TK.cd + Math.random() * 3;
-      tkBeamHide();
+    if (tk.state === 'kenLift') {
+      // 吊り上げ点＝彼女の斜め前・頭上（プロップの浮遊と同じ見せ方。ラグドールはピンからぶら下がる）
+      _tkD.subVectors(m.vrm.scene.position, vp).setY(0);
+      if (_tkD.lengthSq() < 1e-4) _tkD.set(0, 0, 1); else _tkD.normalize();
+      _tkTo.set(vp.x, vp.y + 2.15, vp.z).addScaledVector(_tkD, 1.4);
+      m.tkPin.lerp(_tkTo, Math.min(1, dt * 3));
+      if (tk.t >= TK.kenLiftSec) {
+        if (tk.plan === 'throw') {   // プレイヤーへぶん投げる（ラグドールごと）
+          _tkD.set(player.pos.x, player.pos.y - 0.4, player.pos.z).sub(m.tkPin).normalize();
+          _tkD.y += 0.12;
+          _tkD.multiplyScalar(TK.kenThrow / 60);   // impulse＝1ステップ分の変位
+          applyRagdollImpulse(m.ragdoll, _tkD);
+          m.state = 'recover'; m.recoverT = TK.kenDown;
+          if (m.speech) m.speech.bark('thrown');
+          tk.targetKen = null; tk.state = 'idle'; tk.cd = TK.cd + Math.random() * 3;
+          tkBeamHide();
+          return;
+        }
+        tk.state = 'kenPull'; tk.t = 0;   // 引き寄せへ
+      }
+    } else {
+      // kenPull: 口元へ引き寄せ → 到達で吸血（holdKen）へ移行
+      vamp.root.getWorldQuaternion(_tkQ);
+      _tkD.copy(bodyFwd).applyQuaternion(_tkQ); _tkD.y = 0;
+      if (_tkD.lengthSq() < 1e-4) _tkD.set(0, 0, 1); else _tkD.normalize();
+      const mouthY = vamp.head ? vamp.head.getWorldPosition(_tkP1).y : vp.y + 1.32;
+      _tkTo.set(vp.x + _tkD.x * 0.45, mouthY, vp.z + _tkD.z * 0.45);
+      m.tkPin.lerp(_tkTo, Math.min(1, dt * 3.5));
+      if (m.tkPin.distanceTo(_tkTo) < TK.pullR || tk.t > 3) {
+        tk.targetKen = null; tk.state = 'idle'; tk.cd = TK.cd + Math.random() * 3;
+        tkBeamHide();
+        startHoldKen(m);   // そのまま肩を掴んで吸血（tkHeld→grabbed）
+        return;
+      }
     }
+    tkHandPos(_tkFrom);
+    tkBeamShow(_tkFrom, m.tkPin, dt);
     return;
   }
 }
@@ -4648,15 +4725,21 @@ renderer.setAnimationLoop(() => {
     if (vamp.hips && !vamp.grabState && vamp.rdRecover <= 0) { vamp.hips.position.x = hipsRest.x; vamp.hips.position.z = hipsRest.z; }   // 腰はその場（前進はフットロック）。ミキサーの後に効かせる
     vamp.vrm.scene.updateMatrixWorld(true);
     if (phase === 'playing' && !vamp.grabState && vamp.rdRecover <= 0) {
-      const lw = (vamp.state === 'capture' || vamp.state === 'holdKen') ? 1 : (vamp.state === 'chase' ? 0.6 : 0.25);
+      let lw = (vamp.state === 'capture' || vamp.state === 'holdKen') ? 1 : (vamp.state === 'chase' ? 0.6 : 0.25);
       const ltgt = (vamp.state === 'holdKen' && vamp.holding) ? _kpin : player.pos;
-      if (vamp.tk.state === 'lift' || vamp.tk.state === 'zap') {   // 念力中は発射腕を対象へ掲げる
-        const tgt = vamp.tk.state === 'lift' && vamp.tk.prop ? vamp.tk.prop.mesh.position : (vamp.tk.targetKen ? vamp.tk.targetKen.vrm.scene.position : player.pos);
-        tkArmRaise(vamp.vrm, vamp.tk.hand, tgt);
-      }
       if (vamp.state === 'capture' || vamp.state === 'holdKen') applyCaptureLean(1);   // 前傾して覗き込む（足はIKで接地）
+      // 口元の獲物（NPC吸血）は頭から至近すぎて背骨IKが発振→マントが暴れる → 距離でフェード。
+      // プレイヤー捕縛キスは従来挙動を維持（kissApproach 側で調整済みのため対象外）
+      if (vamp.state === 'holdKen' && vamp.head) {
+        vamp.head.getWorldPosition(_tkP2);
+        lw *= Math.max(0, Math.min(1, (_tkP2.distanceTo(ltgt) - 0.45) / 0.4));
+      }
       applyBodyLook(lw, ltgt);   // 背骨も対象へ（顔だけ向く違和感の解消）
       headLook(lw);
+      if (vamp.tk.state === 'lift' || vamp.tk.state === 'kenLift' || vamp.tk.state === 'kenPull') {   // 念力中は発射腕を対象へ掲げる（背骨回転の後＝歩行/注視で肩が動いても腕が対象を向く）
+        const tgt = vamp.tk.state === 'lift' && vamp.tk.prop ? vamp.tk.prop.mesh.position : (vamp.tk.targetKen ? (vamp.tk.targetKen.tkPin || vamp.tk.targetKen.vrm.scene.position) : player.pos);
+        tkArmRaise(vamp.vrm, vamp.tk.hand, tgt);
+      }
     }
     updateVampExpr(dt);
     // 口パク＋行表情は状態表情の「後」・vrm.update の「前」（viseme が最後に勝つ＝npc-speech の設計順）
