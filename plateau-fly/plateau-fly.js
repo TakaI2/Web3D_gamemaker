@@ -80,7 +80,7 @@ function attachCharFill(root) {   // プレイヤーVRM読込時に呼ぶ（子�
   root.add(charFill.rim);
 }
 const player = {
-  vrm: null, mixer: null, cloth: null, states: {}, current: null, ready: false,
+  vrm: null, mixer: null, cloth: null, states: {}, current: null, ready: false, faceOffset: Math.PI,
   pos: new THREE.Vector3(0, 230, 150), vel: new THREE.Vector3(), yaw: Math.PI, fwdY: 0,
   grounded: false,
   oneShot: null,        // { name, until } 一発再生（shot/throw/grab/lightning/large/totem）
@@ -730,16 +730,87 @@ function mpUpdate(dt) {
 }
 function clampSpeed(v, max) { const s = v.length(); if (s > max) v.multiplyScalar(max / s); }
 
+// ── プレイヤーキャラ選択（npc.json交換）──
+const NPC_SEL_KEY = 'cityfly.playerNpc';
+const REF_HEAD_H = 1.403;   // Joy_reborn の頭ボーン高さ(レスト時)＝身長正規化の基準(Joyがscale1.0になる値)
+function npcSelection() { try { return localStorage.getItem(NPC_SEL_KEY) || 'file:' + PLAYER_NPC; } catch { return 'file:' + PLAYER_NPC; } }
+function vrmUrlOf(bundle) { return bundle.vrm.startsWith('data:') ? URL.createObjectURL(dataURIToBlob(bundle.vrm)) : bundle.vrm; }
+// 持ち込みVRMは IndexedDB（27MB級なので localStorage 不可）
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open('cityfly-npc', 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore('npc');
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+  });
+}
+async function idbPutNpc(name, bundle) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => { const tx = db.transaction('npc', 'readwrite'); tx.objectStore('npc').put(bundle, name); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+}
+async function idbGetNpc(name) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => { const rq = db.transaction('npc').objectStore('npc').get(name); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error); });
+}
+async function idbDelNpc(name) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => { const tx = db.transaction('npc', 'readwrite'); tx.objectStore('npc').delete(name); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+}
+async function idbListNpc() {
+  const db = await idbOpen();
+  return new Promise((res, rej) => { const rq = db.transaction('npc').objectStore('npc').getAllKeys(); rq.onsuccess = () => res(rq.result || []); rq.onerror = () => rej(rq.error); });
+}
+async function fetchSelectedBundle() {
+  const sel = npcSelection();
+  try {
+    if (sel.startsWith('idb:')) { const bd = await idbGetNpc(sel.slice(4)); if (bd?.vrm) return bd; }
+    else { const r = await fetch('../npc/' + sel.replace(/^file:/, '')); if (r.ok) { const bd = await r.json(); if (bd?.vrm) return bd; } }
+  } catch (e) { console.warn('選択キャラ読込失敗:', e); }
+  return await (await fetch('../npc/' + PLAYER_NPC)).json();   // フォールバック＝既定キャラ
+}
+function disposePlayerModel() {
+  if (!player.vrm) return;
+  for (const st of Object.values(player.states)) {
+    try { st.action?.stop(); } catch { /* noop */ }
+    for (const ef of (st.effects || [])) { try { scene.remove(ef.fx.object3D); ef.fx.dispose?.(); } catch { /* noop */ } }
+  }
+  player.states = {}; player.current = null;
+  try { player.mixer?.stopAllAction(); } catch { /* noop */ }
+  player.mixer = null;
+  try { player.cloth?.dispose?.(); } catch { /* noop */ }
+  player.cloth = null;
+  try { scene.remove(player.vrm.scene); } catch { /* noop */ }
+  player.vrm = null; player.ready = false;
+}
+let npcSwapBusy = false;
+async function swapPlayer(sel) {   // sel='file:xxx.npc.json' | 'idb:名前'
+  if (npcSwapBusy) return;
+  npcSwapBusy = true;
+  try {
+    try { localStorage.setItem(NPC_SEL_KEY, sel); } catch { /* noop */ }
+    disposePlayerModel();
+    await loadPlayer();
+  } finally { npcSwapBusy = false; }
+}
 async function loadPlayer() {
   try {
-    const bundle = await (await fetch('../npc/' + PLAYER_NPC)).json();
+    const bundle = await fetchSelectedBundle();
     if (!bundle?.vrm) { showError('プレイヤーVRMが見つかりません'); return; }
     const loader = new GLTFLoader();
     loader.register((p) => new VRMLoaderPlugin(p, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }) }));
-    const gltf = await loader.loadAsync(URL.createObjectURL(dataURIToBlob(bundle.vrm)));
+    const gltf = await loader.loadAsync(vrmUrlOf(bundle));
     const vrm = gltf.userData.vrm;
     vrm.scene.position.copy(player.pos);
-    vrm.scene.rotation.y = player.yaw + FACE_OFFSET;
+    // 正面向き: VRM0系は正面が逆焼き→180°。バンドルの faceOffsetDeg で上書き可
+    player.faceOffset = bundle.faceOffsetDeg != null ? bundle.faceOffsetDeg * Math.PI / 180 : (vrm.meta?.metaVersion === '0' ? Math.PI : 0);
+    // 身長を Joy_reborn 基準に正規化（bundle.scale で上書き可）
+    vrm.scene.updateMatrixWorld(true);
+    const _hn = vrm.humanoid?.getRawBoneNode?.('head');
+    let _headH = 0;
+    if (_hn) { const _hw = new THREE.Vector3(); _hn.getWorldPosition(_hw); _headH = _hw.y - vrm.scene.position.y; }
+    const _psc = bundle.scale || (_headH > 0.2 ? REF_HEAD_H / _headH : 1);
+    vrm.scene.scale.setScalar(_psc);
+    vrm.scene.rotation.y = player.yaw + player.faceOffset;
     scene.add(vrm.scene); vrm.scene.updateMatrixWorld(true);
     attachCharFill(vrm.scene);   // 夜間のキャラ補助ライト（追従2灯）
     player.vrm = vrm;
@@ -785,6 +856,53 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
+window.__fly = { get player() { return player; }, get camera() { return camera; }, swapPlayer, idbPutNpc, npcSelection };
+// ── キャラ選択パネル（👤ボタン）──
+function setupCharUI() {
+  const btn = document.createElement('button');
+  btn.textContent = '👤 キャラ';
+  btn.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:30;background:#25304a;border:1px solid #46608c;color:#cfe;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;';
+  const panel = document.createElement('div');
+  panel.style.cssText = 'display:none;position:fixed;left:12px;bottom:56px;z-index:31;background:rgba(14,18,30,0.95);border:1px solid #46608c;border-radius:8px;padding:10px 12px;font-size:13px;color:#cfe;width:270px;max-height:60vh;overflow-y:auto;';
+  panel.innerHTML = '<div style="font-weight:bold;color:#9fe6ff;margin-bottom:6px;">プレイヤーキャラ交換</div>'
+    + '<div id="char-list"></div>'
+    + '<div style="border-top:1px solid #345;margin-top:8px;padding-top:8px;">'
+    + '<button id="char-import" style="width:100%;">＋ VRMファイルを読み込む</button>'
+    + '<input type="file" id="char-file" accept=".vrm" style="display:none;">'
+    + '<div style="font-size:11px;color:#9ab;margin-top:4px;">操作・攻撃・マント・アニメはそのまま、モデルだけ入れ替わります。読み込んだVRMはブラウザに保存され次回も選べます。</div></div>';
+  document.body.appendChild(btn); document.body.appendChild(panel);
+  const refresh = async () => {
+    const list = panel.querySelector('#char-list');
+    const sel = npcSelection();
+    let files = [PLAYER_NPC];
+    try { const r = await fetch('../npc/manifest.json'); if (r.ok) { const mj = await r.json(); if (Array.isArray(mj.players) && mj.players.length) files = mj.players; } } catch { /* 既定のみ */ }
+    const customs = await idbListNpc().catch(() => []);
+    const row = (key, label, del) => '<div style="display:flex;gap:4px;align-items:center;margin-top:3px;">'
+      + '<button data-sel="' + key + '" style="flex:1;text-align:left;background:' + (sel === key ? '#3d6b46' : '#25304a') + ';border:1px solid #46608c;color:#cfe;border-radius:4px;padding:5px 8px;cursor:pointer;">' + (sel === key ? '✓ ' : '') + label + '</button>'
+      + (del ? '<button data-del="' + key.slice(4) + '" style="background:#5a2a2a;border:1px solid #845;color:#fcc;border-radius:4px;cursor:pointer;">🗑</button>' : '') + '</div>';
+    list.innerHTML = files.map((f) => row('file:' + f, f.replace(/\.npc\.json$/, ''), false)).join('')
+      + customs.map((c) => row('idb:' + c, '📦 ' + c, true)).join('');
+    for (const b of list.querySelectorAll('[data-sel]')) b.addEventListener('click', async () => { b.textContent = '読込中…'; await swapPlayer(b.dataset.sel); refresh(); });
+    for (const b of list.querySelectorAll('[data-del]')) b.addEventListener('click', async () => { await idbDelNpc(b.dataset.del); if (npcSelection() === 'idb:' + b.dataset.del) await swapPlayer('file:' + PLAYER_NPC); refresh(); });
+  };
+  btn.addEventListener('click', () => { const on = panel.style.display === 'none'; panel.style.display = on ? 'block' : 'none'; if (on) refresh(); });
+  panel.querySelector('#char-import').addEventListener('click', () => panel.querySelector('#char-file').click());
+  panel.querySelector('#char-file').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const name = file.name.replace(/\.vrm$/i, '');
+    const dataUri = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(fr.error); fr.readAsDataURL(file); });
+    // マントは既定キャラのものを流用（細かい調整は fps-cloth-vrm でバンドルを作って npc/ へ）
+    let cloth = null;
+    try { cloth = (await (await fetch('../npc/' + PLAYER_NPC)).json()).cloth || null; } catch { /* マント無し */ }
+    const bundle = { format: 'fps-npc-bundle', version: 1, name, vrm: dataUri, cloth, vrma: null, timeline: null };
+    await idbPutNpc(name, bundle);
+    await swapPlayer('idb:' + name);
+    refresh();
+    e.target.value = '';
+  });
+}
+setupCharUI();
 function camForwardRight() {
   const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
   _fwd.set(cp * Math.sin(camYaw), sp, cp * Math.cos(camYaw)).normalize();
@@ -817,7 +935,7 @@ function updateFlight(dt) {
     groundCollide();                    // 地面(地形)に着地
   }
   player.vrm.scene.position.copy(player.pos);
-  player.vrm.scene.rotation.y = player.yaw + FACE_OFFSET;
+  player.vrm.scene.rotation.y = player.yaw + player.faceOffset;
   // 前方アンカー（掴んだ物の吸着点）。掴み中はカメラ3D前方＝上下にも振り回せる
   const reach = GRAB_FRONT_DIST + (grabbedCar ? 1.6 : 0);
   if (holding) frontAnchor.copy(_fwd).multiplyScalar(reach).add(player.pos);
@@ -1017,7 +1135,7 @@ function computeEffectTransform(trk, obj) {
       return;
     }
   }
-  _efQuat.setFromAxisAngle(_EF_UP, player.yaw + FACE_OFFSET);
+  _efQuat.setFromAxisAngle(_EF_UP, player.yaw + player.faceOffset);
   obj.quaternion.copy(_efQuat).multiply(_efTmpQ.setFromEuler(_efE));
   obj.position.copy(_efOff.set(pos[0], pos[1], pos[2]).applyQuaternion(_efQuat)).add(player.pos);
 }
@@ -1040,7 +1158,7 @@ function beamTrackEndpoints(trk, outFrom, outTo) {
     }
   }
   if (!fromSet) {
-    _efQuat.setFromAxisAngle(_EF_UP, player.yaw + FACE_OFFSET);
+    _efQuat.setFromAxisAngle(_EF_UP, player.yaw + player.faceOffset);
     outFrom.copy(_efOff.set(pos[0], pos[1], pos[2]).applyQuaternion(_efQuat)).add(player.pos);
   }
   // to: 攻撃中は実着弾点へ（エフェクト＝破壊地点）。それ以外はエディタ設定（bone/gizmo）
@@ -1051,7 +1169,7 @@ function beamTrackEndpoints(trk, outFrom, outTo) {
     if (node) { node.updateWorldMatrix(true, false); node.getWorldPosition(outTo); return; }
   }
   const tp = to.pos || [0, 1.2, 2];
-  _efQuat.setFromAxisAngle(_EF_UP, player.yaw + FACE_OFFSET);
+  _efQuat.setFromAxisAngle(_EF_UP, player.yaw + player.faceOffset);
   outTo.copy(_efOff.set(tp[0], tp[1], tp[2]).applyQuaternion(_efQuat)).add(player.pos);
 }
 function driveStateEffects(st, frame, dt) {
@@ -2760,6 +2878,15 @@ function applyHitToBuilding(hit, dmg, fxScale = 1) {
   else if (hit.object.userData && hit.object.userData.rec) applyCarve(hit.object.userData.rec, hit.point, dmg, fxScale);
 }
 function hitCarBeam(car) {
+  if (car.jet && !car.thrown && !car.dead) {   // 戦闘機: 撃墜＝きりもみ落下（着地/建物で爆発）。落下中に追撃なら即爆発
+    car.shotDown = true; car.thrown = true; car.thrownT = 0;
+    car.vel = (car.vel || new THREE.Vector3()).copy(car.flyVel || car.vel || new THREE.Vector3());
+    car.vel.y = Math.min(car.vel.y, 2);
+    car.angVel = new THREE.Vector3((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
+    thrownCars.push(car);
+    spawnImpactFx(car.mesh.position.clone(), 1);
+    return;
+  }
   const ti = thrownCars.indexOf(car); if (ti >= 0) thrownCars.splice(ti, 1);
   breakCar(car, car.mesh.position.clone());
 }
@@ -2772,9 +2899,9 @@ function fireBeam(bldDmg, kenDmg, colorHex, thick) {
   const hits = _shootRay.intersectObjects(cityDamaged ? [cityRoot, cityDamaged] : [cityRoot], true);
   const bldT = hits.length ? hits[0].distance : Infinity;
   let carBest = null, carT = Infinity;
-  for (const car of cars) {
+  for (const car of carsAndJets()) {
     if (car.dead || car.grabbed || car.tornado) continue;
-    const t = rayHitSphere(_muzzle, _camDir, car.mesh.position, 2.4, SHOOT_RANGE);
+    const t = rayHitSphere(_muzzle, _camDir, car.mesh.position, car.hitR || 2.4, SHOOT_RANGE);
     if (t < carT) { carT = t; carBest = car; }
   }
   let kenBest = null, kenT = Infinity;
@@ -2857,9 +2984,9 @@ function fireSuperPierce() {
       }
     }
   }
-  for (const car of cars) {
+  for (const car of carsAndJets()) {
     if (car.dead || car.grabbed || car.tornado) continue;
-    if (rayHitSphere(_muzzle, _camDir, car.mesh.position, 2.4, endT) < Infinity) hitCarBeam(car);
+    if (rayHitSphere(_muzzle, _camDir, car.mesh.position, car.hitR || 2.4, endT) < Infinity) hitCarBeam(car);
   }
   for (const m of kens) {
     if (m.dissolving || m.eating || m.grabbed || m.tornado) continue;
@@ -3044,9 +3171,9 @@ function updateAttacks(dt) {
         if (rayHitSphere(_muzzle, _camDir, mpCenterOf(h, _mpV3), 1.1, endT) < Infinity) mp.sendHit(h.id, MP_DMG.large, 'large');
       }
     }
-    for (const car of cars) {
+    for (const car of carsAndJets()) {
       if (car.dead || car.grabbed || car.tornado) continue;
-      if (rayHitSphere(_muzzle, _camDir, car.mesh.position, 2.4, LARGE_BEAM_RANGE) < Infinity) hitCarBeam(car);
+      if (rayHitSphere(_muzzle, _camDir, car.mesh.position, car.hitR || 2.4, LARGE_BEAM_RANGE) < Infinity) hitCarBeam(car);
     }
     for (const m of kens) {
       if (m.dissolving || m.eating || m.grabbed || m.tornado) continue;
@@ -3129,16 +3256,16 @@ function grabTarget() {
   }
   if (bestKen) { grabKen(bestKen, bestBone); triggerOneShot('grab'); return; }
   // 車（照準レイ→無ければ前方近傍の最寄り）
-  if (!cars.length) return;
+  if (!cars.length && !jets.length) return;
   _grabRay.set(_muzzle, _camDir); _grabRay.far = GRAB_RANGE;
-  const meshes = cars.filter((c) => !c.grabbed && !c.thrown && !c.dead && !c.tornado).map((c) => c.mesh);
+  const meshes = carsAndJets().filter((c) => !c.grabbed && !c.thrown && !c.dead && !c.tornado).map((c) => c.mesh);
   const hit = _grabRay.intersectObjects(meshes, true)[0];
   let car = null;
   if (hit) { let o = hit.object; while (o && !o.userData.car) o = o.parent; if (o) car = o.userData.car; }
   if (!car) {
     _tmpV.copy(_muzzle).addScaledVector(_camDir, HOLD_DIST + 8);
     let best = GRAB_RANGE;
-    for (const c of cars) { if (c.grabbed || c.thrown || c.dead || c.tornado) continue; const d = c.mesh.position.distanceTo(_tmpV); if (d < best) { best = d; car = c; } }
+    for (const c of carsAndJets()) { if (c.grabbed || c.thrown || c.dead || c.tornado) continue; const d = c.mesh.position.distanceTo(_tmpV); if (d < best) { best = d; car = c; } }
   }
   if (car) { car.grabbed = true; grabbedCar = car; car.holdVel = car.holdVel || new THREE.Vector3(); car.holdVel.set(0, 0, 0); triggerOneShot('grab'); }
 }
@@ -3180,7 +3307,7 @@ function updateGrab(dt) {
 function updateThrown(dt) {
   for (let k = thrownCars.length - 1; k >= 0; k--) {
     const car = thrownCars[k];
-    car.thrownT += dt; car.vel.y -= CAR_GRAV * dt;
+    car.thrownT += dt; car.vel.y -= CAR_GRAV * (car.shotDown ? 0.35 : 1) * dt;   // 撃墜機はゆっくり堕ちる
     const p = car.mesh.position;
     p.addScaledVector(car.vel, dt);
     car.mesh.rotation.x += car.angVel.x * dt; car.mesh.rotation.y += car.angVel.y * dt; car.mesh.rotation.z += car.angVel.z * dt;
@@ -3195,13 +3322,20 @@ function updateThrown(dt) {
       const g = _grabRay.intersectObject(groundGroup, true)[0];
       if (g && p.y <= g.point.y + 0.5) impact = g.point.clone();
     }
-    if (!impact && (car.thrownT > THROW_LIFE || p.y < -40)) impact = p.clone();
+    if (!impact && (car.thrownT > (car.shotDown ? 16 : THROW_LIFE) || p.y < -40)) impact = p.clone();
     if (impact) { thrownCars.splice(k, 1); breakCar(car, impact); }
   }
 }
 
 function breakCar(car, point) {
   spawnBreakFx(point);
+  if (car.jet) {   // 戦闘機: 犯罪ではない。爆発火柱→しばらくして空中へ再出撃
+    spawnImpactFx(point, 1.6);
+    spawnFirePillar(point, 0.9);
+    car.mesh.visible = false; car.thrown = false; car.shotDown = false; car.dead = true; car.vel = null;
+    jetRespawn.push({ car, t: 0 });
+    return;
+  }
   addWanted(0.3, point);   // 車の破壊＝犯罪
   car.mesh.visible = false; car.thrown = false; car.dead = true; car.vel = null;
   respawnCars.push({ car, t: 0 });   // 数秒後に道路へ復帰
@@ -5210,6 +5344,342 @@ function updateFpsMeter() {
 }
 let _fpsLastFrame = performance.now();
 
+// ══════════ 戦闘機スウォーム（黒紫の編隊・撃墜きりもみ・車と同じ掴み/投げ） ══════════
+const JET = { n: 6, spMin: 30, spMax: 52, sep: 18, orbitR: 130, resp: 12, hitR: 5 };
+const jets = [], jetRespawn = [];
+let jetAnchorA = 0;
+const _jV1 = new THREE.Vector3(), _jV2 = new THREE.Vector3(), _jV3 = new THREE.Vector3();
+function carsAndJets() { return jets.length ? cars.concat(jets) : cars; }
+
+function makeJetMesh(jet) {
+  const g = new THREE.Group();
+  const mBody = new THREE.MeshStandardMaterial({ color: 0x16121e, metalness: 0.7, roughness: 0.35 });
+  const mAcc = new THREE.MeshStandardMaterial({ color: 0x5b2fa8, metalness: 0.6, roughness: 0.4 });
+  const mGlow = new THREE.MeshStandardMaterial({ color: 0x2a1140, emissive: 0x9a5cff, emissiveIntensity: 2.2 });
+  const fus = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.3, 10), mBody); g.add(fus);            // 胴体（機首=+Z）
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.85, 3.2, 8), mBody);
+  nose.rotation.x = Math.PI / 2; nose.position.z = 6.5; g.add(nose);
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.7, 10, 8), mGlow);
+  canopy.scale.set(0.8, 0.6, 1.6); canopy.position.set(0, 0.7, 2.6); g.add(canopy);
+  for (const sgn of [-1, 1]) {   // 後退翼＋垂直尾翼
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.16, 3.2), mAcc);
+    wing.position.set(sgn * 3.1, 0, -1.2); wing.rotation.y = sgn * 0.55; g.add(wing);
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.9, 1.7), mAcc);
+    tail.position.set(sgn * 0.9, 1.1, -4.4); tail.rotation.z = sgn * -0.35; g.add(tail);
+  }
+  const engine = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.72, 1.2, 10), mGlow);
+  engine.rotation.x = Math.PI / 2; engine.position.z = -5.2; g.add(engine);
+  g.userData.car = jet;   // 掴みレイキャストの逆引き（車と同じ流儀）
+  return g;
+}
+function jetAirPos(out, r) {
+  const a = Math.random() * Math.PI * 2;
+  out.set(player.pos.x + Math.cos(a) * r, 0, player.pos.z + Math.sin(a) * r);
+  out.y = Math.max(player.pos.y + 60, groundYAt(out.x, out.z, player.pos.y + 400) + 70);
+  return out;
+}
+function spawnJets() {
+  for (let i = 0; i < JET.n; i++) {
+    const jet = { jet: true, hitR: JET.hitR, grabbed: false, thrown: false, dead: false, tornado: false,
+      flyVel: new THREE.Vector3(), phase: Math.random() * Math.PI * 2, mesh: null, vel: null, angVel: null, holdVel: null };
+    jet.mesh = makeJetMesh(jet);
+    jetAirPos(jet.mesh.position, 380 + Math.random() * 120);
+    jet.flyVel.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize().multiplyScalar(JET.spMax * 0.8);
+    scene.add(jet.mesh);
+    jets.push(jet);
+  }
+  window.__jets = jets;
+  window.__jetsDbg = { hit: hitCarBeam, grab: grabTarget, release: releaseGrab, get thrownN() { return thrownCars.length; }, get held() { return grabbedCar; }, get player() { return player; }, get cam() { return camera; } };
+  console.log('jets spawn', jets.length);
+}
+function updateJets(dt) {
+  if (!KENNEY_CITY) return;
+  if (!jets.length) { if (cityRoot && collBoxes.length && player.ready) spawnJets(); return; }
+  for (let k = jetRespawn.length - 1; k >= 0; k--) {   // 撃墜からの再出撃（遠くの空へ）
+    const r = jetRespawn[k]; r.t += dt;
+    if (r.t > JET.resp) {
+      const jet = r.car;
+      jet.dead = false; jet.thrown = false; jet.shotDown = false; jet.grabbed = false;
+      jet.mesh.rotation.set(0, 0, 0); jet.mesh.visible = true;
+      jetAirPos(jet.mesh.position, 500);
+      jet.flyVel.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize().multiplyScalar(JET.spMax * 0.8);
+      jetRespawn.splice(k, 1);
+    }
+  }
+  // スウォームの錨＝プレイヤー周囲を旋回する点
+  jetAnchorA += dt * 0.3;
+  _jV1.set(player.pos.x + Math.cos(jetAnchorA) * JET.orbitR, 0, player.pos.z + Math.sin(jetAnchorA) * JET.orbitR);
+  _jV1.y = Math.max(player.pos.y + 20, groundYAt(_jV1.x, _jV1.z, player.pos.y + 400) + 55);
+  for (const jet of jets) {
+    if (jet.dead || jet.grabbed || jet.thrown) continue;
+    const p = jet.mesh.position;
+    jet.phase += dt;
+    // 操舵: 錨へ寄る＋仲間と離れる＋ゆらぎ
+    _jV2.subVectors(_jV1, p);
+    const far = _jV2.length();
+    _jV2.normalize().multiplyScalar(Math.min(28, far * 0.35));
+    for (const o of jets) {
+      if (o === jet || o.dead || o.grabbed || o.thrown) continue;
+      _jV3.subVectors(p, o.mesh.position);
+      const d = _jV3.length();
+      if (d > 0.01 && d < JET.sep) _jV2.addScaledVector(_jV3.normalize(), (JET.sep - d) * 2.2);
+    }
+    _jV2.y += Math.sin(jet.phase * 1.7) * 5;
+    jet.flyVel.addScaledVector(_jV2, dt);
+    // 地面回避＋速度クランプ
+    const gy = groundYAt(p.x, p.z, p.y + 300) + 22;
+    if (p.y < gy) jet.flyVel.y += (gy - p.y) * dt * 9;
+    const sp = jet.flyVel.length();
+    if (sp > JET.spMax) jet.flyVel.multiplyScalar(JET.spMax / sp);
+    else if (sp < JET.spMin) jet.flyVel.multiplyScalar(sp > 0.01 ? JET.spMin / sp : 1);
+    p.addScaledVector(jet.flyVel, dt);
+    // 機首を進行方向へ＋旋回バンク
+    _jV3.copy(p).add(jet.flyVel);
+    jet.mesh.lookAt(_jV3);
+    const bank = Math.max(-0.9, Math.min(0.9, (_jV2.x * jet.flyVel.z - _jV2.z * jet.flyVel.x) * 0.0016));
+    jet.mesh.rotateZ(bank);
+  }
+}
+
+// ══════════ 巨大ウォーカー（4足歩行・建物なぎ倒し・回転砲塔ビーム） ══════════
+const WK = {
+  bodyW: 16, bodyH: 7, bodyD: 24, hipY: 24,       // 胴体寸法・股関節の地上高
+  L1: 17, L2: 22,                                  // 腿/脛の長さ
+  speed: 7, turn: 0.5,                             // 徘徊速度・旋回(rad/s)
+  stepTrig: 6, stepDur: 0.42, stepArc: 7,          // 足のステップ発火距離・時間・弧の高さ
+  smashInt: 0.16, smashDmg: 8, smashRange: 17,     // なぎ倒しレイの間隔・ダメージ・射程
+  beamCd: 3.0, beamRange: 330, aimTol: 0.12,       // 砲塔ビーム
+  turretYawRate: 0.9, knock: 22,
+};
+let walker = null;
+const _wkV1 = new THREE.Vector3(), _wkV2 = new THREE.Vector3(), _wkV3 = new THREE.Vector3(), _wkV4 = new THREE.Vector3();
+const _wkQ = new THREE.Quaternion(), _wkYAxis = new THREE.Vector3(0, 1, 0), _wkRay = new THREE.Raycaster();
+
+function wkBoneMesh(r, len, mat) {   // 2関節間を結ぶ円柱（毎フレーム位置と向きを更新）
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.8, 1, 8), mat);
+  m.scale.y = len;
+  return m;
+}
+function wkOrient(mesh, a, b) {   // aからbへ円柱を張る
+  _wkV3.subVectors(b, a);
+  const len = _wkV3.length();
+  mesh.position.copy(a).addScaledVector(_wkV3, 0.5);
+  mesh.quaternion.setFromUnitVectors(_wkYAxis, _wkV3.normalize());
+  mesh.scale.y = Math.max(0.1, len);
+}
+function spawnWalker() {
+  // 市街境界（建物コリジョンの範囲）
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (const b of collBoxes) { if (b.top <= b.bottom) continue; x0 = Math.min(x0, b.x); x1 = Math.max(x1, b.x); z0 = Math.min(z0, b.z); z1 = Math.max(z1, b.z); }
+  if (x0 > x1) return;
+  const bounds = { x0: x0 + 30, x1: x1 - 30, z0: z0 + 30, z1: z1 - 30 };
+  const ang = Math.random() * Math.PI * 2;
+  const px = Math.max(bounds.x0, Math.min(bounds.x1, player.pos.x + Math.cos(ang) * 250));
+  const pz = Math.max(bounds.z0, Math.min(bounds.z1, player.pos.z + Math.sin(ang) * 250));
+  const matBody = new THREE.MeshStandardMaterial({ color: 0x3a4149, metalness: 0.7, roughness: 0.45 });
+  const matLeg = new THREE.MeshStandardMaterial({ color: 0x2c3138, metalness: 0.6, roughness: 0.55 });
+  const matAcc = new THREE.MeshStandardMaterial({ color: 0x8a2f2f, metalness: 0.5, roughness: 0.5, emissive: 0x300808, emissiveIntensity: 0.8 });
+  const root = new THREE.Group();
+  // 胴体＋装甲
+  const body = new THREE.Mesh(new THREE.BoxGeometry(WK.bodyW, WK.bodyH, WK.bodyD), matBody);
+  root.add(body);
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(WK.bodyW + 2.4, 1.4, WK.bodyD + 2.4), matLeg);
+  plate.position.y = WK.bodyH / 2 + 0.4; root.add(plate);
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(6, 3, 4), matAcc);
+  nose.position.set(0, -0.6, WK.bodyD / 2 + 1.6); root.add(nose);   // 前方マーカー（+Z が正面）
+  // 砲塔（ヨー台座＋ピッチバレル）
+  const turret = new THREE.Group(); turret.position.y = WK.bodyH / 2 + 1.1; root.add(turret);
+  const tBase = new THREE.Mesh(new THREE.CylinderGeometry(4.4, 5.2, 3.2, 12), matBody); tBase.position.y = 1.6; turret.add(tBase);
+  const pitchPivot = new THREE.Group(); pitchPivot.position.y = 3.6; turret.add(pitchPivot);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.6, 12, 10), matLeg);
+  barrel.rotation.x = Math.PI / 2; barrel.position.z = 6; pitchPivot.add(barrel);
+  const muzzleTip = new THREE.Object3D(); muzzleTip.position.set(0, 0, 12); pitchPivot.add(muzzleTip);
+  // 脚4本
+  const legs = [];
+  const hipDefs = [[-WK.bodyW / 2, WK.bodyD / 2 - 1.5], [WK.bodyW / 2, WK.bodyD / 2 - 1.5], [-WK.bodyW / 2, -WK.bodyD / 2 + 1.5], [WK.bodyW / 2, -WK.bodyD / 2 + 1.5]];
+  for (let i = 0; i < 4; i++) {
+    const [hx, hz] = hipDefs[i];
+    const femur = wkBoneMesh(2.6, WK.L1, matLeg);
+    const tibia = wkBoneMesh(1.9, WK.L2, matLeg);
+    const hipBall = new THREE.Mesh(new THREE.SphereGeometry(3.4, 10, 8), matBody);
+    const kneeBall = new THREE.Mesh(new THREE.SphereGeometry(2.6, 10, 8), matAcc);
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 4.2, 2.4, 10), matBody);
+    scene.add(femur, tibia, hipBall, kneeBall, foot);
+    legs.push({
+      idx: i,
+      hipOff: new THREE.Vector3(hx, -WK.bodyH / 2 + 0.5, hz),
+      homeOff: new THREE.Vector3(hx * 1.9, 0, hz * 1.7),   // 接地ホーム（胴体基準・広め）
+      foot: new THREE.Vector3(), step: null,
+      femur, tibia, hipBall, kneeBall, footMesh: foot,
+    });
+  }
+  scene.add(root);
+  const gy = groundYAt(px, pz, 400);   // 高い基準から下ろす（丘の中からレイが出ると外れる）
+  walker = {
+    root, turret, pitchPivot, muzzleTip, legs, bounds,
+    pos: new THREE.Vector3(px, gy + WK.hipY, pz), yaw: Math.random() * Math.PI * 2,
+    target: null, retargetT: 0, smashT: 0, beamT: WK.beamCd, swayT: 0,
+  };
+  for (const lg of legs) {   // 初期の足位置＝ホーム
+    lg.foot.copy(lg.homeOff).applyAxisAngle(_wkYAxis, walker.yaw).add(walker.pos);
+    lg.foot.y = groundYAt(lg.foot.x, lg.foot.z, walker.pos.y + 300);
+  }
+  window.__walker = walker;
+  window.__walkerDbg = { get dmg() { return cityDamaged ? cityDamaged.children.length : 0; }, get player() { return player; }, get cam() { return camera; }, fire: wkFireBeam };
+  console.log('walker spawn', px.toFixed(0), pz.toFixed(0));
+}
+function wkSolveLeg(lg, yaw) {   // 2ボーンIK: 股→膝→足（膝ポール=外側+上）
+  _wkV1.copy(lg.hipOff).applyAxisAngle(_wkYAxis, yaw).add(walker.pos);      // 股（ワールド）
+  const hip = _wkV1, foot = lg.foot;
+  _wkV2.subVectors(foot, hip);
+  let d = _wkV2.length();
+  const maxD = WK.L1 + WK.L2 - 0.5;
+  if (d > maxD) { _wkV2.multiplyScalar(maxD / d); d = maxD; }
+  _wkV2.normalize();
+  // ポール: 胴体中心から股への外向き水平＋上
+  _wkV4.copy(lg.hipOff).setY(0).normalize().applyAxisAngle(_wkYAxis, yaw);
+  _wkV4.y = 0.9; _wkV4.normalize();
+  // dir に直交するポール成分
+  _wkV3.copy(_wkV4).addScaledVector(_wkV2, -_wkV2.dot(_wkV4));
+  if (_wkV3.lengthSq() < 1e-6) _wkV3.set(0, 1, 0);
+  _wkV3.normalize();
+  const a = (WK.L1 * WK.L1 - WK.L2 * WK.L2 + d * d) / (2 * d);
+  const h = Math.sqrt(Math.max(0, WK.L1 * WK.L1 - a * a));
+  const knee = _wkV4.copy(hip).addScaledVector(_wkV2, a).addScaledVector(_wkV3, h);
+  lg.hipBall.position.copy(hip);
+  lg.kneeBall.position.copy(knee);
+  wkOrient(lg.femur, hip, knee);
+  wkOrient(lg.tibia, knee, foot);
+  lg.footMesh.position.copy(foot).y += 0.8;
+}
+function wkSmashRays() {   // 進行方向の建物をなぎ倒す（通常攻撃と同じ破壊パイプライン）
+  const fwd = _wkV1.set(Math.sin(walker.yaw), 0, Math.cos(walker.yaw));
+  const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
+  for (const yOff of [10, 20]) {
+    for (const aOff of [-0.35, 0, 0.35]) {
+      _wkV2.copy(fwd).applyAxisAngle(_wkYAxis, aOff);
+      _wkV3.set(walker.pos.x, walker.pos.y - WK.hipY + yOff, walker.pos.z);
+      _wkRay.set(_wkV3, _wkV2); _wkRay.far = WK.smashRange;
+      const hits = _wkRay.intersectObjects(targets, true);
+      if (hits.length) applyHitToBuilding(hits[0], WK.smashDmg, 2.2);
+    }
+  }
+}
+function wkFootSmash(footPos) {   // 着地点の建物破壊＋踏み跡
+  const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
+  _wkV3.set(footPos.x, footPos.y + 30, footPos.z);
+  _wkRay.set(_wkV3, _wkV2.set(0, -1, 0)); _wkRay.far = 40;
+  const hits = _wkRay.intersectObjects(targets, true);
+  if (hits.length) applyHitToBuilding(hits[0], WK.smashDmg, 2);
+  const onRoad = roadTopAt(footPos.x, footPos.z) != null;
+  spawnDebrisBurst(footPos, onRoad ? 'road' : 'ground', 0.8);
+}
+function wkFireBeam() {   // 砲塔ビーム＝プレイヤー通常攻撃相当（FX・破壊とも fireBeam に準拠）
+  walker.muzzleTip.getWorldPosition(_wkV1);
+  _wkV2.copy(player.pos); _wkV2.y += 1.0;
+  const dir = _wkV3.subVectors(_wkV2, _wkV1).normalize();
+  _wkRay.set(_wkV1, dir); _wkRay.far = WK.beamRange;
+  const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
+  const hits = _wkRay.intersectObjects(targets, true);
+  const bldT = hits.length ? hits[0].distance : Infinity;
+  const gndHit = (groundGroup && groundGroup.children.length) ? _wkRay.intersectObject(groundGroup, true)[0] : null;
+  const gndT = gndHit ? gndHit.distance : Infinity;
+  const plT = rayHitSphere(_wkV1, dir, _wkV2, 1.6, WK.beamRange);
+  const minT = Math.min(bldT, gndT, plT);
+  const end = _wkV1.clone().addScaledVector(dir, minT === Infinity ? WK.beamRange : minT);
+  spawnBeam(_wkV1, end, minT !== Infinity);   // 通常ビームと同じ色・フラッシュ
+  if (minT === Infinity) return;
+  if (minT === plT) {   // プレイヤー被弾: ノックバック＋着弾FX
+    player.vel.addScaledVector(dir, WK.knock); player.vel.y += 8;
+    spawnImpactFx(end, 1);
+  } else if (minT === bldT) {
+    applyHitToBuilding(hits[0], DMG_SHOT);   // 通常弾と同値
+  } else {   // 地面: fireBeam の地面着弾と同じ演出
+    const onRoad = roadTopAt(end.x, end.z) != null;
+    spawnDebrisBurst(end, onRoad ? 'road' : 'ground', 1);
+    spawnFirePillar(end, 1);
+    spawnScorch(end, 2.6);
+    if (onRoad) spawnRoadCarve(end, 2.1);
+  }
+}
+function updateWalker(dt) {
+  if (!KENNEY_CITY) return;
+  if (!walker) { if (cityRoot && collBoxes.length && player.ready) spawnWalker(); return; }
+  const w = walker;
+  // ── 徘徊: 目標点へ旋回して前進 ──
+  w.retargetT -= dt;
+  if (!w.target || w.retargetT <= 0 || Math.hypot(w.target.x - w.pos.x, w.target.z - w.pos.z) < 25) {
+    w.target = { x: w.bounds.x0 + Math.random() * (w.bounds.x1 - w.bounds.x0), z: w.bounds.z0 + Math.random() * (w.bounds.z1 - w.bounds.z0) };
+    w.retargetT = 30;
+  }
+  const wantYaw = Math.atan2(w.target.x - w.pos.x, w.target.z - w.pos.z);
+  let dy = wantYaw - w.yaw;
+  while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+  w.yaw += Math.max(-WK.turn * dt, Math.min(WK.turn * dt, dy));
+  const throttle = Math.max(0, 1 - Math.abs(dy) * 1.2);   // 曲がり切るまで減速
+  w.pos.x += Math.sin(w.yaw) * WK.speed * throttle * dt;
+  w.pos.z += Math.cos(w.yaw) * WK.speed * throttle * dt;
+  // 接地高さ＝足の平均（ステップ中の足は除く）＋股関節高
+  let gsum = 0, gn = 0;
+  for (const lg of w.legs) { if (!lg.step) { gsum += lg.foot.y; gn++; } }
+  const gy = gn ? gsum / gn : groundYAt(w.pos.x, w.pos.z, w.pos.y + 300);
+  w.swayT += dt;
+  w.pos.y += ((gy + WK.hipY + Math.sin(w.swayT * 1.3) * 0.35) - w.pos.y) * Math.min(1, dt * 3);
+  w.root.position.copy(w.pos);
+  w.root.rotation.y = w.yaw;
+  // ── 足のステップ（最も遅れている脚を優先。対角ペアなら2本同時＝トロット）──
+  for (const lg of w.legs) {
+    if (!lg.step) continue;
+    const st = lg.step;
+    st.t = Math.min(1, st.t + dt / WK.stepDur);
+    lg.foot.lerpVectors(st.from, st.to, st.t);
+    lg.foot.y += Math.sin(st.t * Math.PI) * WK.stepArc;
+    if (st.t >= 1) {
+      lg.foot.copy(st.to);
+      lg.step = null;
+      wkFootSmash(lg.foot);
+    }
+  }
+  const steppingLegs = w.legs.filter((l) => l.step);
+  if (steppingLegs.length < 2) {
+    let best = null, bestD = WK.stepTrig;
+    for (const lg of w.legs) {
+      if (lg.step) continue;
+      if (steppingLegs.length === 1 && steppingLegs[0].idx + lg.idx !== 3) continue;   // 対角(0-3/1-2)のみ同時
+      // ホーム位置（進行方向へ少しリード）
+      _wkV1.copy(lg.homeOff).applyAxisAngle(_wkYAxis, w.yaw).add(w.pos);
+      _wkV1.x += Math.sin(w.yaw) * WK.speed * throttle * 1.3;   // ホームより先へ踏み出す＝1歩で大きく稼ぐ
+      _wkV1.z += Math.cos(w.yaw) * WK.speed * throttle * 1.3;
+      const d = Math.hypot(_wkV1.x - lg.foot.x, _wkV1.z - lg.foot.z);
+      if (d > bestD) { bestD = d; best = lg; best._toX = _wkV1.x; best._toZ = _wkV1.z; }
+    }
+    if (best) {
+      const to = new THREE.Vector3(best._toX, 0, best._toZ);
+      to.y = groundYAt(to.x, to.z, w.pos.y + 300);
+      best.step = { from: best.foot.clone(), to, t: 0 };
+    }
+  }
+  for (const lg of w.legs) wkSolveLeg(lg, w.yaw);
+  // ── なぎ倒し ──
+  w.smashT -= dt;
+  if (w.smashT <= 0 && throttle > 0.2) { w.smashT = WK.smashInt; wkSmashRays(); }
+  // ── 砲塔: プレイヤーへ旋回→照準一致＋射程内で発射 ──
+  const dx = player.pos.x - w.pos.x, dz = player.pos.z - w.pos.z;
+  const distP = Math.hypot(dx, dz);
+  const wantT = Math.atan2(dx, dz) - w.yaw;   // 砲塔は胴体ローカルのヨー
+  let tdy = wantT - w.turret.rotation.y;
+  while (tdy > Math.PI) tdy -= Math.PI * 2; while (tdy < -Math.PI) tdy += Math.PI * 2;
+  w.turret.rotation.y += Math.max(-WK.turretYawRate * dt, Math.min(WK.turretYawRate * dt, tdy));
+  w.muzzleTip.getWorldPosition(_wkV1);
+  const pitchWant = Math.atan2(player.pos.y - _wkV1.y, distP);
+  w.pitchPivot.rotation.x = Math.max(-0.9, Math.min(0.6, w.pitchPivot.rotation.x + Math.max(-0.8 * dt, Math.min(0.8 * dt, -pitchWant - w.pitchPivot.rotation.x))));
+  w.beamT -= dt;
+  if (w.beamT <= 0 && distP < WK.beamRange && Math.abs(tdy) < WK.aimTol) {
+    w.beamT = WK.beamCd + Math.random() * 1.2;
+    wkFireBeam();
+  }
+}
+
 function tick() {
   const dt = Math.min(_clock.getDelta(), 1 / 30);
   if (SHOW_FPS) updateFpsMeter();
@@ -5219,6 +5689,8 @@ function tick() {
   updateCarPhysics(dt);
   updateAttacks(dt);      // コンボ窓＋貫通ビーム
   updateKens(dt);         // 地上NPC ken
+  updateWalker(dt);       // 巨大ウォーカー（4足歩行・砲塔ビーム）
+  updateJets(dt);         // 戦闘機スウォーム
   updatePredation(dt);    // 掴んだ ken の接地判定→捕食
   updateTotem(dt);        // トーテム（旋回・溶解・成長）
   updateImpactFx(dt);     // 着弾の炎＋煙
