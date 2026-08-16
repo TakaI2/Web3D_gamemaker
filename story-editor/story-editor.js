@@ -2,6 +2,7 @@
 // 設計: .tmp/design.md §9
 
 import { createStoryStage } from '../lib/story-stage.js';
+import { createScenario2D } from '../lib/scenario2d.js';
 import { STORY_OPS, OP_ORDER, makeOp, EXPR_PRESETS } from '../lib/story-ops.js';
 
 const $ = (id) => document.getElementById(id);
@@ -206,6 +207,20 @@ async function refreshStoryList(current) {
   if (current && files.includes(current)) sel.value = current;
 }
 
+// ── 2D紙芝居プレビュー（ゲームと同じ lib/scenario2d を全画面再生。Escで終了）──
+let scn2d = null, scn2dActors = null, scn2dLast = 0;
+async function play2D(fromSelected) {
+  if (!scn2d) {
+    try { scn2dActors = (await (await fetch('../cityfly/talks.json')).json()).actors || null; } catch { /* 仮表示にフォールバック */ }
+    scn2d = createScenario2D({ basePath: '../scenario2d', soundPath: '../sound', actors: () => scn2dActors });
+    const loop = (t) => { const dt = Math.min(0.1, (t - scn2dLast) / 1000); scn2dLast = t; scn2d.update(dt); requestAnimationFrame(loop); };
+    requestAnimationFrame((t) => { scn2dLast = t; requestAnimationFrame(loop); });
+  }
+  syncMeta();
+  const from = fromSelected && selected != null ? selected : 0;
+  scn2d.play({ ...story, script: story.script.slice(from) }, {});
+}
+
 // ── プレビュー ──
 function playAll() { stage.loadStory(story); stage.play(0); }
 async function playHere() { stage.loadStory(story); await stage.prime(selected || 0); stage.play(selected || 0); }
@@ -239,6 +254,8 @@ async function init() {
   $('btn-play-all').onclick = () => stage && playAll();
   $('btn-play-here').onclick = () => stage && playHere();
   $('btn-stop').onclick = () => stage && stopPreview();
+  $('btn-2d-all').onclick = () => play2D(false).catch((e) => toast('2D再生失敗: ' + e));
+  $('btn-2d-here').onclick = () => play2D(true).catch((e) => toast('2D再生失敗: ' + e));
   $('story-select').onchange = async () => {
     const f = $('story-select').value;
     if (!f) { setStory(newStory()); return; }
