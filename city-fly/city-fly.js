@@ -63,16 +63,13 @@ let charLightCfg = { dirI: 1.9, ambI: 0.85, dirC: '#cfd8ff', ambC: '#b8c4dd' };
 async function loadCharLight() {
   try { charLightCfg = { ...charLightCfg, ...(await (await fetch('../npc/char-light.json')).json()) }; }
   catch { /* 未保存=既定値 */ }
-  if (charFill.key) { charFill.key.color.set(charLightCfg.dirC); charFill.rim.color.set(charLightCfg.ambC); }
+  if (charFill.key) charFill.key.color.set(charLightCfg.dirC);
 }
 function attachCharFill(root) {   // プレイヤーVRM読込時に呼ぶ（子として追従）
-  // vamp-dungeon の JOY_vamp と同じく常時点灯（マントの質感を昼夜問わず持ち上げる）
+  // 正面キー光のみ（負荷対策で背面の回り込み光は廃止。マントの質感を昼夜問わず持ち上げる）
   charFill.key = new THREE.PointLight(charLightCfg.dirC, charLightCfg.dirI, 7, 1.2);
   charFill.key.position.set(0.35, 1.7, 0.7);    // 前上（キー光）
   root.add(charFill.key);
-  charFill.rim = new THREE.PointLight(charLightCfg.ambC, charLightCfg.ambI, 6, 1.2);
-  charFill.rim.position.set(-0.3, 1.5, -0.8);   // 後上（回り込み）
-  root.add(charFill.rim);
 }
 const player = {
   vrm: null, mixer: null, cloth: null, states: {}, current: null, ready: false, faceOffset: Math.PI,
@@ -1140,6 +1137,7 @@ async function loadPlayer() {
     // 身長合わせが必要ならモデル側かバンドルデータで調整する）
     vrm.scene.rotation.y = player.yaw + player.faceOffset;
     scene.add(vrm.scene); vrm.scene.updateMatrixWorld(true);
+    attachCharFill(vrm.scene);   // 正面キー光のみ復活（回り込み光なし）
     player.vrm = vrm;
     player.mixer = new THREE.AnimationMixer(vrm.scene);
     // マント（GPUクロス）。空中でも落ちないよう floorY 無効化
@@ -5270,7 +5268,7 @@ function updateDayNight(dt) {
   else if (dayRefs.bg) dayRefs.bg.copy(skyC);
   updateSunMoon(sx, sy);   // 太陽/月ディスクの位置・色・出没
   scene.environmentIntensity = 0.22 + (1 - nightF) * 0.78;   // 環境マップ（光沢）は夜に絞る
-  if (charFill.key) { charFill.key.intensity = charLightCfg.dirI * (1 + nightF * 0.3); charFill.rim.intensity = charLightCfg.ambI * (1 + nightF * 0.3); }   // 常時点灯（vamp-dungeonのJOY_vampと同じ見せ方。夜はさらに少し持ち上げ）
+  if (charFill.key) charFill.key.intensity = charLightCfg.dirI * (1 + nightF * 0.3);   // 正面キー光のみ常時点灯（夜はさらに少し持ち上げ）
   if (neonMat) neonMat.opacity = nightF;                     // 屋上ランプは夜だけ
   if (carHeadMat) { carHeadMat.opacity = nightF; carTailMat.opacity = nightF; }
   if (streetGlowMat) streetGlowMat.opacity = nightF;   // 街灯も夜だけ
