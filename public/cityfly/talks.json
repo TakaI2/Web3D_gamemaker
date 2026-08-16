@@ -27,6 +27,15 @@
       { "who": "kanbu", "face": "normal", "text": "化け物め！" },
       { "who": "kanbu", "face": "normal", "text": "ウォーカータンクを投入せよ！　一気に制圧する。" }
     ],
+    "t_badroute": [
+      { "who": "nei",    "face": "weak",  "text": "はぁ・・・はぁ・・・、精気・・・、　吸わせて・・・、あなたの・・・。" },
+      { "who": "nei",    "face": "angry", "text": "許さない・・・！！　もう怒った！！" },
+      { "who": "nei",    "face": "angry", "text": "邪魔するもの。　全部・・・壊す！！" },
+      { "who": "hakase", "face": "panic", "text": "ネイ！！　何をしているの！！　一旦引きなさい！" },
+      { "who": "mayor",  "face": "panic", "text": "これは！！　一体どういうことだ！？" },
+      { "who": "hakase", "face": "worry", "text": "まずい！　暴走しているっ！　人間から直接精気を吸ったりなんかするから・・・！！" },
+      { "who": "elix",   "face": "smile", "text": "あらあら、なにやら面白いことになっているわね・・・。" }
+    ],
     "t_attr75": [
       { "who": "kanbu", "face": "panic",  "text": "わが軍の損耗率、75%！　き・・・危険です！！　本部に通信を！" },
       { "who": "elix",  "face": "normal", "text": "あらあら、順調に進んでいるかとみてみれば！" },
