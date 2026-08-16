@@ -37,6 +37,12 @@ const jsSrc = fs.readFileSync(path.join(src, 'city-fly.js'), 'utf8')
   .replace(/\.\.\/ragdoll\//g, './ragdoll/')
   .replace(/\.\.\/bitealign\//g, './bitealign/')
   .replace(/\.\.\/audio\//g, './audio/')
+  .replace(/\.\.\/sound/g, './sound')          // 効果音（'../sound' と '../sound/' の両方）
+  .replace(/\.\.\/cityfly\//g, './cityfly/')   // イベント・会話定義
+  .replace(/\.\.\/story\//g, './story/')       // 2Dシナリオ
+  .replace(/\.\.\/flow\//g, './flow/')         // ゲームフロー
+  .replace(/\.\.\/damage\//g, './damage/')     // ダメージ損耗設定
+  .replace(/\.\.\/scenario2d/g, './scenario2d')   // 顔グラ・背景（未配置なら404→仮表示）
   .replace(/\.\.\/api\//g, './api/')   // api/save は開発サーバ専用（本番は保存ボタンが失敗表示になるだけ）
   .replace(/\.\.\/([\w\-]+\.png)/g, './$1');   // コード直参照のテクスチャ（electric.png等）
 fs.writeFileSync(path.join(dest, 'city-fly.js'), jsSrc);
@@ -58,7 +64,7 @@ if (fs.existsSync(mapsSrc)) {
 }
 
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js']) {
+for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js']) {
   const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8')
     .replace(/\.\.\/lib\//g, './')
     .replace(/\.\.\/speech\//g, './speech/');   // speech-set.js は import.meta.url 相対（distではlibがルート直下）
@@ -66,10 +72,10 @@ for (const f of ['vrm-cloth.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-g
   console.log(`copied: ${f}`);
 }
 
-// NPCバンドル（Joy=プレイヤー / ken=地上NPC・捕食対象）
+// NPCバンドル（nei_vamp=プレイヤー / ken=地上NPC・捕食対象）
 const npcDest = path.join(dest, 'npc');
 fs.mkdirSync(npcDest, { recursive: true });
-for (const n of ['Joy_reborn.npc.json', 'ken.npc.json']) {
+for (const n of ['nei_vamp.npc.json', 'ken.npc.json']) {
   fs.copyFileSync(path.join(pub, 'npc', n), path.join(npcDest, n));
   console.log(`copied: npc/${n}`);
 }
@@ -84,7 +90,7 @@ const timelines = [
 ];
 const tlDest = path.join(dest, 'timeline'); fs.mkdirSync(tlDest, { recursive: true });
 const vrmaDest = path.join(dest, 'vrma'); fs.mkdirSync(vrmaDest, { recursive: true });
-const vrmaSet = new Set(['Catwalk_Walk_Forward.vrma']);   // ken 歩行
+const vrmaSet = new Set(['Catwalk_Walk_Forward.vrma', 'hit_front.vrma', 'dead03.vrma']);   // ken歩行＋プレイヤー被弾/死亡
 // timeline/fx が参照する public 直下のテクスチャpng（例 ../electric.png）を集めて同梱し、パスを ./ へ書き換え
 const texPngs = new Set(['electric.png']);   // アルティメット乱射のシート（コードから直接参照）
 const rewriteTexPaths = (text) => text.replace(/\.\.\/([\w\-. %@]+\.png)/g, (_, name) => { texPngs.add(name); return './' + name; });
@@ -125,12 +131,48 @@ if (fs.existsSync(spSrc)) {
   console.log('copied: speech/ken.speech.json');
 }
 
-// ラグドール調整値（ken）
-const ragSrc = path.join(pub, 'ragdoll', 'ken.ragdoll.json');
-if (fs.existsSync(ragSrc)) {
+// ラグドール調整値（ken＋プレイヤー nei_vamp）
+for (const rg of ['ken.ragdoll.json', 'nei_vamp.ragdoll.json']) {
+  const ragSrc = path.join(pub, 'ragdoll', rg);
+  if (!fs.existsSync(ragSrc)) { console.warn(`skip missing ragdoll: ${rg}`); continue; }
   const rDest = path.join(dest, 'ragdoll'); fs.mkdirSync(rDest, { recursive: true });
-  fs.copyFileSync(ragSrc, path.join(rDest, 'ken.ragdoll.json'));
-  console.log('copied: ragdoll/ken.ragdoll.json');
+  fs.copyFileSync(ragSrc, path.join(rDest, rg));
+  console.log(`copied: ragdoll/${rg}`);
+}
+// ダメージ損耗設定（プレイヤー）
+const dmgSrc = path.join(pub, 'damage', 'nei_vamp.damage.json');
+if (fs.existsSync(dmgSrc)) {
+  const dDest = path.join(dest, 'damage'); fs.mkdirSync(dDest, { recursive: true });
+  fs.copyFileSync(dmgSrc, path.join(dDest, 'nei_vamp.damage.json'));
+  console.log('copied: damage/nei_vamp.damage.json');
+}
+// 効果音（SFX。ビーム/爆発/雷）
+const sndSrc = path.join(pub, 'sound');
+if (fs.existsSync(sndSrc)) {
+  const sDest = path.join(dest, 'sound'); fs.mkdirSync(sDest, { recursive: true });
+  let n = 0;
+  for (const f of fs.readdirSync(sndSrc).filter((f) => f.endsWith('.ogg'))) { fs.copyFileSync(path.join(sndSrc, f), path.join(sDest, f)); n++; }
+  console.log(`copied: ${n} sound files`);
+}
+// ゲームループ定義（イベント・会話・2Dシナリオ・フロー）
+fs.mkdirSync(path.join(dest, 'cityfly'), { recursive: true });
+for (const f of ['events.json', 'talks.json']) {
+  fs.copyFileSync(path.join(pub, 'cityfly', f), path.join(dest, 'cityfly', f));
+  console.log(`copied: cityfly/${f}`);
+}
+fs.mkdirSync(path.join(dest, 'story'), { recursive: true });
+for (const f of fs.readdirSync(path.join(pub, 'story')).filter((f) => f.startsWith('cityfly_') && f.endsWith('.story.json'))) {
+  fs.copyFileSync(path.join(pub, 'story', f), path.join(dest, 'story', f));
+  console.log(`copied: story/${f}`);
+}
+fs.mkdirSync(path.join(dest, 'flow'), { recursive: true });
+fs.copyFileSync(path.join(pub, 'flow', 'cityfly.flow.json'), path.join(dest, 'flow', 'cityfly.flow.json'));
+console.log('copied: flow/cityfly.flow.json');
+// 2D素材（顔グラ/背景。まだ無ければスキップ=ゲーム側が仮表示にフォールバック）
+const s2dSrc = path.join(pub, 'scenario2d');
+if (fs.existsSync(s2dSrc)) {
+  fs.cpSync(s2dSrc, path.join(dest, 'scenario2d'), { recursive: true });
+  console.log('copied: scenario2d/');
 }
 // FXプリセット（timeline 埋め込み custom:* ＋着弾 explosion ＋トーテム）。テクスチャ参照も ./ へ
 const fxSrcDir = path.join(pub, 'fx');
