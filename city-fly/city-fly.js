@@ -698,7 +698,7 @@ function buildClothDamageAttrs(clothData, geo) {   // damage-editor と同一: d
   geo.setAttribute('dmgH', new THREE.BufferAttribute(dmgH, 1));
 }
 let hpBarEl = null;
-let vigEl = null, vigA = 0, vigT = 0, dmgFlash = 0;
+let vigEl = null, vigA = 0, vigT = 0, dmgFlash = 0, vigLastO = '';
 function updateDamageVignette(dt) {   // vamp-dungeon と同じ見た目の赤ビネット
   if (!vigEl) {
     vigEl = document.createElement('div');
@@ -712,7 +712,9 @@ function updateDamageVignette(dt) {   // vamp-dungeon と同じ見た目の赤�
   const low = hpRatio < 0.35 ? (0.32 * (1 - hpRatio / 0.35) + Math.sin(vigT * 5.2) * 0.06 * (1 - hpRatio / 0.35)) : 0;   // 低HP=常時うっすら+脈動
   const target = Math.min(1, Math.max(dmgFlash, low));
   vigA += (target - vigA) * Math.min(1, dt * 8);
-  vigEl.style.opacity = Math.max(0, Math.min(1, vigA)).toFixed(3);
+  if (vigA < 0.003 && target <= 0) vigA = 0;   // 無被弾時は完全に0へスナップ
+  const o = Math.max(0, Math.min(1, vigA)).toFixed(3);
+  if (o !== vigLastO) { vigEl.style.opacity = o; vigLastO = o; }   // 値が変わる時だけDOMへ書く
 }
 let hpNumEl = null;
 function updateHpUI() {
@@ -745,6 +747,7 @@ const ATTR_PTS = { jet: 3, walker: 20, spider: 35 };   // 撃破ポイント（�
 function cityDamagePct() { return cityInfo && cityInfo.count ? Math.min(100, gp.destroyed / cityInfo.count * 100) : 0; }
 function attritionPct() { return Math.min(100, gp.attritionPts); }
 function enemyAllowed(kind) {   // 敵出現のモード制御（本編の投入は events.json 駆動）
+  if (kind === 'walker' && spider) return false;   // スパイダーキャリア出現中はウォーカーを出さない
   if (gameMode === 'training') return true;
   if (gameMode !== 'play') return false;   // title / op / ed 中は敵なし
   if (ev.flags.warEnd) return false;   // 終戦後は増援なし（ED遷移はP4）
@@ -965,12 +968,14 @@ function updateKillUI(dt) {
   killShowT = Math.max(0, killShowT - dt);
   killEl.style.opacity = Math.min(1, killShowT / 0.6).toFixed(2);   // 残り0.6秒でフェードアウト
 }
+let dmgWarmT = 0;   // 起動直後は溶解ON/OFF両方のパイプラインをコンパイルさせる猶予（切替ストール防止）
 function applyDamageFx() {   // ダメージ割合 → 各部位の溶解進行＋表情
   const dmgPct = (1 - playerHp / PLAYER_HP_MAX) * 100;
   for (const dp of dmgParts) {
     const [s0, e0] = dp.range;
     const prog = e0 > s0 ? Math.max(0, Math.min(1, (dmgPct - s0) / (e0 - s0))) : (dmgPct >= e0 ? 1 : 0);
     dp.dis.setProgress(prog);
+    if (dmgWarmT <= 0 && dp.dis.setActive) dp.dis.setActive(prog > 0);   // 無傷部位は溶解シェーダを停止
   }
   const em = player.vrm?.expressionManager;
   if (em) for (const ec of dmgExpressions) { try { em.setValue(ec.name, dmgExprValueAt(ec.keys, dmgPct)); } catch { /* noop */ } }
@@ -1063,6 +1068,7 @@ function updatePlayerDeath(dt) {
 async function setupDamageFx(bundle, vrm) {   // damage/<npc>.damage.json を読み、部位ごとに溶解を仕込む
   for (const dp of dmgParts) { try { dp.dis.dispose(); } catch { /* noop */ } }
   dmgParts.length = 0;
+  dmgWarmT = 5;   // この間は全部位アクティブで描画→ON状態のパイプラインをコンパイル
   playerHp = PLAYER_HP_MAX;
   updateHpUI();
   let cfg = null;
@@ -1133,7 +1139,6 @@ async function loadPlayer() {
     // 身長合わせが必要ならモデル側かバンドルデータで調整する）
     vrm.scene.rotation.y = player.yaw + player.faceOffset;
     scene.add(vrm.scene); vrm.scene.updateMatrixWorld(true);
-    attachCharFill(vrm.scene);   // 夜間のキャラ補助ライト（追従2灯）
     player.vrm = vrm;
     player.mixer = new THREE.AnimationMixer(vrm.scene);
     // マント（GPUクロス）。空中でも落ちないよう floorY 無効化
@@ -5921,45 +5926,21 @@ function makeJetMesh(jet) {
   jet.flashMats = [mBody, mAcc];   // 被弾フラッシュ用（emissiveを一瞬赤に）
   return g;
 }
-const TRAIL_N = 22;
-function makeJetTrail(jet) {
-  const geo = new THREE.BufferGeometry();
-  const pos = new Float32Array(TRAIL_N * 3);
-  const col = new Float32Array(TRAIL_N * 3);
-  for (let i = 0; i < TRAIL_N; i++) {   // 先頭=明るいオレンジ → 末尾=黒（加算合成で自然に消える）
-    const f = 1 - i / (TRAIL_N - 1);
-    col[i * 3] = 1.0 * f; col[i * 3 + 1] = 0.55 * f * f; col[i * 3 + 2] = 0.15 * f * f;
-  }
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-  line.frustumCulled = false;
-  scene.add(line);
-  jet.trail = { line, pos, t: 0 };
+// 噴射コーン: 街灯の発光と同じ加算メッシュを機体後方に付け、高速に伸び縮みさせる（頂点更新なし＝軽量）
+const _exGeo = (() => { const g = new THREE.ConeGeometry(1, 1, 7, 1, true); g.rotateX(-Math.PI / 2); g.translate(0, 0, -0.5); return g; })();   // 基部=原点 → -Z へ長さ1
+const _exMat = new THREE.MeshBasicMaterial({ color: 0xffa050, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+let exhaustT = 0;   // animate で加算（全コーン共通の時刻）
+function attachExhaust(parent, zOff, len, rad) {
+  const m = new THREE.Mesh(_exGeo, _exMat);
+  m.position.z = zOff;
+  m.scale.set(rad, rad, len);
+  m.userData.exLen = len; m.userData.exPhase = Math.random() * Math.PI * 2;
+  parent.add(m);
+  return m;
 }
-function resetJetTrail(jet) {   // スポーン/再出撃時: 全点を現在位置に畳む（画面を横切る筋を防ぐ）
-  if (!jet.trail) return;
-  const p2 = jet.mesh.position;
-  for (let i = 0; i < TRAIL_N; i++) { jet.trail.pos[i * 3] = p2.x; jet.trail.pos[i * 3 + 1] = p2.y; jet.trail.pos[i * 3 + 2] = p2.z; }
-  jet.trail.line.geometry.attributes.position.needsUpdate = true;
-}
-function updateJetTrail(jet, dt) {
-  const tr = jet.trail;
-  if (!tr) return;
-  const active = !jet.dead && !jet.grabbed && !jet.thrown;
-  tr.line.visible = active;
-  if (!active) return;
-  tr.t -= dt;
-  if (tr.t > 0) return;
-  tr.t = 0.03;
-  const pos = tr.pos;
-  pos.copyWithin(3, 0, (TRAIL_N - 1) * 3);   // 1点ずらして…
-  const off = jet.trailOffset ?? 5.6;
-  _jV3.copy(jet.flyVel).normalize();
-  pos[0] = jet.mesh.position.x - _jV3.x * off;   // …先頭にエンジン後端を記録
-  pos[1] = jet.mesh.position.y - _jV3.y * off;
-  pos[2] = jet.mesh.position.z - _jV3.z * off;
-  tr.line.geometry.attributes.position.needsUpdate = true;
+function updateExhaust(ex) {   // アフターバーナー風の明滅（スケールのみ）
+  if (!ex) return;
+  ex.scale.z = ex.userData.exLen * (0.6 + 0.4 * Math.abs(Math.sin(exhaustT * 26 + ex.userData.exPhase)));
 }
 function jetAirPos(out, r) {
   const a = Math.random() * Math.PI * 2;
@@ -5975,8 +5956,7 @@ function spawnJets() {
     jetAirPos(jet.mesh.position, 380 + Math.random() * 120);
     jet.flyVel.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize().multiplyScalar(JET.spMax * 0.8);
     scene.add(jet.mesh);
-    makeJetTrail(jet);
-    resetJetTrail(jet);
+    jet.exhaust = attachExhaust(jet.mesh, -5.6, 7.5, 0.55);
     jets.push(jet);
   }
   window.__jets = jets;
@@ -5994,7 +5974,6 @@ function updateJets(dt) {
       jet.mesh.rotation.set(0, 0, 0); jet.mesh.visible = true;
       jetAirPos(jet.mesh.position, 500);
       jet.flyVel.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize().multiplyScalar(JET.spMax * 0.8);
-      resetJetTrail(jet);
       jetRespawn.splice(k, 1);
     }
   }
@@ -6053,9 +6032,9 @@ function updateJets(dt) {
     jet.mesh.lookAt(_jV3);
     const bank = Math.max(-0.9, Math.min(0.9, (_jV2.x * jet.flyVel.z - _jV2.z * jet.flyVel.x) * 0.0016));
     jet.mesh.rotateZ(bank);
-    updateJetTrail(jet, dt);
+    updateExhaust(jet.exhaust);
   }
-  for (const jet of jets) { if (jet.dead || jet.grabbed || jet.thrown) updateJetTrail(jet, dt); }   // 非アクティブ機はトレイル非表示化
+  for (const jet of jets) { if (jet.exhaust) jet.exhaust.visible = !(jet.dead || jet.grabbed || jet.thrown); }   // 非アクティブ機は噴射を消す
 }
 
 // ══════════ 敵のエネルギー弾（主砲: 弾速あり・太い発光円筒＝回避可能） ══════════
@@ -6149,6 +6128,13 @@ let walkerCd = 0;   // 撃破後の再出現クールダウン
 let walker = null;
 const _wkV1 = new THREE.Vector3(), _wkV2 = new THREE.Vector3(), _wkV3 = new THREE.Vector3(), _wkV4 = new THREE.Vector3();
 const _wkQ = new THREE.Quaternion(), _wkYAxis = new THREE.Vector3(0, 1, 0), _wkRay = new THREE.Raycaster(), _wkE = new THREE.Euler();
+const _cullFrus = new THREE.Frustum(), _cullM = new THREE.Matrix4(), _cullSph = new THREE.Sphere();
+let _cullFrame = -1;
+function sphereOnScreen(pos, r) {   // 画面外なら脚IK等の見た目更新をスキップ（歩行・破壊などのロジックは継続）
+  if (_cullFrame !== _dbg) { _cullM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse); _cullFrus.setFromProjectionMatrix(_cullM); _cullFrame = _dbg; }
+  _cullSph.center.copy(pos); _cullSph.radius = r;
+  return _cullFrus.intersectsSphere(_cullSph);
+}
 
 function wkBoneMesh(r, len, mat) {   // 2関節間を結ぶ円柱（毎フレーム位置と向きを更新）
   const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.8, 1, 8), mat);
@@ -6339,7 +6325,7 @@ function updateWalker(dt) {
       w.root.quaternion.setFromEuler(_wkE);
       w.pos.y = w.dieStartY + (w.dieGroundY + 9 - w.dieStartY) * (u * u);
       w.root.position.copy(w.pos);
-      for (const lg of w.legs) wkSolveLeg(lg, w.yaw, w.root.quaternion);   // 足は接地したまま＝脚が折れ崩れる
+      if (sphereOnScreen(w.pos, 70)) for (const lg of w.legs) wkSolveLeg(lg, w.yaw, w.root.quaternion);   // 足は接地したまま＝脚が折れ崩れる
       if ((w._dieFxT = (w._dieFxT || 0) - dt) <= 0) {
         w._dieFxT = 0.5;
         _wkV4.set(w.pos.x + (Math.random() - 0.5) * 12, w.pos.y + (Math.random() - 0.5) * 6, w.pos.z + (Math.random() - 0.5) * 12);
@@ -6425,7 +6411,7 @@ function updateWalker(dt) {
       best.step = { from: best.foot.clone(), to, t: 0 };
     }
   }
-  for (const lg of w.legs) wkSolveLeg(lg, w.yaw);
+  if (sphereOnScreen(w.pos, 70)) for (const lg of w.legs) wkSolveLeg(lg, w.yaw);   // 画面外はIK省略
   // ── なぎ倒し ──
   w.smashT -= dt;
   if (w.smashT <= 0 && throttle > 0.2) { w.smashT = WK.smashInt; wkSmashRays(); }
@@ -6642,15 +6628,14 @@ function spFireMissiles() {   // ボックスタレットから誘導ミサイ�
     _spV1.set(-14 + i * 6, SP.bodyH / 2 + 8, -12).applyAxisAngle(_wkYAxis, spider.yaw).add(spider.pos);
     m.position.copy(_spV1);
     scene.add(m);
-    const ms = { mesh: m, vel: new THREE.Vector3((Math.random() - 0.5) * 12, 42, (Math.random() - 0.5) * 12), t: 0, trailOffset: 2.6 };
-    ms.flyVel = ms.vel;   // トレイル共用（updateJetTrailはflyVelを見る）
-    makeJetTrail(ms);
-    resetJetTrail(ms);
+    const ms = { mesh: m, vel: new THREE.Vector3((Math.random() - 0.5) * 12, 42, (Math.random() - 0.5) * 12), t: 0 };
+    ms.flyVel = ms.vel;   // 参照互換（撃墜処理等）
+    ms.exhaust = attachExhaust(m, -2.6, 4.5, 0.35);
     spMissiles.push(ms);
   }
   playSfxAt('beam.ogg', spider.pos, 0.5);
 }
-function removeSpMissileFx(ms) { if (ms.trail) { scene.remove(ms.trail.line); ms.trail.line.geometry.dispose(); ms.trail = null; } }
+function removeSpMissileFx(ms) { /* 噴射コーンは mesh の子として一緒に除去される */ }
 function updateSpMissiles(dt) {
   for (let k = spMissiles.length - 1; k >= 0; k--) {
     const ms = spMissiles[k];
@@ -6665,7 +6650,7 @@ function updateSpMissiles(dt) {
     ms.mesh.position.addScaledVector(ms.vel, dt);
     _spV2.copy(ms.mesh.position).add(ms.vel);
     ms.mesh.lookAt(_spV2);
-    updateJetTrail(ms, dt);
+    updateExhaust(ms.exhaust);
     // 命中/着弾/寿命
     const pos = ms.mesh.position;
     const dP = pos.distanceTo(player.pos);
@@ -6744,7 +6729,7 @@ function updateSpider(dt) {
       w.root.quaternion.setFromEuler(_spE);
       w.pos.y = w.dieStartY + (w.dieGroundY + 24 - w.dieStartY) * (u * u);
       w.root.position.copy(w.pos);
-      for (const lg of w.legs) spSolveLeg(lg, w.yaw, w.root.quaternion);
+      if (sphereOnScreen(w.pos, 200)) for (const lg of w.legs) spSolveLeg(lg, w.yaw, w.root.quaternion);
       return;
     }
     if (!w.slammed) {
@@ -6827,7 +6812,7 @@ function updateSpider(dt) {
       best.step = { from: best.foot.clone(), to, t: 0 };
     }
   }
-  for (const lg of w.legs) spSolveLeg(lg, w.yaw);
+  if (sphereOnScreen(w.pos, 200)) for (const lg of w.legs) spSolveLeg(lg, w.yaw);   // 画面外はIK省略
   // ── なぎ倒し ──
   w.smashT -= dt;
   if (w.smashT <= 0 && throttle > 0.2) {
@@ -6905,12 +6890,14 @@ function tick() {
   updateAttacks(dt);      // コンボ窓＋貫通ビーム
   updateKens(dt);         // 地上NPC ken
   if (gameMode !== 'op' && gameMode !== 'ed') {   // シナリオ中は戦闘停止（敵AI・弾・被弾なし）
+    updateSpider(dt);       // スパイダータンク（6脚・主砲/誘導ミサイル/腹部砲門）※ウォーカーより先に評価（出現中はウォーカー禁止のため）
     updateWalker(dt);       // 巨大ウォーカー（4足歩行・砲塔ビーム）
-    updateSpider(dt);       // スパイダータンク（6脚・主砲/誘導ミサイル/腹部砲門）
     updateEnemyBolts(dt);   // 敵主砲のエネルギー弾
     updateJets(dt);         // 戦闘機スウォーム
   }
   updateDamageFx();       // ダメージ損耗（マントの高さ基準追従）
+  exhaustT += dt;         // 噴射コーンの明滅時刻
+  if (dmgWarmT > 0) { dmgWarmT -= dt; if (dmgWarmT <= 0) applyDamageFx(); }   // ウォームアップ後、無傷部位の溶解を停止
   updateDamageVignette(dt);
   updateKillUI(dt);
   evalEvents();
