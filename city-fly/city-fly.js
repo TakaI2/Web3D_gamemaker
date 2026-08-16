@@ -160,6 +160,7 @@ async function init() {
   chain = chain.then(() => buildParks().catch((e) => console.warn('公園生成失敗', e)));   // 閉じスプラインの公園
   chain = chain.then(() => buildForest().catch((e) => console.warn('森生成失敗', e)));   // 空き地の森（建物確定後）
   chain = chain.then(() => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
+    try { warmEnemyMats(); } catch (e) { console.warn('敵材質ウォーム失敗:', e); }
     loadImpactFx().catch((e) => console.warn('着弾FX準備失敗:', e));
     ensureTotemFx().catch((e) => console.warn('トーテムFX準備失敗:', e));
     try { initDebrisFx(); } catch (e) { console.warn('破片FX準備失敗:', e); }
@@ -3072,6 +3073,54 @@ function addCollBox(x, z, bottom, top, h) {
   }
   return idx;
 }
+// ── 敵側の建物ヒット用: collGrid AABB直判定（1.2万インスタンスの三角形レイキャストを排除）──
+let boxToBld = null;   // boxIdx -> { md, rec }
+function ensureBoxMap() {
+  if (boxToBld && boxToBld.length === collBoxes.length) return;
+  boxToBld = new Array(collBoxes.length);
+  for (const md of bldModels) for (const rec of md.recs) if (rec.boxIdx != null) boxToBld[rec.boxIdx] = { md, rec };
+}
+const _rbSeen = new Set();
+function rayCityBox(ox, oy, oz, dx, dy, dz, far) {   // レイが最初に当たる建物ボックス {bi, t}（無ければ null）
+  ensureBoxMap();
+  _rbSeen.clear();
+  let bestT = Infinity, bestBi = -1;
+  const step = COLL_CELL * 0.5;
+  const n = Math.ceil(far / step);
+  for (let i = 0; i <= n; i++) {
+    const t0 = Math.min(far, i * step);
+    const cx = Math.floor((ox + dx * t0) / COLL_CELL), cz = Math.floor((oz + dz * t0) / COLL_CELL);
+    for (let z2 = -1; z2 <= 1; z2++) for (let x2 = -1; x2 <= 1; x2++) {
+      const key = (cx + x2) + '_' + (cz + z2);
+      if (_rbSeen.has(key)) continue;
+      _rbSeen.add(key);
+      const arr = collGrid.get(key);
+      if (!arr) continue;
+      for (const bi of arr) {
+        const b = collBoxes[bi];
+        if (b.top <= b.bottom) continue;
+        let tmin = 0, tmax = far, t1, t2, tt;   // AABBスラブ判定
+        if (Math.abs(dx) < 1e-9) { if (ox < b.x - b.h || ox > b.x + b.h) continue; }
+        else { t1 = (b.x - b.h - ox) / dx; t2 = (b.x + b.h - ox) / dx; if (t1 > t2) { tt = t1; t1 = t2; t2 = tt; } tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2); if (tmin > tmax) continue; }
+        if (Math.abs(dy) < 1e-9) { if (oy < b.bottom || oy > b.top) continue; }
+        else { t1 = (b.bottom - oy) / dy; t2 = (b.top - oy) / dy; if (t1 > t2) { tt = t1; t1 = t2; t2 = tt; } tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2); if (tmin > tmax) continue; }
+        if (Math.abs(dz) < 1e-9) { if (oz < b.z - b.h || oz > b.z + b.h) continue; }
+        else { t1 = (b.z - b.h - oz) / dz; t2 = (b.z + b.h - oz) / dz; if (t1 > t2) { tt = t1; t1 = t2; t2 = tt; } tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2); if (tmin > tmax) continue; }
+        if (tmin < bestT) { bestT = tmin; bestBi = bi; }
+      }
+    }
+    if (bestBi >= 0 && bestT <= t0) break;   // 探索済み距離より手前で確定
+  }
+  return bestBi >= 0 ? { bi: bestBi, t: bestT } : null;
+}
+const _boxHitP = new THREE.Vector3();
+function hitBoxBuilding(bi, px, py, pz, dmg, fxScale, src) {   // boxIdx→建物レコードへ直ダメージ（applyHitToBuilding 相当）
+  const e = boxToBld && boxToBld[bi];
+  if (!e) return;
+  _boxHitP.set(px, py, pz);
+  if (e.rec.carve) applyCarve(e.rec.carve, _boxHitP, dmg, fxScale, src);
+  else if (!e.rec.dead) damageBuildingRec(e.rec, e.md, _boxHitP, dmg, fxScale, src);
+}
 function collidePlayer() {
   if (!collBoxes.length) return;
   player.grounded = false;
@@ -3179,7 +3228,11 @@ function makeCarveMaterial(srcMat, baseY, height, flashU) {
 function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT, fxScale = 1, src = null) {
   const rec0 = (instMesh.userData.slots || [])[instanceId];   // LOD振り分けの slot から建物レコードへ逆引き（近/遠どちらの命中でも同じレコード）
   const md = instMesh.userData.md;
-  if (!rec0 || !md || rec0.dead) return;
+  if (!rec0 || !md) return;
+  damageBuildingRec(rec0, md, point, dmg, fxScale, src);
+}
+function damageBuildingRec(rec0, md, point, dmg = DMG_SHOT, fxScale = 1, src = null) {   // レコード直指定（ボックス判定経路と共用）
+  if (rec0.dead) return;
   if (rec0.carve) { applyCarve(rec0.carve, point, dmg, fxScale, src); return; }
   const m = rec0.m;
   const _p2 = new THREE.Vector3(), _q2 = new THREE.Quaternion(), _s2 = new THREE.Vector3();
@@ -5839,10 +5892,8 @@ function jetFireShot(jet) {   // 正面ショット: 筒形ポリゴンのビー
   const from = _jV2.copy(jet.mesh.position).addScaledVector(_jV3.copy(jet.flyVel).normalize(), 7);
   _jV1.copy(player.pos); _jV1.y += 0.8;
   const dir = _jV3.subVectors(_jV1, from).normalize();
-  _wkRay.set(from, dir); _wkRay.far = JET.shotRange;
-  const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
-  const hits = _wkRay.intersectObjects(targets, true);
-  const bldT = hits.length ? hits[0].distance : Infinity;
+  const bh = rayCityBox(from.x, from.y, from.z, dir.x, dir.y, dir.z, JET.shotRange);
+  const bldT = bh ? bh.t : Infinity;
   const plT = rayHitSphere(from, dir, _jV1, 1.7, JET.shotRange);
   const minT = Math.min(bldT, plT);
   const end = from.clone().addScaledVector(dir, minT === Infinity ? JET.shotRange : minT);
@@ -5850,7 +5901,7 @@ function jetFireShot(jet) {   // 正面ショット: 筒形ポリゴンのビー
   playSfxAt('beam.ogg', jet.mesh.position, 0.35);
   if (minT === Infinity) return;
   if (minT === plT) { playerDamage(JET.shotDmg, dir); spawnImpactFx(end, 0.8); }
-  else applyHitToBuilding(hits[0], 0.5);   // 外れて建物に当たった分は軽微
+  else if (bh) hitBoxBuilding(bh.bi, end.x, end.y, end.z, 0.5);   // 外れて建物に当たった分は軽微
 }
 const _bombGlowGeo = new THREE.SphereGeometry(0.3, 8, 6);
 const _bombGlowMat = new THREE.MeshBasicMaterial({ color: 0xff8a2a });   // 両端のオレンジ発光（unlit=常に明るい）
@@ -5889,11 +5940,9 @@ function updateJetBombs(dt) {
     jetBombs.splice(k, 1);
     scene.remove(bm.mesh);
     bm.mesh.geometry.dispose(); bm.mesh.material.dispose();
-    _wkRay.set(_jV2.set(pos.x, pos.y + 30, pos.z), _jV3.set(0, -1, 0)); _wkRay.far = 80;
-    const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
-    const bh = _wkRay.intersectObjects(targets, true)[0];
+    const bh = rayCityBox(pos.x, pos.y + 30, pos.z, 0, -1, 0, 80);
     playSfxAt('bomb_short.ogg', pos, 0.7);
-    if (bh) applyHitToBuilding(bh, DMG_SHOT, 1.5);   // ウォーカービーム相当（通常弾ダメージ＋FX）
+    if (bh) hitBoxBuilding(bh.bi, pos.x, pos.y + 30 - bh.t, pos.z, DMG_SHOT, 1.5);   // ウォーカービーム相当（通常弾ダメージ＋FX）
     else {
       const onRoad = roadTopAt(pos.x, pos.z) != null;
       spawnImpactFx(_jV2.set(pos.x, gy, pos.z), 1.2);
@@ -6063,7 +6112,7 @@ function updateEnemyBolts(dt) {
     eb.t += dt;
     const pos = eb.mesh.position;
     pos.addScaledVector(eb.vel, dt);
-    let boom = false, hitPlayer = false, bldHit = null;
+    let boom = false, hitPlayer = false, bldHit = -1;
     // プレイヤー命中
     if (!playerDead && pos.distanceTo(player.pos) < eb.radius + 2.2) { boom = true; hitPlayer = true; }
     // 建物
@@ -6074,15 +6123,8 @@ function updateEnemyBolts(dt) {
         if (!arr) continue;
         for (const idx of arr) {
           const b = collBoxes[idx];
-          if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < b.h && pos.y > b.bottom && pos.y < b.top) { boom = true; break outer; }
+          if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < b.h && pos.y > b.bottom && pos.y < b.top) { boom = true; bldHit = idx; break outer; }
         }
-      }
-      if (boom) {   // 命中面をレイで特定（インスタンス→carve個別化のため）
-        _ebV1.copy(eb.vel).normalize();
-        _ebV2.copy(pos).addScaledVector(_ebV1, -eb.radius - 8);
-        _wkRay.set(_ebV2, _ebV1); _wkRay.far = eb.radius + 16;
-        const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
-        bldHit = _wkRay.intersectObjects(targets, true)[0] || null;
       }
     }
     // 地面/寿命
@@ -6098,8 +6140,8 @@ function updateEnemyBolts(dt) {
       player.vel.addScaledVector(_ebV1, eb.knock); player.vel.y += 8;
       spawnImpactFx(pos, eb.fxScale);
       playerDamage(eb.dmg, _ebV1);
-    } else if (bldHit) {
-      applyHitToBuilding(bldHit, eb.bldDmg, eb.fxScale * 1.2);
+    } else if (bldHit >= 0) {
+      hitBoxBuilding(bldHit, pos.x, pos.y, pos.z, eb.bldDmg, eb.fxScale * 1.2);
     } else if (grounded) {
       _ebV2.set(pos.x, gy, pos.z);
       const onRoad = roadTopAt(pos.x, pos.z) != null;
@@ -6148,6 +6190,52 @@ function wkOrient(mesh, a, b) {   // aからbへ円柱を張る
   mesh.quaternion.setFromUnitVectors(_wkYAxis, _wkV3.normalize());
   mesh.scale.y = Math.max(0.1, len);
 }
+let wkMatCache = null, spMatCache = null;
+function resetCarveSet(set, baseY, height) {   // 使い回し材質の穴・溶解を初期化
+  for (let i = 0; i < set.uRadii.length; i++) { set.uRadii[i].value = 0; set.uCenters[i].value.set(1e6, 1e6, 1e6); }
+  if (set.uKill) set.uKill.value = 0;
+  set.uKillOn.value = 0;
+  set.uBaseY.value = baseY; set.uHeight.value = height;
+}
+function ensureWkMats() {   // 再出現でも材質を使い回し＝パイプライン再コンパイルのヒッチを防ぐ
+  if (!wkMatCache) {
+    const flashU = uniform(0);
+    wkMatCache = {
+      flashU,
+      cmBody: makeCarveMaterial(new THREE.MeshStandardMaterial({ color: 0x3a4149, metalness: 0.7, roughness: 0.45 }), 0, 40, flashU),
+      cmLeg: makeCarveMaterial(new THREE.MeshStandardMaterial({ color: 0x2c3138, metalness: 0.6, roughness: 0.55 }), 0, 40, flashU),
+      matAcc: new THREE.MeshStandardMaterial({ color: 0x8a2f2f, metalness: 0.5, roughness: 0.5, emissive: 0x300808, emissiveIntensity: 0.8 }),
+    };
+  }
+  wkMatCache.flashU.value = 0;
+  resetCarveSet(wkMatCache.cmBody, 0, 40); resetCarveSet(wkMatCache.cmLeg, 0, 40);
+  return wkMatCache;
+}
+function ensureSpMats() {
+  if (!spMatCache) {
+    const flashU = uniform(0);
+    spMatCache = {
+      flashU,
+      cmBody: makeCarveMaterial(new THREE.MeshStandardMaterial({ color: 0x2f3540, metalness: 0.7, roughness: 0.45 }), 0, 120, flashU),
+      cmLeg: makeCarveMaterial(new THREE.MeshStandardMaterial({ color: 0x232830, metalness: 0.6, roughness: 0.55 }), 0, 120, flashU),
+      matAcc: new THREE.MeshStandardMaterial({ color: 0x8a2f2f, metalness: 0.5, roughness: 0.5, emissive: 0x300808, emissiveIntensity: 0.8 }),
+    };
+  }
+  spMatCache.flashU.value = 0;
+  resetCarveSet(spMatCache.cmBody, 0, 120); resetCarveSet(spMatCache.cmLeg, 0, 120);
+  return spMatCache;
+}
+function warmEnemyMats() {   // 出現時のシェーダコンパイルヒッチ対策: タイトル中に一度描画してコンパイルさせる
+  const g = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+  const meshes = [];
+  for (const cm of [ensureWkMats().cmBody, ensureWkMats().cmLeg, ensureSpMats().cmBody, ensureSpMats().cmLeg]) {
+    const m = new THREE.Mesh(g, cm.mat);
+    m.frustumCulled = false;   // 画面外でも描画パスに載せてコンパイルさせる
+    m.position.set(0, -2000, 0);
+    scene.add(m); meshes.push(m);
+  }
+  setTimeout(() => { for (const m of meshes) scene.remove(m); }, 5000);
+}
 function spawnWalker() {
   // 市街境界（建物コリジョンの範囲）
   let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
@@ -6157,13 +6245,8 @@ function spawnWalker() {
   const ang = Math.random() * Math.PI * 2;
   const px = Math.max(bounds.x0, Math.min(bounds.x1, player.pos.x + Math.cos(ang) * 250));
   const pz = Math.max(bounds.z0, Math.min(bounds.z1, player.pos.z + Math.sin(ang) * 250));
-  const matBody0 = new THREE.MeshStandardMaterial({ color: 0x3a4149, metalness: 0.7, roughness: 0.45 });
-  const matLeg0 = new THREE.MeshStandardMaterial({ color: 0x2c3138, metalness: 0.6, roughness: 0.55 });
-  const wkFlashU = uniform(0);   // 被弾フラッシュ
-  const cmBody = makeCarveMaterial(matBody0, 0, 40, wkFlashU);   // ビルと同じ穴あき/溶解シェーダ（中心は毎フレーム追従更新）
-  const cmLeg = makeCarveMaterial(matLeg0, 0, 40, wkFlashU);
+  const { flashU: wkFlashU, cmBody, cmLeg, matAcc } = ensureWkMats();   // 使い回し（再コンパイル防止）
   const matBody = cmBody.mat, matLeg = cmLeg.mat;
-  const matAcc = new THREE.MeshStandardMaterial({ color: 0x8a2f2f, metalness: 0.5, roughness: 0.5, emissive: 0x300808, emissiveIntensity: 0.8 });
   const root = new THREE.Group();
   // 胴体＋装甲
   const body = new THREE.Mesh(new THREE.BoxGeometry(WK.bodyW, WK.bodyH, WK.bodyD), matBody);
@@ -6270,25 +6353,20 @@ function wkSolveLeg(lg, yaw, quat) {   // 2ボーンIK: 股→膝→足（膝ポ
   wkOrient(lg.tibia, knee, foot);
   lg.footMesh.position.copy(foot).y += 0.8;
 }
-function wkSmashRays() {   // 進行方向の建物をなぎ倒す（通常攻撃と同じ破壊パイプライン）
+function wkSmashRays() {   // 進行方向の建物をなぎ倒す（collGridボックス直判定＝軽量）
   const fwd = _wkV1.set(Math.sin(walker.yaw), 0, Math.cos(walker.yaw));
-  const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
   for (const yOff of [10, 20]) {
     for (const aOff of [-0.35, 0, 0.35]) {
       _wkV2.copy(fwd).applyAxisAngle(_wkYAxis, aOff);
       _wkV3.set(walker.pos.x, walker.pos.y - WK.hipY + yOff, walker.pos.z);
-      _wkRay.set(_wkV3, _wkV2); _wkRay.far = WK.smashRange;
-      const hits = _wkRay.intersectObjects(targets, true);
-      if (hits.length) applyHitToBuilding(hits[0], WK.smashDmg, 2.2);
+      const h = rayCityBox(_wkV3.x, _wkV3.y, _wkV3.z, _wkV2.x, _wkV2.y, _wkV2.z, WK.smashRange);
+      if (h) hitBoxBuilding(h.bi, _wkV3.x + _wkV2.x * h.t, _wkV3.y + _wkV2.y * h.t, _wkV3.z + _wkV2.z * h.t, WK.smashDmg, 2.2);
     }
   }
 }
 function wkFootSmash(footPos) {   // 着地点の建物破壊＋踏み跡
-  const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
-  _wkV3.set(footPos.x, footPos.y + 30, footPos.z);
-  _wkRay.set(_wkV3, _wkV2.set(0, -1, 0)); _wkRay.far = 40;
-  const hits = _wkRay.intersectObjects(targets, true);
-  if (hits.length) applyHitToBuilding(hits[0], WK.smashDmg, 2);
+  const h = rayCityBox(footPos.x, footPos.y + 30, footPos.z, 0, -1, 0, 40);
+  if (h) hitBoxBuilding(h.bi, footPos.x, footPos.y + 30 - h.t, footPos.z, WK.smashDmg, 2);
   const onRoad = roadTopAt(footPos.x, footPos.z) != null;
   spawnDebrisBurst(footPos, onRoad ? 'road' : 'ground', 0.8);
 }
@@ -6481,13 +6559,8 @@ function spawnSpider() {
   const ang = Math.random() * Math.PI * 2;
   const px = Math.max(bounds.x0, Math.min(bounds.x1, player.pos.x + Math.cos(ang) * 450));
   const pz = Math.max(bounds.z0, Math.min(bounds.z1, player.pos.z + Math.sin(ang) * 450));
-  const matBody0 = new THREE.MeshStandardMaterial({ color: 0x2f3540, metalness: 0.7, roughness: 0.45 });
-  const matLeg0 = new THREE.MeshStandardMaterial({ color: 0x232830, metalness: 0.6, roughness: 0.55 });
-  const spFlashU = uniform(0);
-  const cmBody = makeCarveMaterial(matBody0, 0, 120, spFlashU);
-  const cmLeg = makeCarveMaterial(matLeg0, 0, 120, spFlashU);
+  const { flashU: spFlashU, cmBody, cmLeg, matAcc } = ensureSpMats();   // 使い回し（再コンパイル防止）
   const matBody = cmBody.mat, matLeg = cmLeg.mat;
-  const matAcc = new THREE.MeshStandardMaterial({ color: 0x8a2f2f, metalness: 0.5, roughness: 0.5, emissive: 0x300808, emissiveIntensity: 0.8 });
   const root = new THREE.Group();
   const body = new THREE.Mesh(new THREE.BoxGeometry(SP.bodyW, SP.bodyH, SP.bodyD), matBody);
   root.add(body);
@@ -6677,10 +6750,8 @@ function updateSpMissiles(dt) {
     spawnImpactFx(pos, 1.4);
     if (hitPlayer) { _spV1.copy(ms.vel).normalize(); playerDamage(SP.mslDmg, _spV1); }
     else {
-      _wkRay.set(_spV2.set(pos.x, pos.y + 30, pos.z), _spV3.set(0, -1, 0)); _wkRay.far = 80;
-      const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
-      const bh = _wkRay.intersectObjects(targets, true)[0];
-      if (bh) applyHitToBuilding(bh, DMG_SHOT, 1.2);
+      const bh = rayCityBox(pos.x, pos.y + 30, pos.z, 0, -1, 0, 80);
+      if (bh) hitBoxBuilding(bh.bi, pos.x, pos.y + 30 - bh.t, pos.z, DMG_SHOT, 1.2);
       else spawnScorch(_spV3.set(pos.x, gy, pos.z), 3);
     }
   }
@@ -6786,10 +6857,8 @@ function updateSpider(dt) {
     if (st.t >= 1) {
       lg.foot.copy(st.to);
       lg.step = null;
-      _wkRay.set(_spV3.set(lg.foot.x, lg.foot.y + 60, lg.foot.z), _spV2.set(0, -1, 0)); _wkRay.far = 90;
-      const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
-      const hits = _wkRay.intersectObjects(targets, true);
-      if (hits.length) applyHitToBuilding(hits[0], SP.smashDmg, 2.4);
+      const h = rayCityBox(lg.foot.x, lg.foot.y + 60, lg.foot.z, 0, -1, 0, 90);
+      if (h) hitBoxBuilding(h.bi, lg.foot.x, lg.foot.y + 60 - h.t, lg.foot.z, SP.smashDmg, 2.4);
       const onRoad = roadTopAt(lg.foot.x, lg.foot.z) != null;
       spawnDebrisBurst(lg.foot, onRoad ? 'road' : 'ground', 1.6);
       playSfxAt('bomb_short.ogg', lg.foot, 0.5);
@@ -6818,14 +6887,12 @@ function updateSpider(dt) {
   if (w.smashT <= 0 && throttle > 0.2) {
     w.smashT = SP.smashInt;
     const fwd = _spV1.set(Math.sin(w.yaw), 0, Math.cos(w.yaw));
-    const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
     for (const yOff of [25, 55]) {
       for (const aOff of [-0.3, 0, 0.3]) {
         _spV2.copy(fwd).applyAxisAngle(_wkYAxis, aOff);
         _spV3.set(w.pos.x, w.pos.y - SP.hipY + yOff, w.pos.z);
-        _wkRay.set(_spV3, _spV2); _wkRay.far = SP.smashRange;
-        const hits = _wkRay.intersectObjects(targets, true);
-        if (hits.length) applyHitToBuilding(hits[0], SP.smashDmg, 2.6);
+        const h = rayCityBox(_spV3.x, _spV3.y, _spV3.z, _spV2.x, _spV2.y, _spV2.z, SP.smashRange);
+        if (h) hitBoxBuilding(h.bi, _spV3.x + _spV2.x * h.t, _spV3.y + _spV2.y * h.t, _spV3.z + _spV2.z * h.t, SP.smashDmg, 2.6);
       }
     }
   }
