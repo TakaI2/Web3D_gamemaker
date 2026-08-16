@@ -24,7 +24,7 @@ description: Natural language Obsidian assistant for fleeting notes and task man
 # Adding tasks
 /obs task PR確認を今日やるタスクに追加
 /obs task turidocoのステージング環境構築を週内のタスクに追加して
-/obs task PLATEAU全体会議の資料作成を忘れないようにメモ
+/obs task 全体会議の資料作成を忘れないようにメモ
 
 # Completing tasks
 /obs task PR確認を完了にして

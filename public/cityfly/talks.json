@@ -1,0 +1,37 @@
+{
+  "format": "cityfly-talks",
+  "version": 1,
+  "actors": {
+    "nei":    { "name": "ネイ",       "color": "#e05a7a" },
+    "hakase": { "name": "博士",       "color": "#5a8fe0" },
+    "mayor":  { "name": "市長",       "color": "#c09a4a" },
+    "kanbu":  { "name": "幹部",       "color": "#8a93a5" },
+    "elix":   { "name": "エリクシラ", "color": "#a55ae0" }
+  },
+  "talks": {
+    "t_hp50": [
+      { "who": "nei", "face": "damage", "text": "私のマントが！！" },
+      { "who": "nei", "face": "damage", "text": "まずい、このままじゃ力が出せなくなる！！" }
+    ],
+    "t_hp25": [
+      { "who": "nei", "face": "weak", "text": "くっ！！　飛ぶのがキツくなってきた！！" },
+      { "who": "nei", "face": "weak", "text": "だめ・・・、補充しなきゃ・・・、　精気・・・、元気な精気・・・" }
+    ],
+    "t_city40": [
+      { "who": "mayor",  "face": "panic",  "text": "ま・・・町が！　おいっ！　被害がどんどん拡大しているぞ！" },
+      { "who": "hakase", "face": "worry",  "text": "くっ！！　ネイ！　誤射はなるべく抑えて！！" },
+      { "who": "nei",    "face": "angry",  "text": "うるさいな・・・、できるんならやってるっての！" }
+    ],
+    "t_attr50": [
+      { "who": "kanbu", "face": "normal", "text": "わが軍の損耗率、50%" },
+      { "who": "kanbu", "face": "normal", "text": "化け物め！" },
+      { "who": "kanbu", "face": "normal", "text": "ウォーカータンクを投入せよ！　一気に制圧する。" }
+    ],
+    "t_attr75": [
+      { "who": "kanbu", "face": "panic",  "text": "わが軍の損耗率、75%！　き・・・危険です！！　本部に通信を！" },
+      { "who": "elix",  "face": "normal", "text": "あらあら、順調に進んでいるかとみてみれば！" },
+      { "who": "elix",  "face": "smile",  "text": "せっかくだから私もじっくり観戦してみたいわ！　スパイダーキャリアを出しなさい！" },
+      { "who": "kanbu", "face": "panic",  "text": "スパイダーキャリア、投入！！" }
+    ]
+  }
+}

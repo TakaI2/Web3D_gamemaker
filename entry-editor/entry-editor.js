@@ -1,5 +1,5 @@
 // entry-editor.js — 建物GLBに「玄関(door)/窓(window)/光点(light)/窓発光(glow)」マーカーを打つエディタ。
-// 座標は plateau-fly のベイク済みテンプレートと同じ「モデルのワールド行列適用後ローカル空間」。
+// 座標は city-fly のベイク済みテンプレートと同じ「モデルのワールド行列適用後ローカル空間」。
 // 保存: public/models/building-entries.json = { "<GLB相対パス>": [{kind,pos:[x,y,z], color?, ry?, size?:[w,h]}] }
 //   light: 夜に光る点（屋上ランプ・街灯の発光位置）。color 省略=ゲーム側で自動配色。blink=点滅周期(秒・省略で常時点灯)
 //   glow : 夜に光る窓矩形（光漏れ）。ry=面の向き（Yヨー）、size=[幅,高さ]。窓入口としても機能
@@ -145,7 +145,7 @@ async function init() {
   // 既存マーカー読込
   try { entries = await (await fetch('../models/' + ENTRIES_FILE)).json(); } catch { entries = {}; }
 
-  // 建物モデル一覧（plateau-fly が使う city / suburban キット）＋街灯（光点調整用）
+  // 建物モデル一覧（city-fly が使う city / suburban キット）＋街灯（光点調整用）
   const all = await (await fetch('../models/manifest.json')).json();
   const list = all.filter((f) =>
     (f.startsWith('city_GLB format/') && /\/building-[\w-]+\.glb$/.test('/' + f) && !f.includes('low-detail')) ||

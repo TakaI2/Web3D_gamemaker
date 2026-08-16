@@ -738,9 +738,9 @@ function setupUI() {
 
   fillManifest('../npc/manifest.json', 'player-npc', f => f.replace(/\.npc\.json$/, ''));
   fillManifest('../npc/manifest.json', 'npc-npc', f => f.replace(/\.npc\.json$/, ''));
-  fillManifest('/vrma/manifest.json', 'anim-player', f => f.replace(/\.vrma$/, ''));
-  fillManifest('/vrma/manifest.json', 'anim-victim', f => f.replace(/\.vrma$/, ''));
-  fillManifest('/bitealign/manifest.json', 'ba-select', f => f.replace(/\.bite\.json$/, ''));
+  fillManifest('../vrma/manifest.json', 'anim-player', f => f.replace(/\.vrma$/, ''));
+  fillManifest('../vrma/manifest.json', 'anim-victim', f => f.replace(/\.vrma$/, ''));
+  fillManifest('../bitealign/manifest.json', 'ba-select', f => f.replace(/\.bite\.json$/, ''));
   fillManifest('/audio/manifest.json', 'anim-sound', f => f);
 
   document.getElementById('anim-player').addEventListener('change', e => { if (e.target.value) loadVrmaInto(player, e.target.value).catch(err => showToast(err.message, 'error')); });
@@ -814,7 +814,7 @@ function setupUI() {
   // BiteAlign 読込 / 保存
   document.getElementById('ba-select').addEventListener('change', async e => {
     if (!e.target.value) return;
-    try { const r = await fetch('/bitealign/' + e.target.value); if (!r.ok) throw new Error('取得失敗'); await loadBiteAlign(await r.json()); showToast(`読込: ${e.target.value}`); }
+    try { const r = await fetch('../bitealign/' + e.target.value + '?ts=' + Date.now()); if (!r.ok) throw new Error('取得失敗'); await loadBiteAlign(await r.json()); showToast(`読込: ${e.target.value}`); }
     catch (err) { showToast(`読込失敗: ${err.message}`, 'error'); }
   });
   document.getElementById('ba-save').addEventListener('click', saveConfig);

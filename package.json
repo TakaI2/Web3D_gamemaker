@@ -17,7 +17,6 @@
     "build:character-editor": "node scripts/build-character-editor.mjs",
     "build:model-editor": "node scripts/build-model-editor.mjs",
     "build:stage-editor": "node scripts/build-stage-editor.mjs",
-    "build:plateau-fly": "node scripts/build-plateau-fly.mjs",
     "build:hub": "node scripts/build-hub.mjs",
     "preview": "node node_modules/vite/bin/vite.js preview",
     "test": "vitest run",
@@ -25,7 +24,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "build:cityfly": "node scripts/build-plateau-fly.mjs",
+    "build:cityfly": "node scripts/build-cityfly.mjs",
     "build:ar-vampire": "node scripts/build-ar-vampire.mjs",
     "split-npc": "node scripts/split-npc.mjs",
     "build:vamp-dungeon": "node scripts/build-vamp-dungeon.mjs"

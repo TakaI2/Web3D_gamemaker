@@ -1,4 +1,4 @@
-// map-editor.js — 脱PLATEAU用マップエディタ M1: 地形スカルプト＋ペイント＋保存/読込。
+// map-editor.js — 自作マップエディタ M1: 地形スカルプト＋ペイント＋保存/読込。
 // 地形実装は lib/terrain.js（ゲームと共用）。保存 = public/maps/*.map.json
 import * as THREE from 'https://esm.sh/three@0.184.0';
 import { OrbitControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
@@ -1207,7 +1207,7 @@ async function saveMap() {
   const name = ($('save-name').value || 'map').replace(/[^\w\-]/g, '');
   const roads = roadEd.roads.filter((r) => r.points.length >= 2);
   const json = {
-    format: 'plateau-map', version: 1, name,
+    format: 'city-map', version: 1, name,
     terrain: { ...serializeTerrain(terrain.data), attribution: false },
     roads,
     osmRoads: roads.some((r) => r.osm),   // OSM由来の道路を含む＝出典表記が必要なまま
@@ -1219,7 +1219,7 @@ async function saveMap() {
   };
   try {
     const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'map', filename: name + '.map.json', content: JSON.stringify(json) }) });
-    setStatus(r.ok ? `保存しました: maps/${name}.map.json → plateau-fly/?map=${name}` : '保存失敗: ' + r.status);
+    setStatus(r.ok ? `保存しました: maps/${name}.map.json → city-fly/?map=${name}` : '保存失敗: ' + r.status);
     refreshLoadList();
   } catch (e) { setStatus('保存失敗: ' + e.message); }
 }

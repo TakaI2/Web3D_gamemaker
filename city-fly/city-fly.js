@@ -1,13 +1,10 @@
-// plateau-fly.js — PLATEAU(八王子)の 3D Tiles を three.js(WebGL) で読み込み、自由飛行で街を巡る。
-// 3d-tiles-renderer が LOD/ストリーミング/視錐台カリングを担う（＝軽量化は標準装備）。
-// ECEF の tileset を bounding-sphere 中心＋ENU で「八王子原点・Y-up」のローカル座標へ再中心化し、
+// city-fly.js — 手続き生成都市（実道路網＋Kenney建物）を three.js で自由飛行するゲーム。
+// 既定は八王子原点: OSM道路網＋地理院タイル(航空写真/DEM)の地面に建物を手続き配置。
+// ?map=<名前> で map-editor 製の自作地形マップに置換。
 // tps-flight 風のスペクテイター飛行で上空〜街中を移動。
-// データ出典: 3D都市モデル PLATEAU / 国土交通省 / Pacific Spatial Solutions（CC BY 4.0）。
 
 import * as THREE from 'https://esm.sh/three@0.184.0/webgpu';
 import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
-import { DRACOLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/DRACOLoader.js';
-import { KTX2Loader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/KTX2Loader.js';
 import { UltraHDRLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/UltraHDRLoader.js';
 import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixiv/three-vrm@3.5.3?deps=three@0.184.0';
 import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
@@ -19,9 +16,9 @@ import { createBeamFx } from '../lib/fx-beam.js';
 import { createTornado } from '../lib/fx-tornado.js';
 import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
 import { createDissolve } from '../lib/fx-dissolve.js';
+import { createScenario2D } from '../lib/scenario2d.js';
+import { createFlow } from '../lib/flow-runner.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll } from '../lib/vrm-ragdoll.js';
-import { TilesRenderer } from 'https://esm.sh/3d-tiles-renderer@0.4.28?deps=three@0.184.0';
-import { GLTFExtensionsPlugin, ImplicitTilingPlugin } from 'https://esm.sh/3d-tiles-renderer@0.4.28/plugins?deps=three@0.184.0';
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
 import { generateBuildings, instanceId } from '../lib/kenney-buildings.js';
 import { generateHouse } from '../lib/room-gen.js';
@@ -31,15 +28,12 @@ import { createSpeechUI } from '../lib/speech-ui.js';
 import { fetchSpeechSet, buildSpeechCharacter } from '../lib/speech-set.js';
 import { uniform, color, float, positionWorld, mx_noise_float, clamp, texture, uv, mix, frontFacing } from 'https://esm.sh/three@0.184.0/tsl';
 
-// 八王子(13201) 2025 LOD2 テクスチャ付き tileset（reearth CMS 配信）
-const TILESET = 'https://assets.cms.plateau.reearth.io/assets/5b/5071b2-6b29-40b8-99a9-890e22b8feff/13201_hachioji-shi_pref_2025_citygml_1_op_bldg_3dtiles_lod2/tileset.json';
-
-let renderer, scene, camera, tiles, pivot, groundGroup;
+let renderer, scene, camera, pivot, groundGroup;
 const keysDown = {};
-let locked = false, recentered = false, diagMsg = '';
+let locked = false, recentered = false;
 // TPS プレイヤー（tps-flight から移植・WebGL）
-const KENNEY_CITY = true;   // true: PLATEAUタイルを撤去し実道路網にKenney建物を配置（破壊実験P1）
-const PLAYER_NPC = 'Joy_reborn.npc.json';
+const KENNEY_CITY = true;   // 実道路網に Kenney 建物を手続き配置（破壊・都市ゲームの土台）
+const PLAYER_NPC = 'nei_vamp.npc.json';
 const FACE_OFFSET = Math.PI;   // Joy_reborn は正面が逆焼き→180°補正
 const flight = { accel: 32, drag: 2.4, maxSpeed: 9, turn: 8 };   // TPS-Flight と同じ操作感（ホイールで増速可）
 const cam = { dist: 4.0, height: 1.2, follow: 8, side: 0.75 };   // side=肩越しオフセット(m)。プレイヤーを画面中心よりやや左へ＝クロスヘア/エフェクトが見やすい
@@ -72,10 +66,11 @@ async function loadCharLight() {
   if (charFill.key) { charFill.key.color.set(charLightCfg.dirC); charFill.rim.color.set(charLightCfg.ambC); }
 }
 function attachCharFill(root) {   // プレイヤーVRM読込時に呼ぶ（子として追従）
-  charFill.key = new THREE.PointLight(charLightCfg.dirC, 0, 7, 1.2);
+  // vamp-dungeon の JOY_vamp と同じく常時点灯（マントの質感を昼夜問わず持ち上げる）
+  charFill.key = new THREE.PointLight(charLightCfg.dirC, charLightCfg.dirI, 7, 1.2);
   charFill.key.position.set(0.35, 1.7, 0.7);    // 前上（キー光）
   root.add(charFill.key);
-  charFill.rim = new THREE.PointLight(charLightCfg.ambC, 0, 6, 1.2);
+  charFill.rim = new THREE.PointLight(charLightCfg.ambC, charLightCfg.ambI, 6, 1.2);
   charFill.rim.position.set(-0.3, 1.5, -0.8);   // 後上（回り込み）
   root.add(charFill.rim);
 }
@@ -153,53 +148,17 @@ async function init() {
     try { buildClouds(); } catch (e) { console.warn('雲生成失敗', e); }
   }
 
-  // ECEF→ローカル再中心化のためのピボット（tiles.group をぶら下げて逆ENUを掛ける）
+  // ECEF→ローカルENU変換のピボット（OSM道路の経緯度→ローカル座標化に使用）
   pivot = new THREE.Group(); pivot.matrixAutoUpdate = false; scene.add(pivot);
-
-  // 原点の参照グリッド＋軸（タイルが出なくても座標系が見える＝八王子原点付近の地表）
-  if (!MAP_NAME) {   // 地表の目安グリッド（PLATEAUタイル待ちの間の座標系表示。マップモードでは水面に透けるので出さない）
-    const grid = new THREE.GridHelper(8000, 80, 0x557799, 0x2a3a4a);
-    grid.material.transparent = true; grid.material.opacity = 0.16; scene.add(grid);
-  }
-
-  if (!KENNEY_CITY) try {
-    tiles = new TilesRenderer(TILESET);
-    tiles.registerPlugin(new ImplicitTilingPlugin());   // 暗黙タイリング対応（PLATEAUで使う場合あり）
-    // b3dm(RTC座標)＋DRACO/KTX2 を正しく展開する公式プラグイン（rtc:true が肝）
-    const draco = new DRACOLoader();
-    draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/libs/draco/gltf/');
-    const ktx2 = new KTX2Loader();
-    ktx2.setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/libs/basis/');
-    try { ktx2.detectSupport(renderer); } catch (e) { console.warn('ktx2 detectSupport 失敗(WebGPU)', e); }
-    tiles.registerPlugin(new GLTFExtensionsPlugin({ rtc: true, dracoLoader: draco, ktxLoader: ktx2 }));
-    tiles.setCamera(camera);
-    tiles.setResolutionFromRenderer(camera, renderer);
-    tiles.errorTarget = 20;            // 画面誤差px（大きいほど粗く広く速い）。飛行なので広範囲優先
-    // キャッシュ・並列度を上げて建物が速く広く出るように
-    try {
-      if (tiles.lruCache) { tiles.lruCache.minSize = 1200; tiles.lruCache.maxSize = 2200; }
-      if (tiles.downloadQueue) tiles.downloadQueue.maxJobs = 12;
-      if (tiles.parseQueue) tiles.parseQueue.maxJobs = 6;
-    } catch (e) { console.warn('tiles cache設定', e); }
-    pivot.add(tiles.group);
-    tiles.addEventListener('load-error', (e) => { const m = 'タイル読込エラー: ' + (e?.error?.message || e?.url || 'unknown'); diagMsg = m; showError(m); });
-    tiles.addEventListener('load-tile-set', () => { diagMsg = 'tileset parsed ✓'; console.log('[diag] load-tile-set'); });
-    tiles.addEventListener('load-model', () => { diagMsg = 'models ✓'; });
-  } catch (e) {
-    showError('3d-tiles-renderer 初期化失敗: ' + (e?.message || e) + '（import か CORS を確認）');
-  }
 
   recenterToHachioji();   // 固定原点で即時再中心化
   groundGroup = new THREE.Group(); scene.add(groundGroup);
-  // ?map=<name> でmap-editor製の自作地形に置換（M1: 地形のみ。道路/建物は従来ソース）
-  let chain = MAP_NAME
-    ? buildMapGround().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)))
-    : buildAerialGround();
-  if (!KENNEY_CITY) chain = chain.then(() => new Promise((res) => setTimeout(res, 2500)));   // タイル優先で道路を後ろへ
+  // map-editor 製 .map.json の自作地形マップ（?map=<name>、既定 mytown）
+  let chain = buildMapGround().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)));
   chain = chain.then(() => loadRoads());
   if (KENNEY_CITY) chain = chain.then(() => buildKenneyCity());   // 実道路網に Kenney 建物を配置
-  if (MAP_NAME) chain = chain.then(() => buildParks().catch((e) => console.warn('公園生成失敗', e)));   // 閉じスプラインの公園
-  if (MAP_NAME) chain = chain.then(() => buildForest().catch((e) => console.warn('森生成失敗', e)));   // 空き地の森（建物確定後）
+  chain = chain.then(() => buildParks().catch((e) => console.warn('公園生成失敗', e)));   // 閉じスプラインの公園
+  chain = chain.then(() => buildForest().catch((e) => console.warn('森生成失敗', e)));   // 空き地の森（建物確定後）
   chain = chain.then(() => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
     loadImpactFx().catch((e) => console.warn('着弾FX準備失敗:', e));
     ensureTotemFx().catch((e) => console.warn('トーテムFX準備失敗:', e));
@@ -249,15 +208,13 @@ function recenterToHachioji() {
   const M = new THREE.Matrix4().makeBasis(east, up, north.clone().negate());   // X=east, Y=up, Z=south
   M.setPosition(c);
   pivot.matrix.copy(M.clone().invert()); pivot.matrixWorldNeedsUpdate = true;
-  pivot.updateMatrixWorld(true);   // tiles.update() が正しい group ワールド行列を読めるよう即時反映
+  pivot.updateMatrixWorld(true);
   recentered = true;
   console.log('recentered to Hachioji; ECEF origin=', c.toArray().map((v) => Math.round(v)));
 }
 
-// ── 地面: 地理院タイル(航空写真)＋DEM(標高)で地形追従。建物(楕円体高)に合わせ geoid 補正 ──
-const GROUND_ZOOM = 16, GROUND_RADIUS = 5, DEM_ZOOM = 14, GROUND_SUB = 8;
-// ── マップモード（map-editor製 .map.json の地形へ置換）──
-const MAP_NAME = new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || null;   // dist はビルド時に window.DEFAULT_MAP を注入
+// ── マップモード（map-editor製 .map.json の地形。既定 mytown＝my-city ステージ）──
+const MAP_NAME = new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || 'mytown';   // dist はビルド時に window.DEFAULT_MAP を注入
 // 性能切り分け用スイッチ。?diag=1 で GPU名/drawCall/三角数まで表示。
 //   ?nocape=1 マント無効 / ?nocity=1 建物無効 / ?nonpc=1 NPC(ken)と車を無効 / ?dpr=1 解像度を下げる
 const _qs = new URLSearchParams(location.search);
@@ -348,7 +305,7 @@ async function buildMapGround() {
   mapParks = Array.isArray(j.parks) ? j.parks.filter((pk) => pk.points && pk.points.length >= 3) : [];
   mapParkCfg = j.parkCfg || {};
   if (mapWater.length) try { buildMapWater(); } catch (e) { console.warn('水面生成失敗', e); }
-  // 表記を実際の使用データに合わせて動的に書き換え（PLATEAU/GSI航空写真はマップモードでは不使用）
+  // 表記を実際の使用データに合わせて動的に書き換え
   const a = $('attrib');
   if (a) {
     const parts = [];
@@ -359,88 +316,8 @@ async function buildMapGround() {
   }
   console.log('map:', MAP_NAME, mapTerrain.data.size + 'm / res', mapTerrain.data.res, '/ roads', mapRoads.length);
 }
-const GEOID = 37;              // Kanto ジオイド高(概算, m)。DEM(標高)→楕円体高 へ +GEOID（建物と整合）
-const GROUND_FALLBACK = 100;   // DEM欠測時の標高(m)
-function lon2tileX(lon, z) { return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
-function lat2tileY(lat, z) { const r = lat * D2R; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z)); }
-function tileX2lon(x, z) { return x / Math.pow(2, z) * 360 - 180; }
-function tileY2lat(y, z) { const n = Math.PI - 2 * Math.PI * y / Math.pow(2, z); return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))); }
+
 function llaToLocal(latDeg, lonDeg, h) { return lla2ecef(latDeg, lonDeg, h).applyMatrix4(pivot.matrix); }   // ECEF→ローカルENU
-
-const _dem = new Map();   // "tx_ty"(DEM_ZOOM) -> Float32Array(256*256) 標高(m) | null
-async function fetchDem(tx, ty) {
-  const key = tx + '_' + ty; if (_dem.has(key)) return;
-  try {
-    const r = await fetch(`https://cyberjapandata.gsi.go.jp/xyz/dem/${DEM_ZOOM}/${tx}/${ty}.txt`);
-    if (!r.ok) { _dem.set(key, null); return; }
-    const rows = (await r.text()).trim().split('\n');
-    const grid = new Float32Array(256 * 256);
-    for (let j = 0; j < 256; j++) {
-      const cells = (rows[j] || '').split(',');
-      for (let i = 0; i < 256; i++) { const v = cells[i]; grid[j * 256 + i] = (v === undefined || v === 'e' || v === '') ? NaN : parseFloat(v); }
-    }
-    _dem.set(key, grid);
-  } catch { _dem.set(key, null); }
-}
-function elevAt(lat, lon) {   // 標高(m)。欠測は GROUND_FALLBACK
-  const n = Math.pow(2, DEM_ZOOM);
-  const fx = (lon + 180) / 360 * n;
-  const r = lat * D2R;
-  const fy = (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n;
-  const grid = _dem.get(Math.floor(fx) + '_' + Math.floor(fy));
-  if (!grid) return GROUND_FALLBACK;
-  const px = Math.max(0, Math.min(255, Math.floor((fx - Math.floor(fx)) * 256)));
-  const py = Math.max(0, Math.min(255, Math.floor((fy - Math.floor(fy)) * 256)));
-  const v = grid[py * 256 + px];
-  return Number.isFinite(v) ? v : GROUND_FALLBACK;
-}
-
-async function buildAerialGround() {
-  const loader = new THREE.TextureLoader();
-  const clat = 35.6664, clon = 139.3159, z = GROUND_ZOOM;
-  const cx = lon2tileX(clon, z), cy = lat2tileY(clat, z);
-  // 範囲を覆う DEM タイル(z14)を先読み
-  const lonMin = tileX2lon(cx - GROUND_RADIUS, z), lonMax = tileX2lon(cx + GROUND_RADIUS + 1, z);
-  const latMax = tileY2lat(cy - GROUND_RADIUS, z), latMin = tileY2lat(cy + GROUND_RADIUS + 1, z);
-  const dJobs = [];
-  for (let ty = lat2tileY(latMax, DEM_ZOOM); ty <= lat2tileY(latMin, DEM_ZOOM); ty++)
-    for (let tx = lon2tileX(lonMin, DEM_ZOOM); tx <= lon2tileX(lonMax, DEM_ZOOM); tx++)
-      dJobs.push(fetchDem(tx, ty));
-  await Promise.all(dJobs);
-  // 航空写真タイルを地形追従メッシュ(SUB×SUB分割)として配置
-  const S = GROUND_SUB;
-  for (let dy = -GROUND_RADIUS; dy <= GROUND_RADIUS; dy++) {
-    for (let dx = -GROUND_RADIUS; dx <= GROUND_RADIUS; dx++) {
-      const tx = cx + dx, ty = cy + dy;
-      const lonW = tileX2lon(tx, z), lonE = tileX2lon(tx + 1, z);
-      const latN = tileY2lat(ty, z), latS = tileY2lat(ty + 1, z);
-      const pos = [], uv = [], idx = [];
-      for (let gy = 0; gy <= S; gy++) {
-        for (let gx = 0; gx <= S; gx++) {
-          const lon = lonW + (lonE - lonW) * (gx / S);
-          const lat = latN + (latS - latN) * (gy / S);
-          const p = llaToLocal(lat, lon, elevAt(lat, lon) + GEOID);
-          pos.push(p.x, p.y, p.z); uv.push(gx / S, gy / S);   // UV: 画像NW(左上)=(0,0)。flipY=false
-        }
-      }
-      for (let gy = 0; gy < S; gy++) for (let gx = 0; gx < S; gx++) {
-        const a = gy * (S + 1) + gx, b = a + 1, c = a + (S + 1), d = c + 1;
-        idx.push(a, c, b, b, c, d);
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-      g.setIndex(idx);
-      const url = `https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/${z}/${tx}/${ty}.jpg`;
-      const tex = loader.load(url, undefined, undefined, () => { /* 欠けは無視 */ });
-      tex.flipY = false; tex.colorSpace = THREE.SRGBColorSpace;
-      const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }));
-      mesh.renderOrder = -1;   // 建物より先に描画
-      groundGroup.add(mesh);
-    }
-  }
-  console.log('aerial+DEM ground tiles:', groundGroup.children.length, 'dem tiles:', _dem.size);
-}
 
 // ── TPS プレイヤー（tps-flight 移植。WebGL版 MToon で VRM を読む）──
 function dataURIToBlob(uri) {
@@ -761,12 +638,8 @@ async function idbListNpc() {
   return new Promise((res, rej) => { const rq = db.transaction('npc').objectStore('npc').getAllKeys(); rq.onsuccess = () => res(rq.result || []); rq.onerror = () => rej(rq.error); });
 }
 async function fetchSelectedBundle() {
-  const sel = npcSelection();
-  try {
-    if (sel.startsWith('idb:')) { const bd = await idbGetNpc(sel.slice(4)); if (bd?.vrm) return bd; }
-    else { const r = await fetch('../npc/' + sel.replace(/^file:/, '')); if (r.ok) { const bd = await r.json(); if (bd?.vrm) return bd; } }
-  } catch (e) { console.warn('選択キャラ読込失敗:', e); }
-  return await (await fetch('../npc/' + PLAYER_NPC)).json();   // フォールバック＝既定キャラ
+  // キャラ交換機能は一旦停止中: 常に既定キャラ（nei_vamp）を読む。復活させる時はこの関数と setupCharUI() を戻す
+  return await (await fetch('../npc/' + PLAYER_NPC)).json();
 }
 function disposePlayerModel() {
   if (!player.vrm) return;
@@ -782,6 +655,449 @@ function disposePlayerModel() {
   try { scene.remove(player.vrm.scene); } catch { /* noop */ }
   player.vrm = null; player.ready = false;
 }
+// ── プレイヤーHP＋ダメージ損耗（damage-editor の damage.json 準拠）──
+const PLAYER_HP_MAX = 100;
+let playerHp = PLAYER_HP_MAX;
+const dmgParts = [];   // [{id, kind, dis, range:[s,e]}]
+let dmgExpressions = [];   // ダメージ連動表情 [{name, keys:[{at,value}]}]
+function dmgExprValueAt(keys, dmg) {
+  if (!keys?.length) return 0;
+  const ks = [...keys].sort((a, b) => a.at - b.at);
+  if (dmg <= ks[0].at) return ks[0].value;
+  if (dmg >= ks[ks.length - 1].at) return ks[ks.length - 1].value;
+  for (let i = 0; i < ks.length - 1; i++) {
+    if (dmg <= ks[i + 1].at) {
+      const t = (dmg - ks[i].at) / Math.max(0.001, ks[i + 1].at - ks[i].at);
+      return ks[i].value + (ks[i + 1].value - ks[i].value) * t;
+    }
+  }
+  return ks[ks.length - 1].value;
+}
+function buildClothDamageAttrs(clothData, geo) {   // damage-editor と同一: dmgPos=布ローカル座標 / dmgH=アンカー距離(1=根元,0=先端)
+  const pos = clothData.positions;
+  const n = clothData.vertexCount;
+  const anchors = (clothData.anchorAssignments || []).map((a) => a.vertexIdx);
+  // アンカー重心・軸ごとのアンカー広がり（広がる軸=幅方向は除外したい）
+  const ac = [0, 0, 0], as = [0, 0, 0];
+  for (const ai of anchors) for (let k = 0; k < 3; k++) ac[k] += pos[ai * 3 + k];
+  for (let k = 0; k < 3; k++) ac[k] /= Math.max(1, anchors.length);
+  for (const ai of anchors) for (let k = 0; k < 3; k++) as[k] = Math.max(as[k], Math.abs(pos[ai * 3 + k] - ac[k]));
+  // 「アンカーから最も遠くへ伸びる軸」＝裾方向。距離ベースだと放射状（横からも溶ける）になるので軸射影にする
+  let axis = 2, bestScore = -1, sign = 1;
+  for (let k = 0; k < 3; k++) {
+    let mx = 0, sg = 1;
+    for (let i = 0; i < n; i++) { const d = pos[i * 3 + k] - ac[k]; if (Math.abs(d) > mx) { mx = Math.abs(d); sg = d >= 0 ? 1 : -1; } }
+    const score = mx / (1 + as[k] * 4);
+    if (score > bestScore) { bestScore = score; axis = k; sign = sg; }
+  }
+  const dmgH = new Float32Array(n);
+  let tMax = 0.0001;
+  for (let i = 0; i < n; i++) { const t = Math.max(0, (pos[i * 3 + axis] - ac[axis]) * sign); dmgH[i] = t; if (t > tMax) tMax = t; }
+  for (let i = 0; i < n; i++) dmgH[i] = 1 - dmgH[i] / tMax;   // 1=根元(アンカー側) → 0=裾(先端)
+  geo.setAttribute('dmgPos', new THREE.BufferAttribute(Float32Array.from(pos), 3));
+  geo.setAttribute('dmgH', new THREE.BufferAttribute(dmgH, 1));
+}
+let hpBarEl = null;
+let vigEl = null, vigA = 0, vigT = 0, dmgFlash = 0;
+function updateDamageVignette(dt) {   // vamp-dungeon と同じ見た目の赤ビネット
+  if (!vigEl) {
+    vigEl = document.createElement('div');
+    vigEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:15;opacity:0;'
+      + 'background:radial-gradient(ellipse at center, rgba(150,0,25,0) 52%, rgba(150,0,25,0.42) 82%, rgba(120,0,20,0.72) 100%);';
+    document.body.appendChild(vigEl);
+  }
+  vigT += dt;
+  dmgFlash = Math.max(0, dmgFlash - dt * 1.8);
+  const hpRatio = playerHp / PLAYER_HP_MAX;
+  const low = hpRatio < 0.35 ? (0.32 * (1 - hpRatio / 0.35) + Math.sin(vigT * 5.2) * 0.06 * (1 - hpRatio / 0.35)) : 0;   // 低HP=常時うっすら+脈動
+  const target = Math.min(1, Math.max(dmgFlash, low));
+  vigA += (target - vigA) * Math.min(1, dt * 8);
+  vigEl.style.opacity = Math.max(0, Math.min(1, vigA)).toFixed(3);
+}
+let hpNumEl = null;
+function updateHpUI() {
+  if (!hpBarEl) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;left:12px;top:52px;z-index:20;pointer-events:none;display:flex;align-items:center;gap:8px;';
+    const label = document.createElement('div');
+    label.textContent = 'HP';
+    label.style.cssText = "color:#cfe;font:900 13px 'Yu Gothic',Meiryo,sans-serif;text-shadow:0 1px 2px #000;";
+    const barWrap = document.createElement('div');
+    barWrap.style.cssText = 'width:190px;height:13px;background:rgba(10,14,22,0.7);border:1px solid #46608c;border-radius:7px;overflow:hidden;';
+    hpBarEl = document.createElement('div');
+    hpBarEl.style.cssText = 'height:100%;width:100%;background:linear-gradient(90deg,#3adf7c,#9fe6ff);transition:width 0.25s;';
+    barWrap.appendChild(hpBarEl);
+    hpNumEl = document.createElement('div');
+    hpNumEl.style.cssText = "color:#fff;font:900 15px 'Yu Gothic',Meiryo,sans-serif;text-shadow:0 1px 3px #000;min-width:34px;";
+    wrap.append(label, barWrap, hpNumEl);
+    document.body.appendChild(wrap);
+  }
+  const r = Math.max(0, playerHp / PLAYER_HP_MAX);
+  hpBarEl.style.width = (r * 100) + '%';
+  hpBarEl.style.background = r < 0.3 ? 'linear-gradient(90deg,#e2402f,#ff9a3a)' : 'linear-gradient(90deg,#3adf7c,#9fe6ff)';
+  if (hpNumEl) hpNumEl.textContent = String(Math.ceil(playerHp));
+}
+// ── 撃墜数（敵を倒すと太字ゴシックで一定時間表示→フェードアウト）──
+// ── ゲームループP1: モード状態機械＋ゲームパラメータ（docs/cityfly-game-plan.md §3）──
+let gameMode = 'title';   // 'title' | 'training' | 'play'（'op'/'ed' はP2で追加）
+const gp = { destroyed: 0, attritionPts: 0 };          // 都市被害・敵損耗の実測値
+const ATTR_PTS = { jet: 3, walker: 20, spider: 35 };   // 撃破ポイント（想定総量100pt=100%）
+function cityDamagePct() { return cityInfo && cityInfo.count ? Math.min(100, gp.destroyed / cityInfo.count * 100) : 0; }
+function attritionPct() { return Math.min(100, gp.attritionPts); }
+function enemyAllowed(kind) {   // 敵出現のモード制御（本編の投入は events.json 駆動）
+  if (gameMode === 'training') return true;
+  if (gameMode !== 'play') return false;   // title / op / ed 中は敵なし
+  if (ev.flags.warEnd) return false;   // 終戦後は増援なし（ED遷移はP4）
+  if (kind === 'jet') return true;
+  return !!ev.spawnAllow[kind];   // walker/spider は events.json の投入指示で解禁
+}
+let titleEl = null, goEl = null, paramsEl = null;
+function setupTitle() {
+  titleEl = document.createElement('div');
+  titleEl.style.cssText = 'position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;'
+    + 'background:linear-gradient(180deg,rgba(6,10,26,0.90),rgba(24,8,34,0.86));color:#eef;';
+  const btn = 'font:700 20px Meiryo,sans-serif;padding:12px 52px;border-radius:8px;border:1px solid #86f;background:#1b1f3a;color:#dde;cursor:pointer;min-width:340px;';
+  titleEl.innerHTML = '<div style="font:900 64px \'Yu Gothic\',\'Arial Black\',Meiryo,sans-serif;letter-spacing:0.08em;text-shadow:0 4px 18px rgba(130,70,255,0.65),0 2px 6px #000;">City-Fly</div>'
+    + '<div style="font:14px Meiryo,sans-serif;color:#aab;margin-bottom:14px;">デッドアトモス襲来 — 吸血鬼ネイ、出撃</div>'
+    + '<button id="cf-start" style="' + btn + '" disabled>準備中…</button>'
+    + '<button id="cf-training" style="' + btn + '" disabled>トレーニングモード</button>';
+  document.body.appendChild(titleEl);
+  const bs = titleEl.querySelector('#cf-start'), bt = titleEl.querySelector('#cf-training');
+  const iv = setInterval(() => {   // 都市生成＋プレイヤー準備が済んだらボタン有効化
+    if (cityRoot && collBoxes.length && player.ready) {
+      bs.disabled = bt.disabled = false; bs.textContent = 'ゲームスタート'; clearInterval(iv);
+    }
+  }, 400);
+  bs.addEventListener('click', () => startMode('play'));
+  bt.addEventListener('click', () => startMode('training'));
+}
+function startMode(mode) {
+  gameMode = mode;
+  if (titleEl) titleEl.style.display = 'none';
+  if (mode === 'play') startFlow();   // start→story(OP)→battle の順にフローが進行
+}
+function showGameOver() {
+  if (goEl) return;
+  goEl = document.createElement('div');
+  goEl.style.cssText = 'position:fixed;inset:0;z-index:39;display:flex;align-items:center;justify-content:center;background:rgba(12,0,8,0.55);';
+  goEl.innerHTML = '<div style="font:900 76px \'Yu Gothic\',\'Arial Black\',Meiryo,sans-serif;color:#ff4a5e;letter-spacing:0.1em;text-shadow:0 4px 20px #000;">GAME OVER</div>';
+  document.body.appendChild(goEl);
+}
+function updateParamsUI() {   // デバッグ兼HUD: 都市被害/敵損耗/手配（タイトル中は非表示）
+  if (gameMode === 'title') { if (paramsEl) paramsEl.style.display = 'none'; return; }
+  if (!paramsEl) {
+    paramsEl = document.createElement('div');
+    paramsEl.style.cssText = 'position:fixed;left:12px;top:122px;z-index:20;pointer-events:none;'
+      + 'color:#cfe;font:700 12px Meiryo,sans-serif;text-shadow:0 1px 3px #000;';
+    document.body.appendChild(paramsEl);
+  }
+  paramsEl.style.display = '';
+  paramsEl.textContent = '都市被害 ' + cityDamagePct().toFixed(1) + '% ／ 敵損耗 ' + attritionPct().toFixed(0) + '% ／ 手配 ' + ('★'.repeat(wantedLevel()) || 'ー');
+}
+// ── ゲームループP3: イベントシステム＋ゲーム内会話（public/cityfly/events.json / talks.json）──
+const ev = { defs: [], talks: null, fired: new Set(), flags: {}, spawnAllow: {}, kills: [], pendingOn: new Set(), lastPort: null };
+const TALK_MIN_SEC = 3.2, TALK_CPS = 9;   // 1行の表示時間 = max(最低秒, 文字数/読速)
+// 2D紙芝居プレイヤ（OP/ED。素材: public/scenario2d/、脚本: public/story/*.story.json）
+const scn = createScenario2D({ basePath: '../scenario2d', soundPath: '../sound', actors: () => (ev.talks && ev.talks.actors) || null });
+async function playScenario(name, after = 'play') {   // after: 'play'=本編へ / 'title'=リロードでタイトルへ
+  let story = null;
+  try { story = await (await fetch('../story/' + name + '.story.json')).json(); }
+  catch (err) { console.warn('シナリオ読込失敗:', name, err); }
+  if (!story) { if (after === 'title') location.reload(); else gameMode = 'play'; return; }
+  gameMode = after === 'title' ? 'ed' : 'op';
+  scn.play(story, { onEnd: () => { if (after === 'title') location.reload(); else gameMode = 'play'; } });
+}
+// ── フロー統合（public/flow/cityfly.flow.json。start→story(OP)→battle→win/bad/lose→story(ED)→end）──
+let flowRt = null, flowNode = null, flowBattleDone = false, flowTimer = null;   // flowTimer={port,t}=ポート発火の遅延（撃破演出を見せてからED）
+async function startFlow() {
+  if (!flowRt) {
+    try { flowRt = createFlow(await (await fetch('../flow/cityfly.flow.json')).json()); }
+    catch (err) { console.warn('フロー読込失敗（本編へ直行）:', err); }
+  }
+  if (!flowRt) { gameMode = 'play'; return; }
+  flowNode = flowRt.getStart();
+  flowAdvance('next');
+}
+function flowAdvance(port) {
+  if (!flowRt || !flowNode) return;
+  const nx = flowRt.next(flowNode.id, port);
+  if (!nx) { runFlowEnd(); return; }
+  flowNode = nx;
+  if (nx.type === 'story') {
+    const name = String((nx.data && nx.data.story) || '').replace(/\.story\.json$/, '');
+    gameMode = flowBattleDone ? 'ed' : 'op';
+    playFlowStory(name);
+  } else if (nx.type === 'battle') {
+    gameMode = 'play';
+  } else if (nx.type === 'end') {
+    runFlowEnd();
+  } else {
+    flowAdvance('next');   // start等は素通り
+  }
+}
+function runFlowEnd() { location.reload(); }   // フロー終了＝タイトルへ（全リセット）
+async function playFlowStory(name) {
+  let story = null;
+  try { story = await (await fetch('../story/' + name + '.story.json')).json(); }
+  catch (err) { console.warn('シナリオ読込失敗:', name, err); }
+  if (!story) { flowAdvance('next'); return; }
+  scn.play(story, { onEnd: () => { flowAdvance('next'); } });
+}
+function updateFlowTimer(dt) {   // battle中のポート発火遅延（例: ウォーカー崩壊を5秒見せてからGood ED）
+  if (!flowTimer) return;
+  flowTimer.t -= dt;
+  if (flowTimer.t > 0) return;
+  const port = flowTimer.port; flowTimer = null;
+  if (flowNode && flowNode.type === 'battle') { flowBattleDone = true; flowAdvance(port); }
+}
+async function loadGameEvents() {
+  try {
+    const [e, t] = await Promise.all([
+      fetch('../cityfly/events.json').then((r) => r.json()),
+      fetch('../cityfly/talks.json').then((r) => r.json()),
+    ]);
+    ev.defs = Array.isArray(e.events) ? e.events : [];
+    ev.talks = t;
+  } catch (err) { console.warn('イベント定義の読込失敗:', err); }
+}
+function evParam(name) {
+  if (name === 'hpPct') return playerHp / PLAYER_HP_MAX * 100;
+  if (name === 'attrition') return attritionPct();
+  if (name === 'cityDamage') return cityDamagePct();
+  if (name === 'wanted') return wantedLevel();
+  return 0;
+}
+function evCmp(v, op, val) { return op === '<=' ? v <= val : op === '<' ? v < val : op === '>' ? v > val : v >= val; }
+function evalEvents() {   // 本編のみ・各イベント1回発火。しきい値はクロス検知でなく現在値判定（fired で一度きり）
+  if (gameMode !== 'play' || !ev.defs.length) { ev.pendingOn.clear(); return; }
+  for (const d of ev.defs) {
+    if (ev.fired.has(d.id)) continue;
+    const w = d.when || {};
+    if (w.flag && !ev.flags[w.flag]) continue;        // 追加AND条件: フラグ必須
+    if (w.notFlag && ev.flags[w.notFlag]) continue;   // 追加AND条件: フラグ不成立が必須
+    let hit = false;
+    if (w.on) hit = ev.pendingOn.has(w.on);
+    else if (w.param) hit = evCmp(evParam(w.param), w.op || '>=', w.value || 0);
+    else if (w.kill) hit = ev.kills.includes(w.kill);
+    if (!hit) continue;
+    ev.fired.add(d.id);
+    for (const a of (d.do || [])) runEvAction(a);
+  }
+  ev.pendingOn.clear();
+}
+function runEvAction(a) {
+  if (a.type === 'talk') queueTalk(a.talk);
+  else if (a.type === 'spawn') ev.spawnAllow[a.enemy] = true;   // 投入指示（enemyAllowed が参照）
+  else if (a.type === 'flag') ev.flags[a.flag] = true;
+  else if (a.type === 'scenario') playScenario(a.scenario, a.after || 'play');
+  else if (a.type === 'flow') {
+    ev.lastPort = a.port;
+    if (!flowTimer) flowTimer = { port: a.port, t: a.delay ?? 0 };   // 先勝ち（win/bad の競合は先に発火した方）
+  }
+}
+// 会話ウィンドウ: 画面下部・顔グラ＋話者名＋テキスト。時間経過で自動送り（ポインタロック中のためクリック送りなし）
+let talkEls = null; const talkQ = []; let talkCur = null, talkT = 0;
+function ensureTalkUI() {
+  if (talkEls) return;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;left:50%;bottom:46px;transform:translateX(-50%);width:min(860px,92vw);z-index:30;'
+    + 'background:rgba(8,10,24,0.82);border:1px solid rgba(140,150,255,0.45);border-radius:10px;padding:10px 14px;pointer-events:none;'
+    + 'box-shadow:0 4px 18px rgba(0,0,0,0.5);gap:12px;align-items:center;display:none;';
+  const face = document.createElement('div');
+  face.style.cssText = 'width:92px;height:92px;flex:0 0 92px;border-radius:8px;overflow:hidden;position:relative;background:#223;';
+  const fb = document.createElement('div');   // 顔グラ未配置時の仮表示（イニシャル）
+  fb.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:900 44px Meiryo,sans-serif;color:#fff;';
+  const img = document.createElement('img');
+  img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;';
+  face.appendChild(fb); face.appendChild(img);
+  const body = document.createElement('div'); body.style.cssText = 'flex:1;min-width:0;';
+  const name = document.createElement('div'); name.style.cssText = 'font:700 14px Meiryo,sans-serif;margin-bottom:4px;';
+  const text = document.createElement('div'); text.style.cssText = 'font:16px/1.6 Meiryo,sans-serif;color:#eef;min-height:3.2em;';
+  body.appendChild(name); body.appendChild(text);
+  wrap.appendChild(face); wrap.appendChild(body);
+  document.body.appendChild(wrap);
+  talkEls = { wrap, img, fb, name, text };
+}
+function queueTalk(id) {
+  const lines = ev.talks && ev.talks.talks && ev.talks.talks[id];
+  if (!lines) { console.warn('talk未定義:', id); return; }
+  for (const ln of lines) talkQ.push(ln);
+}
+function showTalkLine(ln) {
+  ensureTalkUI();
+  const actor = (ev.talks && ev.talks.actors && ev.talks.actors[ln.who]) || { name: ln.who, color: '#889' };
+  talkEls.wrap.style.display = 'flex';
+  talkEls.name.textContent = actor.name; talkEls.name.style.color = actor.color || '#adf';
+  talkEls.text.textContent = ln.text;
+  talkEls.fb.textContent = (actor.name || '?').slice(0, 1);
+  talkEls.fb.style.background = actor.color || '#445';
+  talkEls.img.style.display = 'none';
+  talkEls.img.onload = () => { talkEls.img.style.display = ''; };
+  talkEls.img.onerror = () => { talkEls.img.style.display = 'none'; };   // 仮画像のまま
+  talkEls.img.src = '../scenario2d/face/' + ln.who + '/' + (ln.face || 'normal') + '.png';
+  talkT = Math.max(TALK_MIN_SEC, ln.text.length / TALK_CPS);
+}
+function updateTalk(dt) {
+  if (talkCur) {
+    talkT -= dt;
+    if (talkT > 0) return;
+    talkCur = null;
+  }
+  if (talkQ.length) { talkCur = talkQ.shift(); showTalkLine(talkCur); }
+  else if (talkEls) talkEls.wrap.style.display = 'none';
+}
+let killCount = 0, killShowT = 0, killEl = null;
+function addKill(kind = 'jet') {
+  killCount++;
+  gp.attritionPts += ATTR_PTS[kind] || 0;   // 敵損耗率へ加算
+  ev.kills.push(kind);
+  killShowT = 3.0;
+  if (!killEl) {
+    killEl = document.createElement('div');
+    killEl.style.cssText = 'position:fixed;left:12px;top:78px;z-index:20;pointer-events:none;opacity:0;'
+      + "color:#ffd45e;font:900 34px 'Yu Gothic','Arial Black',Meiryo,sans-serif;text-shadow:0 2px 6px #000,0 0 14px rgba(255,120,40,0.55);";
+    document.body.appendChild(killEl);
+  }
+  killEl.textContent = '撃墜 ' + killCount;
+}
+function updateKillUI(dt) {
+  if (!killEl || killShowT <= 0) return;
+  killShowT = Math.max(0, killShowT - dt);
+  killEl.style.opacity = Math.min(1, killShowT / 0.6).toFixed(2);   // 残り0.6秒でフェードアウト
+}
+function applyDamageFx() {   // ダメージ割合 → 各部位の溶解進行＋表情
+  const dmgPct = (1 - playerHp / PLAYER_HP_MAX) * 100;
+  for (const dp of dmgParts) {
+    const [s0, e0] = dp.range;
+    const prog = e0 > s0 ? Math.max(0, Math.min(1, (dmgPct - s0) / (e0 - s0))) : (dmgPct >= e0 ? 1 : 0);
+    dp.dis.setProgress(prog);
+  }
+  const em = player.vrm?.expressionManager;
+  if (em) for (const ec of dmgExpressions) { try { em.setValue(ec.name, dmgExprValueAt(ec.keys, dmgPct)); } catch { /* noop */ } }
+}
+const PLAYER_BIGHIT = 10;   // これ以上の単発ダメージ＝大ダメージ（dead03＋吹っ飛び）
+let playerDead = false, playerDeathT = 0, playerRagOn = false, playerKnockT = 0;   // playerRagOn=きりもみ落下フェーズ
+let playerRagdoll = null, playerLandRag = false, playerRagOpts = null;   // 接地後のラグドール（nei_vamp.ragdoll.json）
+const _pdV = new THREE.Vector3(), _pdV2 = new THREE.Vector3(), _pdV3 = new THREE.Vector3(), _pdC = new THREE.Vector3(), _pdAxis = new THREE.Vector3(), _pdUp = new THREE.Vector3(0, 1, 0), _pdQ = new THREE.Quaternion();
+function playerDamage(n, dir) {
+  if (!player.ready || playerDead) return;
+  if (gameMode === 'op' || gameMode === 'ed') return;   // シナリオ中は被弾なし
+  dmgFlash = Math.min(1, 0.45 + n * 0.03);   // 被弾の赤フラッシュ（強いほど濃い）
+  playerHp = Math.max(0, playerHp - n);
+  updateHpUI();
+  applyDamageFx();
+  if (playerHp <= 0) { startPlayerDeath(dir); return; }
+  if (n >= PLAYER_BIGHIT) {   // 大ダメージ: dead03 再生＋吹っ飛ばされる
+    triggerOneShot('bighit');
+    if (dir) { player.vel.addScaledVector(dir, 55); player.vel.y += 14; playerKnockT = 1.0; }
+  } else {
+    triggerOneShot('hit');   // 通常被弾: hit_front
+  }
+}
+function startPlayerDeath(dir) {
+  playerDead = true; playerDeathT = 0; playerRagOn = false;
+  if (gameMode === 'play') ev.pendingOn.add('playerDead');
+  player.charging = false; largeBeam.active = false;
+  if (grabbedCar) releaseGrab();
+  triggerOneShot('bighit');   // dead03 を再生し切ってからラグドール化
+  if (dir) { player.vel.addScaledVector(dir, 45); player.vel.y += 12; playerKnockT = 1.0; }
+}
+function updatePlayerDeath(dt) {
+  if (!playerDead) return;
+  playerDeathT += dt;
+  const dieDur = player.states.bighit ? player.states.bighit.dur : 1.2;
+  if (!playerRagOn && playerDeathT >= dieDur) {   // 再生後: ポーズのまま きりもみ落下開始
+    playerRagOn = true;
+    _pdV2.copy(player.vel).setY(0);
+    if (_pdV2.lengthSq() < 1) _pdV2.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+    _pdV2.normalize();
+    player.tumbleDir = (player.tumbleDir || new THREE.Vector3()).copy(_pdV2);
+    _pdAxis.crossVectors(_pdUp, player.tumbleDir).normalize();
+    player.tumbleAxis = (player.tumbleAxis || new THREE.Vector3()).copy(_pdAxis);
+    player.tumbleSpin = 6 + Math.random() * 3;   // rad/s
+  }
+  if (playerRagOn) {   // きりもみ落下（アニメはdead03の最終ポーズで固定）
+    const gy = groundYAt(player.pos.x, player.pos.z, player.pos.y + 100) + 0.4;
+    if (player.pos.y > gy) {
+      player.vel.y -= 26 * dt;
+      player.vel.x *= Math.max(0, 1 - 0.35 * dt);
+      player.vel.z *= Math.max(0, 1 - 0.35 * dt);
+      player.pos.addScaledVector(player.vel, dt);
+      if (player.pos.y < gy) player.pos.y = gy;
+      _pdQ.setFromAxisAngle(player.tumbleAxis, player.tumbleSpin * dt);
+      player.vrm.scene.quaternion.premultiply(_pdQ);   // 体ごとくるくる回る
+    } else {
+      player.pos.y = gy;
+      player.vel.set(0, 0, 0);
+      if (!playerLandRag) {   // 接地: その場でラグドール化（崩れ落ちる）
+        playerLandRag = true;
+        try {
+          playerRagdoll = playerRagdoll || createRagdoll(player.vrm, playerRagOpts || { gravity: -22, boundsMargin: 0.4 });
+          setRagdollActive(playerRagdoll, true);
+        } catch (e) { console.warn('着地ラグドール失敗:', e); }
+      }
+    }
+    if (playerLandRag && playerRagdoll) updateRagdoll(playerRagdoll, dt, { floorY: gy - 0.35 });
+    player.vrm.scene.position.copy(player.pos);
+    player.vrm.update(dt);
+  }
+  if (gameMode === 'play') {   // 本編: 死亡＝ゲームオーバー→タイトルへ（リロードで全リセット）
+    if (playerDeathT >= dieDur + 1.5) showGameOver();
+    if (playerDeathT >= dieDur + 5) location.reload();
+    return;
+  }
+  if (playerDeathT >= dieDur + 5) {   // 5秒後にリセット（トレーニング）
+    playerDead = false; playerRagOn = false;
+    if (playerLandRag && playerRagdoll) setRagdollActive(playerRagdoll, false);
+    playerLandRag = false;
+    try { player.vrm.humanoid?.resetNormalizedPose?.(); } catch { /* noop */ }
+    playerHp = PLAYER_HP_MAX;
+    updateHpUI(); applyDamageFx();
+    player.pos.set(0, 230, 150); player.vel.set(0, 0, 0);
+    player.vrm.scene.position.copy(player.pos);
+    player.vrm.scene.rotation.set(0, player.yaw + player.faceOffset, 0);
+    player.oneShot = null;
+    setState('idle');
+  }
+}
+async function setupDamageFx(bundle, vrm) {   // damage/<npc>.damage.json を読み、部位ごとに溶解を仕込む
+  for (const dp of dmgParts) { try { dp.dis.dispose(); } catch { /* noop */ } }
+  dmgParts.length = 0;
+  playerHp = PLAYER_HP_MAX;
+  updateHpUI();
+  let cfg = null;
+  try { cfg = await (await fetch('../damage/' + PLAYER_NPC.replace(/\.npc\.json$/, '') + '.damage.json')).json(); } catch { /* 設定なし */ }
+  dmgExpressions = cfg?.expressions || [];
+  if (!cfg?.parts) return;
+  // 部位id → メッシュ（damage-editor と同じ命名: メッシュ名＋重複は _n）
+  const byId = new Map();
+  const seen = new Map();
+  vrm.scene.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    let label = o.name || 'mesh';
+    const n = (seen.get(label) || 0) + 1;
+    seen.set(label, n);
+    if (n > 1) label = label + '_' + n;
+    byId.set('mesh:' + label, o);
+  });
+  for (const pc of cfg.parts) {
+    if (!pc.enabled) continue;
+    const target = pc.kind === 'cloth' ? (player.cloth?.clothMesh || null) : (byId.get(pc.id) || null);
+    if (!target) continue;
+    try {
+      if (pc.kind === 'cloth') buildClothDamageAttrs(bundle.cloth, target.geometry);   // GPUクロスの安定基準（アンカー距離）
+      const dis = createDissolve(target, {
+        direction: pc.mode, noiseScale: pc.noiseScale, noiseAmt: pc.noiseAmt, edge: pc.edge,
+        rimColor: pc.rimColor, rimIntensity: pc.rimIntensity, puddle: false, doubleSide: true, armed: true,
+        space: pc.kind === 'cloth' ? 'attributes' : 'geometry',   // 布=dmgPos/dmgH属性・メッシュ=バインド形状（なびきで穴が動かない）
+      });
+      dmgParts.push({ id: pc.id, kind: pc.kind, dis, range: pc.range || [0, 100] });
+    } catch (e) { console.warn('損耗エフェクト生成失敗:', pc.id, e); }
+  }
+  applyDamageFx();
+  console.log('damage fx parts:', dmgParts.map((d) => d.id).join(', '));
+}
+function updateDamageFx() { /* space:'geometry' 化で高さ基準の毎フレーム供給は不要になった */ }
 let npcSwapBusy = false;
 async function swapPlayer(sel) {   // sel='file:xxx.npc.json' | 'idb:名前'
   if (npcSwapBusy) return;
@@ -794,7 +1110,7 @@ async function swapPlayer(sel) {   // sel='file:xxx.npc.json' | 'idb:名前'
 }
 async function loadPlayer() {
   try {
-    const bundle = await fetchSelectedBundle();
+    const bundle = await (await fetch('../npc/' + PLAYER_NPC)).json();   // 従来方式: npc.jsonを直読み
     if (!bundle?.vrm) { showError('プレイヤーVRMが見つかりません'); return; }
     const loader = new GLTFLoader();
     loader.register((p) => new VRMLoaderPlugin(p, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }) }));
@@ -803,13 +1119,18 @@ async function loadPlayer() {
     vrm.scene.position.copy(player.pos);
     // 正面向き: VRM0系は正面が逆焼き→180°。バンドルの faceOffsetDeg で上書き可
     player.faceOffset = bundle.faceOffsetDeg != null ? bundle.faceOffsetDeg * Math.PI / 180 : (vrm.meta?.metaVersion === '0' ? Math.PI : 0);
-    // 身長を Joy_reborn 基準に正規化（bundle.scale で上書き可）
-    vrm.scene.updateMatrixWorld(true);
-    const _hn = vrm.humanoid?.getRawBoneNode?.('head');
-    let _headH = 0;
-    if (_hn) { const _hw = new THREE.Vector3(); _hn.getWorldPosition(_hw); _headH = _hw.y - vrm.scene.position.y; }
-    const _psc = bundle.scale || (_headH > 0.2 ? REF_HEAD_H / _headH : 1);
-    vrm.scene.scale.setScalar(_psc);
+    // グラブ点オフセットの正準化: 正規化ボーンはrest回転ゼロのため、オフセットは
+    // 「180°ラップされる側（Joy_reborn=VRM0）」基準で作られている。ラップされないモデル
+    // （VRM1系=faceOffset≈0）ではX/Zを反転しないと『体の前』が背中側に出る（cloth-previewと同じ規約）
+    const gripFlip = Math.cos(player.faceOffset) > 0;
+    const _flipO = (o) => { if (Array.isArray(o) && o.length >= 3) { o[0] = -o[0]; o[2] = -o[2]; } };
+    if (gripFlip && bundle.cloth) {
+      for (const g of (bundle.cloth.gripGroups || [])) _flipO(g.offset);
+      if (bundle.cloth.handGrabOffsets) { _flipO(bundle.cloth.handGrabOffsets.left); _flipO(bundle.cloth.handGrabOffsets.right); }
+      console.log('grip正準化: このモデルはオフセットX/Z反転を適用');
+    }
+    // 従来方式: スケール正規化はしない（cloth.jsonの形状/コライダはスケール1前提。
+    // 身長合わせが必要ならモデル側かバンドルデータで調整する）
     vrm.scene.rotation.y = player.yaw + player.faceOffset;
     scene.add(vrm.scene); vrm.scene.updateMatrixWorld(true);
     attachCharFill(vrm.scene);   // 夜間のキャラ補助ライト（追従2灯）
@@ -818,13 +1139,28 @@ async function loadPlayer() {
     // マント（GPUクロス）。空中でも落ちないよう floorY 無効化
     // ?nocape=1 でマントを生成しない（性能切り分け用: マントが重さの原因かを比較できる）
     if (bundle.cloth && !NO_CAPE) {
-      try { player.cloth = createVRMCloth({ renderer, scene, vrm, cloth: bundle.cloth, basePos: player.pos, floorY: -1e9 }); }
+      try {
+        // lib/vrm-cloth の初期配置は editorTransform.ry しか回さず、モデルの向き(yaw+faceOffset)を知らない。
+        // アンカーは初期配置から再導出されるため、向きを ry に合成しないと首元が180°破綻する
+        // （Joyはspawn時 yawπ+faceOffsetπ=2π≡0で偶然無事だった）。tx/tz も同じ回転で回す。
+        const tr0 = bundle.cloth.editorTransform ?? { tx: 0, ty: 0, tz: 0, ry: 0, scale: 1 };
+        const yawDeg = (player.yaw + player.faceOffset) * 180 / Math.PI;
+        const c0 = Math.cos((yawDeg) * Math.PI / 180), s0 = Math.sin((yawDeg) * Math.PI / 180);
+        const trAdj = { ...tr0, ry: (tr0.ry || 0) + yawDeg,
+          tx: (tr0.tx || 0) * c0 - (tr0.tz || 0) * s0,
+          tz: (tr0.tx || 0) * s0 + (tr0.tz || 0) * c0 };
+        player.cloth = createVRMCloth({ renderer, scene, vrm, cloth: { ...bundle.cloth, editorTransform: trAdj }, basePos: player.pos, floorY: -1e9 });
+      }
       catch (e) { console.warn('マント生成失敗:', e); }
     }
     // 飛行アニメ状態（timeline→VRMA→trim）。tps-flight と同じ状態機械
     for (const [name, def] of Object.entries(STATE_DEFS)) {
       try {
         const tl = await (await fetch('../timeline/' + def.tl + '.timeline.json')).json();
+        if (gripFlip) for (const trk of (tl.tracks || [])) {   // グラブ点位置キーも正準化（体基準の同位置へ）
+          if (trk.kind !== 'gripPos') continue;
+          for (const k of (trk.keyframes || [])) _flipO(k.offset);
+        }
         const vrmaName = tl.vrma; if (!vrmaName) continue;
         const vres = await fetch('../vrma/' + encodeURIComponent(vrmaName)); if (!vres.ok) continue;
         const al = new GLTFLoader(); al.register((p) => new VRMAnimationLoaderPlugin(p));
@@ -846,17 +1182,42 @@ async function loadPlayer() {
         await createStateEffects(player.states[name], tl);   // timeline の effect トラック（FXエディタ配置）を準備
       } catch (e) { console.warn('状態ロード失敗:', name, e); }
     }
+    // 被弾/死亡モーション（タイムライン無しの生VRMA）
+    const addRawState = async (name, file) => {
+      try {
+        const vres = await fetch('../vrma/' + encodeURIComponent(file));
+        if (!vres.ok) return;
+        const al2 = new GLTFLoader(); al2.register((pl) => new VRMAnimationLoaderPlugin(pl));
+        const ag2 = await al2.loadAsync(URL.createObjectURL(await vres.blob()));
+        const anims2 = ag2.userData.vrmAnimations;
+        if (!anims2?.length) return;
+        const clip2 = createVRMAnimationClip(anims2[0], vrm);
+        stripRootMotion(clip2);
+        const action2 = player.mixer.clipAction(clip2);
+        action2.setLoop(THREE.LoopOnce, 1);
+        action2.clampWhenFinished = true;
+        const total2 = Math.max(1, Math.round(clip2.duration * 30));
+        player.states[name] = { action: action2, timeline: null, fps: 30, dur: clip2.duration, loop: false, trimIn: 0, trimOut: total2, total: total2, speed: 1, effects: [] };
+      } catch (e) { console.warn('rawState失敗:', name, e); }
+    };
+    await addRawState('hit', 'hit_front.vrma');
+    await addRawState('bighit', 'dead03.vrma');
+    try {
+      const rj = await (await fetch('../ragdoll/' + PLAYER_NPC.replace(/\.npc\.json$/, '') + '.ragdoll.json')).json();
+      playerRagOpts = { ...(rj.params || {}), boneMaxBend: rj.boneMaxBend || {}, boundsMargin: 0.4 };
+    } catch { playerRagOpts = null; }
     const idle = player.states.idle;
     if (idle) { idle.action.play(); idle.action.setEffectiveWeight(1); player.current = 'idle'; if (player.cloth) player.cloth.setTimeline(idle.timeline); }
     camForwardRight();   // TPSカメラ初期化（スナップ回避）
     camTargetCur.copy(player.pos); camTargetCur.y += cam.height;
     camPosCur.copy(camTargetCur).addScaledVector(_fwd, -cam.dist);
     player.ready = true;
+    setupDamageFx(bundle, vrm).catch((e) => console.warn('damage fx初期化失敗:', e));
     console.log('player ready; states=', Object.keys(player.states).length);
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, swapPlayer, idbPutNpc, npcSelection };
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; } };
 // ── キャラ選択パネル（👤ボタン）──
 function setupCharUI() {
   const btn = document.createElement('button');
@@ -902,7 +1263,7 @@ function setupCharUI() {
     e.target.value = '';
   });
 }
-setupCharUI();
+// setupCharUI();   // キャラ交換UIは一旦停止（PLAYER_NPC固定）
 function camForwardRight() {
   const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
   _fwd.set(cp * Math.sin(camYaw), sp, cp * Math.cos(camYaw)).normalize();
@@ -910,6 +1271,14 @@ function camForwardRight() {
 }
 function updateFlight(dt) {
   if (!player.ready) return;
+  if (playerDead) {   // 死亡中: 操作不能。ラグドール前は吹っ飛びの慣性で流れる
+    if (!playerRagOn) {
+      player.vel.multiplyScalar(Math.max(0, 1 - 1.5 * dt));
+      player.pos.addScaledVector(player.vel, dt);
+      player.vrm.scene.position.copy(player.pos);
+    }
+    return;
+  }
   if (player.eating) { player.vel.set(0, 0, 0); return; }   // 捕食中はその場で静止
   camForwardRight();
   player.fwdY = _fwd.y;
@@ -926,7 +1295,11 @@ function updateFlight(dt) {
   if (holding) player.yaw = lerpAngle(player.yaw, camYaw, Math.min(1, 18 * dt));   // 掴み中は体をマウス方向へ（振り回し）
   else if (fwd) { const ty = Math.atan2(_fwd.x, _fwd.z); player.yaw = lerpAngle(player.yaw, ty, Math.min(1, flight.turn * dt)); }
   player.vel.multiplyScalar(Math.exp(-flight.drag * dt));
-  clampSpeed(player.vel, flight.maxSpeed);
+  if (playerHp <= PLAYER_HP_MAX * 0.25 && !player.grounded && !player.eating) {
+    player.vel.y -= 7 * dt;   // 重傷(25%以下): 浮遊を維持できず徐々に沈む（上昇入力で抗える）
+  }
+  if (playerKnockT > 0) playerKnockT = Math.max(0, playerKnockT - dt);
+  clampSpeed(player.vel, flight.maxSpeed + playerKnockT * 70);   // 吹っ飛び中は一時的に上限解放
   player.pos.addScaledVector(player.vel, dt);
   player.grounded = false;
   if (interior.active) interiorClamp();   // 内装内は部屋境界と床でクランプ
@@ -1278,8 +1651,8 @@ async function loadRoads() {
   // 中心付近(DEM範囲)のノードだけローカル座標化
   roadNodes = new Map();
   for (const [id, ll] of nodes) {
-    const local = llaToLocal(ll[1], ll[0], elevAt(ll[1], ll[0]) + GEOID + 0.5);   // 路面=地面+0.5m
-    if (mapTerrain) local.y = mapTerrain.heightAt(local.x, local.z) + 0.5;   // マップ地形に道路を追従
+    const local = llaToLocal(ll[1], ll[0], 0.5);   // 経緯度→ローカルENU
+    if (mapTerrain) local.y = mapTerrain.heightAt(local.x, local.z) + 0.5;   // 路面=マップ地形+0.5m
     if (Math.hypot(local.x, local.z) > CAR_RADIUS) continue;
     roadNodes.set(id, { local, adj: adj.get(id) });
   }
@@ -2515,7 +2888,7 @@ function applyMapBuildings(gen) {
   console.log('map buildings diff: removed', rm.size, 'moved', Object.keys(mv).length, 'added', (mapBuildings.added || []).length);
   gen.instances = out;
 }
-// ── P1: Kenney 都市（PLATEAU タイルの代替。実道路網に建物を手続き配置＝巨大ステージ効率実験）──
+// ── Kenney 都市（実道路網に建物を手続き配置＝巨大ステージの土台）──
 const BLD_KIT_DIR = { city: 'city_GLB format/', suburban: 'kenney_city-kit-suburban_20/Models/GLB format/' };
 let cityRoot = null;        // scene 直下の建物ルート（モデル単位の InstancedMesh 群）
 let cityDamaged = null;     // 破壊で単体化した建物のルート（レイキャスト対象に含める）
@@ -2760,9 +3133,9 @@ const _camDir = new THREE.Vector3(), _muzzle = new THREE.Vector3(), _vk = new TH
 // 命中点中心の球状カーブ（局所ディソルブ）マテリアル。CARVE_MAX 個の球の内側を discard＝欠損。縁は発光。
 // アンリットの MeshBasicNodeMaterial を使う（Standardノード材質だと WebGPU で真っ黒になったため）。
 // colormap をそのまま色に出すので黒化しない。fx-dissolve の水たまりと同系の実績パターン。
-function makeCarveMaterial(srcMat, baseY, height) {
+function makeCarveMaterial(srcMat, baseY, height, flashU) {
   const nm = new THREE.MeshBasicNodeMaterial();
-  const base = (srcMat && srcMat.map) ? texture(srcMat.map, uv()) : color('#bfc4cc');
+  const base = (srcMat && srcMat.map) ? texture(srcMat.map, uv()) : color(srcMat?.color ? '#' + srcMat.color.getHexString() : '#bfc4cc');
   const uCenters = [], uRadii = [];
   for (let i = 0; i < CARVE_MAX; i++) { uCenters.push(uniform(new THREE.Vector3(1e6, 1e6, 1e6))); uRadii.push(uniform(0)); }
   const uEdge = uniform(1.4), uScorch = uniform(6.5), uNoiseScale = uniform(0.16), uNoiseAmt = uniform(1.4);
@@ -2790,7 +3163,7 @@ function makeCarveMaterial(srcMat, baseY, height) {
   const scorch = clamp(scorchSum, 0, 1).mul(nz2);                                   // 斑で不均一な焦げ
   const charred = base.mul(cavity).mul(float(1).sub(scorch.mul(0.92)));             // 内側を暗く＋断面付近を黒くくすませる
   const ember = color('#ff4d10').mul(rim.mul(1.5)).add(color('#ffd06a').mul(rim.mul(rim).mul(1.8)));   // 残り火(縁で白熱)
-  nm.colorNode = charred.add(ember);
+  nm.colorNode = flashU ? charred.add(ember).add(color('#ff2418').mul(flashU)) : charred.add(ember);   // flashU=被弾の赤フラッシュ（ウォーカー用）
   nm.opacityNode = alpha;
   nm.alphaTest = 0.5;
   nm.side = THREE.DoubleSide;
@@ -2798,11 +3171,11 @@ function makeCarveMaterial(srcMat, baseY, height) {
   return { mat: nm, uCenters, uRadii, uKill, uKillOn, uBaseY, uHeight };
 }
 
-function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT, fxScale = 1) {
+function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT, fxScale = 1, src = null) {
   const rec0 = (instMesh.userData.slots || [])[instanceId];   // LOD振り分けの slot から建物レコードへ逆引き（近/遠どちらの命中でも同じレコード）
   const md = instMesh.userData.md;
   if (!rec0 || !md || rec0.dead) return;
-  if (rec0.carve) { applyCarve(rec0.carve, point, dmg, fxScale); return; }
+  if (rec0.carve) { applyCarve(rec0.carve, point, dmg, fxScale, src); return; }
   const m = rec0.m;
   const _p2 = new THREE.Vector3(), _q2 = new THREE.Quaternion(), _s2 = new THREE.Vector3();
   m.decompose(_p2, _q2, _s2);
@@ -2829,10 +3202,11 @@ function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT, fxScale = 1
   std.userData.rec = rec;
   rec0.carve = rec;
   damagedList.push(rec);   // 以後、自壊（スロー減衰＋傾き）が進行
-  applyCarve(rec, point, dmg, fxScale);
+  applyCarve(rec, point, dmg, fxScale, src);
 }
-function applyCarve(rec, point, dmg = DMG_SHOT, fxScale = 1) {   // 命中点にカーブ球を追加＋HPダメージ。HP0で崩壊
+function applyCarve(rec, point, dmg = DMG_SHOT, fxScale = 1, src = null) {   // 命中点にカーブ球を追加＋HPダメージ。HP0で崩壊
   if (rec.dying) return;
+  if (src) rec.lastSrc = src;   // 最後に攻撃した者（崩壊時の手配度判定）
   const i = Math.min(rec.hits, CARVE_MAX - 1);
   rec.uCenters[i].value.copy(point);
   rec.uRadii[i].value = (rec.carveR || CARVE_RADIUS) * (0.9 + Math.random() * 0.35);
@@ -2848,6 +3222,9 @@ function applyBldDamage(rec, dmg) {
 }
 function startCollapse(rec) {   // 崩壊開始＋当たり判定を無効化。現在の傾きを基準行列に焼き込む
   if (rec.dying) return;
+  gp.destroyed++;   // 都市被害率（誰が壊しても加算）
+  if (rec.lastSrc === 'player') addWanted(0.5, rec.pivot);   // プレイヤー起因の建物破壊＝犯罪
+  playSfxAt('bakuha.ogg', rec.pivot, 1.0);
   hideBuildingLights(rec.bldRec);   // 窓明かり・屋上ランプを消す（廃墟が光り続けない）
   applyTilt(rec, tiltAngle(rec), rec.baseMatrix);   // baseMatrix ← 傾き込みへ更新
   rec.std.matrix.copy(rec.baseMatrix); rec.std.matrixWorldNeedsUpdate = true;
@@ -2873,12 +3250,14 @@ function rayHitSphere(o, d, center, radius, maxT) {   // レイ上の命中距�
   const perp2 = _rayToC.lengthSq() - t * t;
   return perp2 <= radius * radius ? t : Infinity;
 }
-function applyHitToBuilding(hit, dmg, fxScale = 1) {
-  if (hit.object.isInstancedMesh && hit.instanceId != null) damageBuilding(hit.object, hit.instanceId, hit.point, dmg, fxScale);
-  else if (hit.object.userData && hit.object.userData.rec) applyCarve(hit.object.userData.rec, hit.point, dmg, fxScale);
+function applyHitToBuilding(hit, dmg, fxScale = 1, src = null) {
+  if (hit.object.isInstancedMesh && hit.instanceId != null) damageBuilding(hit.object, hit.instanceId, hit.point, dmg, fxScale, src);
+  else if (hit.object.userData && hit.object.userData.rec) applyCarve(hit.object.userData.rec, hit.point, dmg, fxScale, src);
 }
 function hitCarBeam(car) {
   if (car.jet && !car.thrown && !car.dead) {   // 戦闘機: 撃墜＝きりもみ落下（着地/建物で爆発）。落下中に追撃なら即爆発
+    addKill();
+    car.flashT = 0.35;   // 被弾の赤フラッシュ
     car.shotDown = true; car.thrown = true; car.thrownT = 0;
     car.vel = (car.vel || new THREE.Vector3()).copy(car.flyVel || car.vel || new THREE.Vector3());
     car.vel.y = Math.min(car.vel.y, 2);
@@ -2922,14 +3301,35 @@ function fireBeam(bldDmg, kenDmg, colorHex, thick) {
       if (t < mpT) { mpT = t; mpBest = h; }
     }
   }
-  const minT = Math.min(bldT, carT, kenT, gndT, propT, mpT);
+  let wkT = Infinity;   // 敵ウォーカー（胴体＋砲塔の2球）
+  if (walker && !walker.dying) {
+    wkT = rayHitSphere(_muzzle, _camDir, _wkV4.set(walker.pos.x, walker.pos.y + 2, walker.pos.z), 13, SHOOT_RANGE);
+    const t2 = rayHitSphere(_muzzle, _camDir, _wkV4.set(walker.pos.x, walker.pos.y + WK.bodyH / 2 + 4.5, walker.pos.z), 7, SHOOT_RANGE);
+    if (t2 < wkT) wkT = t2;
+  }
+  let spT = Infinity;   // スパイダータンク（胴体＋砲塔）
+  if (spider && !spider.dying) {
+    spT = rayHitSphere(_muzzle, _camDir, _wkV4.set(spider.pos.x, spider.pos.y + 4, spider.pos.z), 38, SHOOT_RANGE);
+    const t3 = rayHitSphere(_muzzle, _camDir, _wkV4.set(spider.pos.x, spider.pos.y + SP.bodyH / 2 + 12, spider.pos.z), 18, SHOOT_RANGE);
+    if (t3 < spT) spT = t3;
+  }
+  let mslT2 = Infinity, mslBest = null;   // 誘導ミサイル（撃ち落とせる）
+  for (const ms of spMissiles) {
+    const t4 = rayHitSphere(_muzzle, _camDir, ms.mesh.position, 2.8, SHOOT_RANGE);
+    if (t4 < mslT2) { mslT2 = t4; mslBest = ms; }
+  }
+  const minT = Math.min(bldT, carT, kenT, gndT, propT, mpT, wkT, spT, mslT2);
   const end = _muzzle.clone().addScaledVector(_camDir, minT === Infinity ? SHOOT_RANGE : minT);
   attackAim.copy(end); attackAimActive = true;   // FXビームの到達点＝この実着弾点
   spawnBeam(_vk.set(player.pos.x, player.pos.y + 1.2, player.pos.z), end, minT !== Infinity, colorHex, thick);
   if (minT === Infinity) return;
+  playSfxAt(thick ? 'bomb.ogg' : 'bomb_short.ogg', end, thick ? 0.95 : 0.7);
+  if (minT === mslT2) { destroySpMissile(mslBest); return; }
+  if (minT === spT) { spiderHit(end, bldDmg * 6); return; }
+  if (minT === wkT) { walkerHit(end, bldDmg * 6); return; }
   if (minT === mpT) { mp.sendHit(mpBest.id, MP_DMG.beam, 'beam'); spawnImpactFx(end, 1); }
   else if (minT === propT) { smashProp(pr.prop, _camDir.x, _camDir.z, bldDmg); spawnImpactFx(end, 1); }
-  else if (minT === bldT) applyHitToBuilding(hits[0], bldDmg);
+  else if (minT === bldT) applyHitToBuilding(hits[0], bldDmg, 1, 'player');
   else if (minT === carT) hitCarBeam(carBest);
   else if (minT === kenT) hitKenBeam(kenBest, kenDmg);
   else if (minT === gndT) {   // 地形着弾: 岩の吹き上げ＋火柱＋焦げ跡。道路上なら穴＋アスファルト片
@@ -2942,11 +3342,13 @@ function fireBeam(bldDmg, kenDmg, colorHex, thick) {
 }
 function snapYawToView() { player.yaw = camYaw; }   // 発射時に一回だけ体を視点方向へ
 function normalShot() {
+  if (playerDead) return;
   shotComboT = 0;
   if (++shotComboN >= 3) { shotComboN = 0; superShot(); return; }   // 3連目＝スーパービーム
   if (grabbedCar) { snapYawToView(); launchHeldCar(); triggerOneShot('shot'); return; }   // 抱えた車を前方へ射出
   snapYawToView();
   triggerOneShot('shot');
+  playSfx('beam.ogg', 0.55);
   fireBeam(DMG_SHOT, KEN_DMG_SHOT, 0xffb040, false);
 }
 let pendingSuper = 0;   // スーパービームの発射待ち（タイムラインFX開始に同期）
@@ -2972,9 +3374,27 @@ function fireSuperPierce() {
   attackAim.copy(end);
   attackAimActive = true;
   spawnBeam(_vk.set(player.pos.x, player.pos.y + 1.2, player.pos.z), end, false, 0x9fd8ff, true);
+  playSfx('beam.ogg', 0.7);
   _shootRay.far = endT;
   const hits = _shootRay.intersectObjects(cityDamaged ? [cityRoot, cityDamaged] : [cityRoot], true);
-  for (let i = 0; i < Math.min(hits.length, 8); i++) applyHitToBuilding(hits[i], DMG_LIGHTNING, 3);   // 貫通・各命中点3倍FX
+  for (let i = 0; i < Math.min(hits.length, 8); i++) applyHitToBuilding(hits[i], DMG_LIGHTNING, 3, 'player');   // 貫通・各命中点3倍FX
+  if (hits.length) playSfxAt('bomb.ogg', hits[0].point, 0.95);
+  else if (gndHit) playSfxAt('bomb.ogg', end, 0.95);
+  if (walker && !walker.dying) {   // 敵ウォーカーにも貫通ヒット
+    const tw = Math.min(
+      rayHitSphere(_muzzle, _camDir, _wkV4.set(walker.pos.x, walker.pos.y + 2, walker.pos.z), 13, endT),
+      rayHitSphere(_muzzle, _camDir, _wkV4.set(walker.pos.x, walker.pos.y + WK.bodyH / 2 + 4.5, walker.pos.z), 7, endT));
+    if (tw < Infinity) walkerHit(_wkV4.copy(_muzzle).addScaledVector(_camDir, tw), DMG_LIGHTNING * 6);
+  }
+  for (let mi = spMissiles.length - 1; mi >= 0; mi--) {   // 射線上の誘導ミサイルは全て爆破
+    if (rayHitSphere(_muzzle, _camDir, spMissiles[mi].mesh.position, 2.8, endT) < Infinity) destroySpMissile(spMissiles[mi]);
+  }
+  if (spider && !spider.dying) {   // スパイダータンクにも貫通ヒット
+    const ts2 = Math.min(
+      rayHitSphere(_muzzle, _camDir, _wkV4.set(spider.pos.x, spider.pos.y + 4, spider.pos.z), 38, endT),
+      rayHitSphere(_muzzle, _camDir, _wkV4.set(spider.pos.x, spider.pos.y + SP.bodyH / 2 + 12, spider.pos.z), 18, endT));
+    if (ts2 < Infinity) spiderHit(_wkV4.copy(_muzzle).addScaledVector(_camDir, ts2), DMG_LIGHTNING * 6);
+  }
   raySmashProps(_muzzle, _camDir, endT, 2.2);   // 射線上の信号/街灯/街路樹もなぎ倒す
   if (mp) {
     for (const h of mpAvatars.values()) {
@@ -3026,6 +3446,7 @@ function initUltFx() {
 }
 function fireUltimate() {
   ult.active = true; ult.phase = 'intro'; ult.t = 0; ult.shootT = 0;
+  playSfx('Thunder-Real_Ambi03-1.ogg', 0.9);   // 雷鳴アンビエンス（解放の合図）
   triggerOneShot('drain0');   // 導入モーション（この間は撃たない）→ drain1開始と同時に落雷開始
 }
 const _ultFrom = new THREE.Vector3(), _ultDir = new THREE.Vector3(), _ultEnd = new THREE.Vector3();
@@ -3050,18 +3471,20 @@ function fireUltBeam() {
   const hitBld = bHits.length > 0;
   if (hitBld) _ultEnd.copy(bHits[0].point);
   // ランダム経路: 中間2点を横方向へ大きく散らした落雷ジグザグ
+  playSfx('beam.ogg', 0.4);   // 降り注ぐ雷（多重制限でロール状に鳴る）
   const off = 4 + Math.random() * 8;
   _ultMid.copy(_ultFrom).lerp(_ultEnd, 0.35);
   _ultMid.x += (Math.random() - 0.5) * off; _ultMid.z += (Math.random() - 0.5) * off; _ultMid.y += (Math.random() - 0.5) * 3;
   _ultMid2.copy(_ultFrom).lerp(_ultEnd, 0.7);
   _ultMid2.x += (Math.random() - 0.5) * off; _ultMid2.z += (Math.random() - 0.5) * off; _ultMid2.y += (Math.random() - 0.5) * 3;
+  playSfxAt('bomb.ogg', _ultEnd, 0.7);   // 着弾
   s.fx.setParam('width', ULT_WIDTHS[ult.shotN % ULT_WIDTHS.length]);
   s.fx.setEmitting(true);
   s.fx.setPathPoints([_ultFrom.clone(), _ultMid.clone(), _ultMid2.clone(), _ultEnd.clone()], camera.position, true);
   s.ttl = 0.22;
   ult.shotN++;
   // ダメージ＋着弾演出（着弾FXはスーパービームと同じ3倍）
-  if (hitBld) applyHitToBuilding(bHits[0], ULT_DMG_BLD, 3);
+  if (hitBld) applyHitToBuilding(bHits[0], ULT_DMG_BLD, 3, 'player');
   else if (ult.shotN % 2 === 0) {
     spawnImpactFx(_ultEnd, 3);
     const onRoad = roadTopAt(_ultEnd.x, _ultEnd.z) != null;
@@ -3154,6 +3577,8 @@ function updateAttacks(dt) {
   mesh.scale.set(1, 1, _lbFrom.distanceTo(_lbEnd));
   if (largeBeam.tickT <= 0) {   // 貫通ダメージ tick
     largeBeam.tickT = LARGE_BEAM_TICK;
+    largeBeam.sfxT = (largeBeam.sfxT || 0) - LARGE_BEAM_TICK;
+    if (largeBeam.sfxT <= 0) { largeBeam.sfxT = 0.5; playSfxAt('bomb.ogg', _lbEnd, 0.85); }
     spawnImpactFx(_lbEnd);   // 到達点（地形/最遠）にも炎煙
     if (gnd) {   // ラージ直撃中の地面: tick毎に岩＋火柱＝連続的に噴き上がる。焦げ跡と道路穴も掃引で残る
       const onRoad = roadTopAt(_lbEnd.x, _lbEnd.z) != null;
@@ -3164,7 +3589,7 @@ function updateAttacks(dt) {
     }
     _shootRay.set(_muzzle, _camDir); _shootRay.far = endT;
     const hits = _shootRay.intersectObjects(cityDamaged ? [cityRoot, cityDamaged] : [cityRoot], true);
-    for (let i = 0; i < Math.min(hits.length, 8); i++) applyHitToBuilding(hits[i], DMG_LARGE_TICK);   // 射線上の建物すべて（上限8）
+    for (let i = 0; i < Math.min(hits.length, 8); i++) applyHitToBuilding(hits[i], DMG_LARGE_TICK, 1, 'player');   // 射線上の建物すべて（上限8）
     raySmashProps(_muzzle, _camDir, endT, 1.4);   // 掃引中の信号/街灯/街路樹もなぎ倒す
     if (mp) {
       for (const h of mpAvatars.values()) {
@@ -3174,6 +3599,17 @@ function updateAttacks(dt) {
     for (const car of carsAndJets()) {
       if (car.dead || car.grabbed || car.tornado) continue;
       if (rayHitSphere(_muzzle, _camDir, car.mesh.position, car.hitR || 2.4, LARGE_BEAM_RANGE) < Infinity) hitCarBeam(car);
+    }
+    if (walker && !walker.dying) {   // 敵ウォーカーも削れる
+      const tw = rayHitSphere(_muzzle, _camDir, _wkV4.set(walker.pos.x, walker.pos.y + 2, walker.pos.z), 13, LARGE_BEAM_RANGE);
+      if (tw < Infinity) walkerHit(_wkV4.copy(_muzzle).addScaledVector(_camDir, tw), DMG_LARGE_TICK * 6);
+    }
+    if (spider && !spider.dying) {
+      const ts3 = rayHitSphere(_muzzle, _camDir, _wkV4.set(spider.pos.x, spider.pos.y + 4, spider.pos.z), 38, LARGE_BEAM_RANGE);
+      if (ts3 < Infinity) spiderHit(_wkV4.copy(_muzzle).addScaledVector(_camDir, ts3), DMG_LARGE_TICK * 6);
+    }
+    for (let mi = spMissiles.length - 1; mi >= 0; mi--) {
+      if (rayHitSphere(_muzzle, _camDir, spMissiles[mi].mesh.position, 2.8, LARGE_BEAM_RANGE) < Infinity) destroySpMissile(spMissiles[mi]);
     }
     for (const m of kens) {
       if (m.dissolving || m.eating || m.grabbed || m.tornado) continue;
@@ -3190,9 +3626,10 @@ function spawnBeam(from, to, impact, colorHex = 0xffb040, thick = false) {
   }
   const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([from.clone(), to.clone()]), new THREE.LineBasicMaterial({ color: colorHex, transparent: true }));
   scene.add(line); shotFx.push({ obj: line, t: 0, dur: thick ? 0.16 : 0.09, kind: 'beam' });
-  if (thick) {   // スーパービームは筒を重ねて太く
+  if (thick) {   // スーパービームは筒を重ねて太く（thick=数値なら半径指定）
     const len = from.distanceTo(to);
-    const g = new THREE.CylinderGeometry(0.3, 0.3, 1, 8, 1, true); g.rotateX(Math.PI / 2);
+    const rr = typeof thick === 'number' ? thick : 0.3;
+    const g = new THREE.CylinderGeometry(rr, rr, 1, 8, 1, true); g.rotateX(Math.PI / 2);
     const cyl = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
     cyl.position.copy(from).add(to).multiplyScalar(0.5); cyl.lookAt(to); cyl.scale.set(1, 1, len);
     scene.add(cyl); shotFx.push({ obj: cyl, t: 0, dur: 0.22, kind: 'beam' });   // beam種＝フェードのみ（flashの膨張を避ける）
@@ -3238,6 +3675,29 @@ function updateDamage(dt) {
 
 // ── P3: 車の掴み・投擲・破壊 ──
 const GRAB_RANGE = 70, HOLD_DIST = 6, THROW_SPEED = 95, CAR_GRAV = 42, CAR_RESPAWN = 4, THROW_LIFE = 7;
+// ── 効果音（sound/*.ogg。cloneNodeで多重再生）──
+const _sfxCache = new Map(), _sfxTimes = new Map();
+function playSfx(name, vol = 0.7) {
+  try {
+    // 連鎖崩壊などで同じ音が重なりすぎないように制限（1.2秒窓で最大4発・最短70ms間隔）
+    const now = performance.now();
+    let ts = _sfxTimes.get(name);
+    if (!ts) { ts = []; _sfxTimes.set(name, ts); }
+    while (ts.length && now - ts[0] > 1200) ts.shift();
+    if (ts.length >= 4 || (ts.length && now - ts[ts.length - 1] < 70)) return;
+    ts.push(now);
+    let b = _sfxCache.get(name);
+    if (!b) { b = new Audio('../sound/' + name); _sfxCache.set(name, b); }
+    const a = b.cloneNode();
+    a.volume = Math.max(0, Math.min(1, vol));
+    a.play().catch(() => {});
+  } catch { /* noop */ }
+}
+function playSfxAt(name, pos, vol = 0.8) {   // 距離減衰つき
+  const d = camera.position.distanceTo(pos);
+  playSfx(name, vol * Math.max(0.06, Math.min(1, 80 / Math.max(1, d))));
+}
+
 let grabbedCar = null;
 const thrownCars = [], respawnCars = [], carDebris = [];
 const _grabRay = new THREE.Raycaster();
@@ -3245,7 +3705,7 @@ const _hold = new THREE.Vector3(), _tmpV = new THREE.Vector3();
 
 // 右クリック＝掴む。ken の関節を優先し、無ければ車（照準→前方近傍の順）
 function grabTarget() {
-  if (isHolding()) return;
+  if (isHolding() || playerDead) return;
   camera.getWorldDirection(_camDir); camera.getWorldPosition(_muzzle);
   // ken の関節（tps-flight の nearestNpcJoint 相当）
   let bestKen = null, bestBone = null, bestAlong = GRAB_RANGE;
@@ -3267,7 +3727,11 @@ function grabTarget() {
     let best = GRAB_RANGE;
     for (const c of carsAndJets()) { if (c.grabbed || c.thrown || c.dead || c.tornado) continue; const d = c.mesh.position.distanceTo(_tmpV); if (d < best) { best = d; car = c; } }
   }
-  if (car) { car.grabbed = true; grabbedCar = car; car.holdVel = car.holdVel || new THREE.Vector3(); car.holdVel.set(0, 0, 0); triggerOneShot('grab'); }
+  if (car) {
+    car.grabbed = true; grabbedCar = car; car.holdVel = car.holdVel || new THREE.Vector3(); car.holdVel.set(0, 0, 0);
+    car.holdSpin = new THREE.Vector3((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5);   // TPS Flight風にぐるぐる
+    triggerOneShot('grab');
+  }
 }
 
 // 右クリック解放＝投擲（振り回した速度×ブースト。tps-flight の release 相当）
@@ -3301,7 +3765,9 @@ function updateGrab(dt) {
   _tmpV.copy(mesh.position);
   mesh.position.lerp(frontAnchor, Math.min(1, 12 * dt));   // 前方アンカーへ吸着（カメラで振り回すと勢いがつく）
   if (dt > 0 && grabbedCar.holdVel) grabbedCar.holdVel.copy(mesh.position).sub(_tmpV).divideScalar(dt);
-  mesh.rotation.y += dt * 2.2;
+  const sp = grabbedCar.holdSpin;
+  if (sp) { mesh.rotation.x += sp.x * dt; mesh.rotation.y += sp.y * dt; mesh.rotation.z += sp.z * dt; }
+  else mesh.rotation.y += dt * 2.2;
 }
 
 function updateThrown(dt) {
@@ -3330,6 +3796,7 @@ function updateThrown(dt) {
 function breakCar(car, point) {
   spawnBreakFx(point);
   if (car.jet) {   // 戦闘機: 犯罪ではない。爆発火柱→しばらくして空中へ再出撃
+    if (!car.shotDown) addKill();   // 掴み投げ等での直接破壊（撃墜済みは二重カウントしない）
     spawnImpactFx(point, 1.6);
     spawnFirePillar(point, 0.9);
     car.mesh.visible = false; car.thrown = false; car.shotDown = false; car.dead = true; car.vel = null;
@@ -4419,7 +4886,7 @@ function startVictimAnim(m) {
 }
 function startEating(m) {
   if (m.speech) m.speech.bark('predation');
-  player.eating = true; player.eatT = 0;
+  player.eating = true; player.eatT = 0; player.eatIntroDone = false;
   player.vel.set(0, 0, 0);
   const sy = groundYAt(player.pos.x, player.pos.z, player.pos.y);   // 道路上なら路面へスナップ（埋まり防止）
   if (player.pos.y < sy + 0.02) { player.pos.y = sy + 0.02; player.vrm.scene.position.copy(player.pos); }
@@ -4527,12 +4994,23 @@ function updateEatingRagdoll(m, dt) {
     m.eatLastFrame = cf;
   }
 }
+const PREDATION_HEAL = 5;   // 吸血(捕食)中のHP回復量/秒
 function updatePlayerEating(dt) {
+  if (playerHp < PLAYER_HP_MAX) {   // 吸血で回復（損耗・表情も戻る）
+    playerHp = Math.min(PLAYER_HP_MAX, playerHp + PREDATION_HEAL * dt);
+    updateHpUI();
+    applyDamageFx();
+  }
   player.mixer.update(dt);
   const a = bite.feedAction;
   if (a) {
     const s = bite.feedIntroOut, e = bite.feedLoopEnd, span = Math.max(1e-3, e - s);
+    if (!player.eatIntroDone && a.time >= s) player.eatIntroDone = true;
     if (a.time >= e) { a.time = s + ((a.time - s) % span); player.mixer.update(0); }
+    else if (player.eatIntroDone && a.time < s) {   // loopEnd=クリップ末尾だとLoopRepeatが先に0へ巻き戻す→ループ開始点へ戻す
+      a.time = s + ((a.time + bite.feedClipDur - s) % span);
+      player.mixer.update(0);
+    }
   }
   player.vrm.update(dt);
   if (player.cloth) player.cloth.update(dt, 0);
@@ -4734,7 +5212,7 @@ function updateDayNight(dt) {
   else if (dayRefs.bg) dayRefs.bg.copy(skyC);
   updateSunMoon(sx, sy);   // 太陽/月ディスクの位置・色・出没
   scene.environmentIntensity = 0.22 + (1 - nightF) * 0.78;   // 環境マップ（光沢）は夜に絞る
-  if (charFill.key) { charFill.key.intensity = nightF * charLightCfg.dirI; charFill.rim.intensity = nightF * charLightCfg.ambI; }   // 夜だけキャラを持ち上げる（強さ/色はchar-light.json）
+  if (charFill.key) { charFill.key.intensity = charLightCfg.dirI * (1 + nightF * 0.3); charFill.rim.intensity = charLightCfg.ambI * (1 + nightF * 0.3); }   // 常時点灯（vamp-dungeonのJOY_vampと同じ見せ方。夜はさらに少し持ち上げ）
   if (neonMat) neonMat.opacity = nightF;                     // 屋上ランプは夜だけ
   if (carHeadMat) { carHeadMat.opacity = nightF; carTailMat.opacity = nightF; }
   if (streetGlowMat) streetGlowMat.opacity = nightF;   // 街灯も夜だけ
@@ -5345,11 +5823,81 @@ function updateFpsMeter() {
 let _fpsLastFrame = performance.now();
 
 // ══════════ 戦闘機スウォーム（黒紫の編隊・撃墜きりもみ・車と同じ掴み/投げ） ══════════
-const JET = { n: 6, spMin: 30, spMax: 52, sep: 18, orbitR: 130, resp: 12, hitR: 5 };
+const JET = { n: 6, spMin: 30, spMax: 52, sep: 18, orbitR: 130, resp: 12, hitR: 8,   // hitR=機体を覆う球コリジョン
+  killZone: 110, shotCd: 1.6, shotRange: 260, shotDmg: 8, bombCd: 4.5, bombDmg: 1 };   // killZone内=プレイヤー攻撃/外=爆撃
 const jets = [], jetRespawn = [];
 let jetAnchorA = 0;
-const _jV1 = new THREE.Vector3(), _jV2 = new THREE.Vector3(), _jV3 = new THREE.Vector3();
+const _jV1 = new THREE.Vector3(), _jV2 = new THREE.Vector3(), _jV3 = new THREE.Vector3(), _jV4b = new THREE.Vector3();
 function carsAndJets() { return jets.length ? cars.concat(jets) : cars; }
+const jetBombs = [];
+function jetFireShot(jet) {   // 正面ショット: 筒形ポリゴンのビーム（spawnBeam thick）
+  const from = _jV2.copy(jet.mesh.position).addScaledVector(_jV3.copy(jet.flyVel).normalize(), 7);
+  _jV1.copy(player.pos); _jV1.y += 0.8;
+  const dir = _jV3.subVectors(_jV1, from).normalize();
+  _wkRay.set(from, dir); _wkRay.far = JET.shotRange;
+  const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
+  const hits = _wkRay.intersectObjects(targets, true);
+  const bldT = hits.length ? hits[0].distance : Infinity;
+  const plT = rayHitSphere(from, dir, _jV1, 1.7, JET.shotRange);
+  const minT = Math.min(bldT, plT);
+  const end = from.clone().addScaledVector(dir, minT === Infinity ? JET.shotRange : minT);
+  spawnBeam(from.clone(), end, minT !== Infinity, 0xc46bff, true);   // 紫の筒ビーム
+  playSfxAt('beam.ogg', jet.mesh.position, 0.35);
+  if (minT === Infinity) return;
+  if (minT === plT) { playerDamage(JET.shotDmg, dir); spawnImpactFx(end, 0.8); }
+  else applyHitToBuilding(hits[0], 0.5);   // 外れて建物に当たった分は軽微
+}
+const _bombGlowGeo = new THREE.SphereGeometry(0.3, 8, 6);
+const _bombGlowMat = new THREE.MeshBasicMaterial({ color: 0xff8a2a });   // 両端のオレンジ発光（unlit=常に明るい）
+const _bombBodyMat = new THREE.MeshStandardMaterial({ color: 0x0d0d12, metalness: 0.6, roughness: 0.5 });
+function jetDropBomb(jet) {   // 爆撃: 黒い筒を投下（建物にウォーカービーム相当のダメージ）
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 1.8, 8), _bombBodyMat);
+  const g1 = new THREE.Mesh(_bombGlowGeo, _bombGlowMat); g1.position.y = 0.95; mesh.add(g1);
+  const g2 = new THREE.Mesh(_bombGlowGeo, _bombGlowMat); g2.position.y = -0.95; mesh.add(g2);
+  mesh.position.copy(jet.mesh.position);
+  mesh.position.y -= 2;
+  scene.add(mesh);
+  jetBombs.push({ mesh, vel: new THREE.Vector3(jet.flyVel.x * 0.45, -2, jet.flyVel.z * 0.45), t: 0 });
+}
+function updateJetBombs(dt) {
+  for (let k = jetBombs.length - 1; k >= 0; k--) {
+    const bm = jetBombs[k];
+    bm.t += dt;
+    bm.vel.y -= 28 * dt;
+    const pos = bm.mesh.position;
+    pos.addScaledVector(bm.vel, dt);
+    bm.mesh.rotation.x += dt * 2.4;
+    // 建物ボックス/地面/寿命
+    let hit = false;
+    const cx = Math.floor(pos.x / COLL_CELL), cz = Math.floor(pos.z / COLL_CELL);
+    for (let dz2 = -1; dz2 <= 1 && !hit; dz2++) for (let dx2 = -1; dx2 <= 1 && !hit; dx2++) {
+      const arr = collGrid.get((cx + dx2) + '_' + (cz + dz2));
+      if (!arr) continue;
+      for (const idx of arr) {
+        const b = collBoxes[idx];
+        if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < b.h && pos.y > b.bottom && pos.y < b.top) { hit = true; break; }
+      }
+    }
+    const gy = groundYAt(pos.x, pos.z, pos.y + 200);
+    if (!hit && pos.y > gy && bm.t < 12) continue;
+    // 起爆: 上から短いレイで建物を特定（箱の内側からだと裏面で外れるため）
+    jetBombs.splice(k, 1);
+    scene.remove(bm.mesh);
+    bm.mesh.geometry.dispose(); bm.mesh.material.dispose();
+    _wkRay.set(_jV2.set(pos.x, pos.y + 30, pos.z), _jV3.set(0, -1, 0)); _wkRay.far = 80;
+    const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
+    const bh = _wkRay.intersectObjects(targets, true)[0];
+    playSfxAt('bomb_short.ogg', pos, 0.7);
+    if (bh) applyHitToBuilding(bh, DMG_SHOT, 1.5);   // ウォーカービーム相当（通常弾ダメージ＋FX）
+    else {
+      const onRoad = roadTopAt(pos.x, pos.z) != null;
+      spawnImpactFx(_jV2.set(pos.x, gy, pos.z), 1.2);
+      spawnDebrisBurst(_jV2, onRoad ? 'road' : 'ground', 1);
+      spawnScorch(_jV2, 2.6);
+      if (onRoad) spawnRoadCarve(_jV2, 2.0);
+    }
+  }
+}
 
 function makeJetMesh(jet) {
   const g = new THREE.Group();
@@ -5370,7 +5918,48 @@ function makeJetMesh(jet) {
   const engine = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.72, 1.2, 10), mGlow);
   engine.rotation.x = Math.PI / 2; engine.position.z = -5.2; g.add(engine);
   g.userData.car = jet;   // 掴みレイキャストの逆引き（車と同じ流儀）
+  jet.flashMats = [mBody, mAcc];   // 被弾フラッシュ用（emissiveを一瞬赤に）
   return g;
+}
+const TRAIL_N = 22;
+function makeJetTrail(jet) {
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(TRAIL_N * 3);
+  const col = new Float32Array(TRAIL_N * 3);
+  for (let i = 0; i < TRAIL_N; i++) {   // 先頭=明るいオレンジ → 末尾=黒（加算合成で自然に消える）
+    const f = 1 - i / (TRAIL_N - 1);
+    col[i * 3] = 1.0 * f; col[i * 3 + 1] = 0.55 * f * f; col[i * 3 + 2] = 0.15 * f * f;
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  line.frustumCulled = false;
+  scene.add(line);
+  jet.trail = { line, pos, t: 0 };
+}
+function resetJetTrail(jet) {   // スポーン/再出撃時: 全点を現在位置に畳む（画面を横切る筋を防ぐ）
+  if (!jet.trail) return;
+  const p2 = jet.mesh.position;
+  for (let i = 0; i < TRAIL_N; i++) { jet.trail.pos[i * 3] = p2.x; jet.trail.pos[i * 3 + 1] = p2.y; jet.trail.pos[i * 3 + 2] = p2.z; }
+  jet.trail.line.geometry.attributes.position.needsUpdate = true;
+}
+function updateJetTrail(jet, dt) {
+  const tr = jet.trail;
+  if (!tr) return;
+  const active = !jet.dead && !jet.grabbed && !jet.thrown;
+  tr.line.visible = active;
+  if (!active) return;
+  tr.t -= dt;
+  if (tr.t > 0) return;
+  tr.t = 0.03;
+  const pos = tr.pos;
+  pos.copyWithin(3, 0, (TRAIL_N - 1) * 3);   // 1点ずらして…
+  const off = jet.trailOffset ?? 5.6;
+  _jV3.copy(jet.flyVel).normalize();
+  pos[0] = jet.mesh.position.x - _jV3.x * off;   // …先頭にエンジン後端を記録
+  pos[1] = jet.mesh.position.y - _jV3.y * off;
+  pos[2] = jet.mesh.position.z - _jV3.z * off;
+  tr.line.geometry.attributes.position.needsUpdate = true;
 }
 function jetAirPos(out, r) {
   const a = Math.random() * Math.PI * 2;
@@ -5386,15 +5975,17 @@ function spawnJets() {
     jetAirPos(jet.mesh.position, 380 + Math.random() * 120);
     jet.flyVel.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize().multiplyScalar(JET.spMax * 0.8);
     scene.add(jet.mesh);
+    makeJetTrail(jet);
+    resetJetTrail(jet);
     jets.push(jet);
   }
   window.__jets = jets;
-  window.__jetsDbg = { hit: hitCarBeam, grab: grabTarget, release: releaseGrab, get thrownN() { return thrownCars.length; }, get held() { return grabbedCar; }, get player() { return player; }, get cam() { return camera; } };
+  window.__jetsDbg = { hit: hitCarBeam, grab: grabTarget, release: releaseGrab, get thrownN() { return thrownCars.length; }, get held() { return grabbedCar; }, get player() { return player; }, get cam() { return camera; }, get bite() { return bite; }, startEating, get kens() { return kens; } };
   console.log('jets spawn', jets.length);
 }
 function updateJets(dt) {
   if (!KENNEY_CITY) return;
-  if (!jets.length) { if (cityRoot && collBoxes.length && player.ready) spawnJets(); return; }
+  if (!jets.length) { if (enemyAllowed('jet') && cityRoot && collBoxes.length && player.ready) spawnJets(); return; }
   for (let k = jetRespawn.length - 1; k >= 0; k--) {   // 撃墜からの再出撃（遠くの空へ）
     const r = jetRespawn[k]; r.t += dt;
     if (r.t > JET.resp) {
@@ -5403,6 +5994,7 @@ function updateJets(dt) {
       jet.mesh.rotation.set(0, 0, 0); jet.mesh.visible = true;
       jetAirPos(jet.mesh.position, 500);
       jet.flyVel.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize().multiplyScalar(JET.spMax * 0.8);
+      resetJetTrail(jet);
       jetRespawn.splice(k, 1);
     }
   }
@@ -5410,12 +6002,35 @@ function updateJets(dt) {
   jetAnchorA += dt * 0.3;
   _jV1.set(player.pos.x + Math.cos(jetAnchorA) * JET.orbitR, 0, player.pos.z + Math.sin(jetAnchorA) * JET.orbitR);
   _jV1.y = Math.max(player.pos.y + 20, groundYAt(_jV1.x, _jV1.z, player.pos.y + 400) + 55);
+  updateJetBombs(dt);
+  for (const jet of jets) {   // 被弾フラッシュ（撃墜きりもみ中も含む）
+    if (jet.flashT > 0 && jet.flashMats) {
+      jet.flashT = Math.max(0, jet.flashT - dt);
+      const f = jet.flashT / 0.35;
+      for (const m2 of jet.flashMats) m2.emissive.setRGB(f, f * 0.08, f * 0.05);
+    }
+  }
   for (const jet of jets) {
     if (jet.dead || jet.grabbed || jet.thrown) continue;
     const p = jet.mesh.position;
     jet.phase += dt;
-    // 操舵: 錨へ寄る＋仲間と離れる＋ゆらぎ
-    _jV2.subVectors(_jV1, p);
+    jet.shotT = (jet.shotT || 0) - dt;
+    jet.bombT = (jet.bombT || 0) - dt;
+    const pd = p.distanceTo(player.pos);
+    let atkRun = false;
+    if (pd < JET.killZone && !playerDead) {   // キルゾーン内: プレイヤーへ攻撃ラン
+      atkRun = true;
+      _jV4b.copy(player.pos);
+      _jV4b.y = Math.max(player.pos.y + 4, groundYAt(p.x, p.z, p.y + 300) + 18);
+      _jV3.copy(jet.flyVel).normalize();
+      const align = _jV3.dot(_jV2.subVectors(player.pos, p).normalize());
+      if (jet.shotT <= 0 && align > 0.86 && pd < JET.shotRange) { jet.shotT = JET.shotCd + Math.random() * 0.8; jetFireShot(jet); }
+    } else if (jet.bombT <= 0 && p.y > groundYAt(p.x, p.z, p.y + 300) + 25) {   // 外: 町へ爆撃
+      jet.bombT = JET.bombCd + Math.random() * 3;
+      jetDropBomb(jet);
+    }
+    // 操舵: 錨（攻撃ラン中はプレイヤー）へ寄る＋仲間と離れる＋ゆらぎ
+    _jV2.subVectors(atkRun ? _jV4b : _jV1, p);
     const far = _jV2.length();
     _jV2.normalize().multiplyScalar(Math.min(28, far * 0.35));
     for (const o of jets) {
@@ -5438,6 +6053,83 @@ function updateJets(dt) {
     jet.mesh.lookAt(_jV3);
     const bank = Math.max(-0.9, Math.min(0.9, (_jV2.x * jet.flyVel.z - _jV2.z * jet.flyVel.x) * 0.0016));
     jet.mesh.rotateZ(bank);
+    updateJetTrail(jet, dt);
+  }
+  for (const jet of jets) { if (jet.dead || jet.grabbed || jet.thrown) updateJetTrail(jet, dt); }   // 非アクティブ機はトレイル非表示化
+}
+
+// ══════════ 敵のエネルギー弾（主砲: 弾速あり・太い発光円筒＝回避可能） ══════════
+const enemyBolts = [];
+const _ebV1 = new THREE.Vector3(), _ebV2 = new THREE.Vector3();
+function fireEnemyBolt(from, dir, o) {
+  const len = o.len ?? 9, r = o.radius ?? 1;
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 10),
+    new THREE.MeshBasicMaterial({ color: o.color ?? 0xffb040, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+  core.rotation.x = Math.PI / 2;
+  const halo = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.8, r * 1.8, len * 0.8, 10),
+    new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+  halo.rotation.x = Math.PI / 2;
+  const g = new THREE.Group();
+  g.add(core, halo);
+  g.position.copy(from);
+  _ebV1.copy(from).add(dir);
+  g.lookAt(_ebV1);
+  scene.add(g);
+  enemyBolts.push({ mesh: g, vel: dir.clone().multiplyScalar(o.speed ?? 90), t: 0,
+    radius: r, dmg: o.dmg ?? 12, knock: o.knock ?? 22, bldDmg: o.bldDmg ?? DMG_SHOT, fxScale: o.fxScale ?? 1, range: o.range ?? 450 });
+}
+function updateEnemyBolts(dt) {
+  for (let k = enemyBolts.length - 1; k >= 0; k--) {
+    const eb = enemyBolts[k];
+    eb.t += dt;
+    const pos = eb.mesh.position;
+    pos.addScaledVector(eb.vel, dt);
+    let boom = false, hitPlayer = false, bldHit = null;
+    // プレイヤー命中
+    if (!playerDead && pos.distanceTo(player.pos) < eb.radius + 2.2) { boom = true; hitPlayer = true; }
+    // 建物
+    if (!boom) {
+      const cx = Math.floor(pos.x / COLL_CELL), cz = Math.floor(pos.z / COLL_CELL);
+      outer: for (let dz2 = -1; dz2 <= 1; dz2++) for (let dx2 = -1; dx2 <= 1; dx2++) {
+        const arr = collGrid.get((cx + dx2) + '_' + (cz + dz2));
+        if (!arr) continue;
+        for (const idx of arr) {
+          const b = collBoxes[idx];
+          if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < b.h && pos.y > b.bottom && pos.y < b.top) { boom = true; break outer; }
+        }
+      }
+      if (boom) {   // 命中面をレイで特定（インスタンス→carve個別化のため）
+        _ebV1.copy(eb.vel).normalize();
+        _ebV2.copy(pos).addScaledVector(_ebV1, -eb.radius - 8);
+        _wkRay.set(_ebV2, _ebV1); _wkRay.far = eb.radius + 16;
+        const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
+        bldHit = _wkRay.intersectObjects(targets, true)[0] || null;
+      }
+    }
+    // 地面/寿命
+    const gy = groundYAt(pos.x, pos.z, pos.y + 300);
+    const grounded = pos.y <= gy + eb.radius * 0.5;
+    if (!boom && (grounded || eb.t * (eb.vel.length()) > eb.range || eb.t > 8)) boom = true;
+    if (!boom) continue;
+    enemyBolts.splice(k, 1);
+    scene.remove(eb.mesh);
+    playSfxAt('bomb.ogg', pos, 0.8);
+    if (hitPlayer) {
+      _ebV1.copy(eb.vel).normalize();
+      player.vel.addScaledVector(_ebV1, eb.knock); player.vel.y += 8;
+      spawnImpactFx(pos, eb.fxScale);
+      playerDamage(eb.dmg, _ebV1);
+    } else if (bldHit) {
+      applyHitToBuilding(bldHit, eb.bldDmg, eb.fxScale * 1.2);
+    } else if (grounded) {
+      _ebV2.set(pos.x, gy, pos.z);
+      const onRoad = roadTopAt(pos.x, pos.z) != null;
+      spawnImpactFx(_ebV2, eb.fxScale);
+      spawnDebrisBurst(_ebV2, onRoad ? 'road' : 'ground', eb.fxScale);
+      spawnFirePillar(_ebV2, eb.fxScale);
+      spawnScorch(_ebV2, 2.6 * eb.fxScale);
+      if (onRoad) spawnRoadCarve(_ebV2, 2.1 * eb.fxScale);
+    } else spawnImpactFx(pos, eb.fxScale);
   }
 }
 
@@ -5450,10 +6142,13 @@ const WK = {
   smashInt: 0.16, smashDmg: 8, smashRange: 17,     // なぎ倒しレイの間隔・ダメージ・射程
   beamCd: 3.0, beamRange: 330, aimTol: 0.12,       // 砲塔ビーム
   turretYawRate: 0.9, knock: 22,
+  hp: 60, respawnSec: 35, fallSec: 2.6, meltSec: 2.8,   // 被弾（通常弾=6dmg相当で10発）→転倒→溶解
+  killZone: 150,   // この半径内にプレイヤーがいれば対プレイヤー攻撃、外なら町（建物）を砲撃
 };
+let walkerCd = 0;   // 撃破後の再出現クールダウン
 let walker = null;
 const _wkV1 = new THREE.Vector3(), _wkV2 = new THREE.Vector3(), _wkV3 = new THREE.Vector3(), _wkV4 = new THREE.Vector3();
-const _wkQ = new THREE.Quaternion(), _wkYAxis = new THREE.Vector3(0, 1, 0), _wkRay = new THREE.Raycaster();
+const _wkQ = new THREE.Quaternion(), _wkYAxis = new THREE.Vector3(0, 1, 0), _wkRay = new THREE.Raycaster(), _wkE = new THREE.Euler();
 
 function wkBoneMesh(r, len, mat) {   // 2関節間を結ぶ円柱（毎フレーム位置と向きを更新）
   const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.8, 1, 8), mat);
@@ -5476,8 +6171,12 @@ function spawnWalker() {
   const ang = Math.random() * Math.PI * 2;
   const px = Math.max(bounds.x0, Math.min(bounds.x1, player.pos.x + Math.cos(ang) * 250));
   const pz = Math.max(bounds.z0, Math.min(bounds.z1, player.pos.z + Math.sin(ang) * 250));
-  const matBody = new THREE.MeshStandardMaterial({ color: 0x3a4149, metalness: 0.7, roughness: 0.45 });
-  const matLeg = new THREE.MeshStandardMaterial({ color: 0x2c3138, metalness: 0.6, roughness: 0.55 });
+  const matBody0 = new THREE.MeshStandardMaterial({ color: 0x3a4149, metalness: 0.7, roughness: 0.45 });
+  const matLeg0 = new THREE.MeshStandardMaterial({ color: 0x2c3138, metalness: 0.6, roughness: 0.55 });
+  const wkFlashU = uniform(0);   // 被弾フラッシュ
+  const cmBody = makeCarveMaterial(matBody0, 0, 40, wkFlashU);   // ビルと同じ穴あき/溶解シェーダ（中心は毎フレーム追従更新）
+  const cmLeg = makeCarveMaterial(matLeg0, 0, 40, wkFlashU);
+  const matBody = cmBody.mat, matLeg = cmLeg.mat;
   const matAcc = new THREE.MeshStandardMaterial({ color: 0x8a2f2f, metalness: 0.5, roughness: 0.5, emissive: 0x300808, emissiveIntensity: 0.8 });
   const root = new THREE.Group();
   // 胴体＋装甲
@@ -5519,17 +6218,50 @@ function spawnWalker() {
     root, turret, pitchPivot, muzzleTip, legs, bounds,
     pos: new THREE.Vector3(px, gy + WK.hipY, pz), yaw: Math.random() * Math.PI * 2,
     target: null, retargetT: 0, smashT: 0, beamT: WK.beamCd, swayT: 0,
+    hp: WK.hp, carve: { sets: [cmBody, cmLeg], pts: [] }, dying: false, dieT: 0, accMeshes: [], flashU: wkFlashU,
   };
+  root.traverse((o) => { if (o.isMesh && o.material === matAcc) walker.accMeshes.push(o); });
+  for (const lg of legs) walker.accMeshes.push(lg.kneeBall);
   for (const lg of legs) {   // 初期の足位置＝ホーム
     lg.foot.copy(lg.homeOff).applyAxisAngle(_wkYAxis, walker.yaw).add(walker.pos);
     lg.foot.y = groundYAt(lg.foot.x, lg.foot.z, walker.pos.y + 300);
   }
   window.__walker = walker;
-  window.__walkerDbg = { get dmg() { return cityDamaged ? cityDamaged.children.length : 0; }, get player() { return player; }, get cam() { return camera; }, fire: wkFireBeam };
+  window.__walkerDbg = { get dmg() { return cityDamaged ? cityDamaged.children.length : 0; }, get player() { return player; }, get cam() { return camera; }, fire: wkFireBeam, hit: walkerHit, get w() { return walker; } };
   console.log('walker spawn', px.toFixed(0), pz.toFixed(0));
 }
-function wkSolveLeg(lg, yaw) {   // 2ボーンIK: 股→膝→足（膝ポール=外側+上）
-  _wkV1.copy(lg.hipOff).applyAxisAngle(_wkYAxis, yaw).add(walker.pos);      // 股（ワールド）
+function walkerHit(point, dmg) {   // ビル同様: 着弾点に穴あきカーブ＋炎/がれき。HP0で溶解崩壊
+  if (!walker || walker.dying) return;
+  walker.hp -= dmg;
+  walker.flashU.value = 1;   // 一瞬赤く
+  const c = walker.carve;
+  const local = point.clone().sub(walker.pos);
+  local.applyAxisAngle(_wkYAxis, -walker.yaw);
+  const i = Math.min(c.pts.length, 5);   // CARVE_MAX=6
+  c.pts[i] = { p: local, r: 1.9 + Math.random() * 0.9 };
+  for (const set of c.sets) set.uRadii[i].value = c.pts[i].r;
+  spawnImpactFx(point, 1.1);
+  spawnDebrisBurst(point, 'bld', 0.8);
+  if (walker.hp <= 0) walkerDie();
+}
+function walkerDie() {
+  addKill('walker');
+  const w = walker;
+  w.dying = true; w.dieT = 0; w.slammed = false;
+  w.dieStartY = w.pos.y;
+  w.dieGroundY = groundYAt(w.pos.x, w.pos.z, w.pos.y + 300);
+  playSfxAt('bomb.ogg', w.pos, 0.9);   // 致命打。激突時に bakuha が鳴る
+}
+function walkerRemove() {
+  const w = walker;
+  scene.remove(w.root);
+  for (const lg of w.legs) { scene.remove(lg.femur, lg.tibia, lg.hipBall, lg.kneeBall, lg.footMesh); }
+  walker = null;
+  walkerCd = WK.respawnSec;
+}
+function wkSolveLeg(lg, yaw, quat) {   // 2ボーンIK: 股→膝→足（膝ポール=外側+上）。quat指定時は転倒姿勢
+  if (quat) _wkV1.copy(lg.hipOff).applyQuaternion(quat).add(walker.pos);
+  else _wkV1.copy(lg.hipOff).applyAxisAngle(_wkYAxis, yaw).add(walker.pos);      // 股（ワールド）
   const hip = _wkV1, foot = lg.foot;
   _wkV2.subVectors(foot, hip);
   let d = _wkV2.length();
@@ -5574,38 +6306,72 @@ function wkFootSmash(footPos) {   // 着地点の建物破壊＋踏み跡
   const onRoad = roadTopAt(footPos.x, footPos.z) != null;
   spawnDebrisBurst(footPos, onRoad ? 'road' : 'ground', 0.8);
 }
-function wkFireBeam() {   // 砲塔ビーム＝プレイヤー通常攻撃相当（FX・破壊とも fireBeam に準拠）
+function wkFireBeam(tgt) {   // 主砲: 太いエネルギー弾（弾速85=回避可能）
   walker.muzzleTip.getWorldPosition(_wkV1);
-  _wkV2.copy(player.pos); _wkV2.y += 1.0;
+  if (tgt) _wkV2.copy(tgt);
+  else { _wkV2.copy(player.pos); _wkV2.y += 1.0; }
   const dir = _wkV3.subVectors(_wkV2, _wkV1).normalize();
-  _wkRay.set(_wkV1, dir); _wkRay.far = WK.beamRange;
-  const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
-  const hits = _wkRay.intersectObjects(targets, true);
-  const bldT = hits.length ? hits[0].distance : Infinity;
-  const gndHit = (groundGroup && groundGroup.children.length) ? _wkRay.intersectObject(groundGroup, true)[0] : null;
-  const gndT = gndHit ? gndHit.distance : Infinity;
-  const plT = rayHitSphere(_wkV1, dir, _wkV2, 1.6, WK.beamRange);
-  const minT = Math.min(bldT, gndT, plT);
-  const end = _wkV1.clone().addScaledVector(dir, minT === Infinity ? WK.beamRange : minT);
-  spawnBeam(_wkV1, end, minT !== Infinity);   // 通常ビームと同じ色・フラッシュ
-  if (minT === Infinity) return;
-  if (minT === plT) {   // プレイヤー被弾: ノックバック＋着弾FX
-    player.vel.addScaledVector(dir, WK.knock); player.vel.y += 8;
-    spawnImpactFx(end, 1);
-  } else if (minT === bldT) {
-    applyHitToBuilding(hits[0], DMG_SHOT);   // 通常弾と同値
-  } else {   // 地面: fireBeam の地面着弾と同じ演出
-    const onRoad = roadTopAt(end.x, end.z) != null;
-    spawnDebrisBurst(end, onRoad ? 'road' : 'ground', 1);
-    spawnFirePillar(end, 1);
-    spawnScorch(end, 2.6);
-    if (onRoad) spawnRoadCarve(end, 2.1);
-  }
+  fireEnemyBolt(_wkV1, dir, { speed: 85, radius: 1.1, len: 10, color: 0xffb040, dmg: 12, knock: WK.knock, bldDmg: DMG_SHOT, fxScale: 1, range: WK.beamRange + 80 });
+  playSfxAt('beam.ogg', _wkV1, 0.5);
 }
 function updateWalker(dt) {
   if (!KENNEY_CITY) return;
-  if (!walker) { if (cityRoot && collBoxes.length && player.ready) spawnWalker(); return; }
+  if (!walker) {
+    if (walkerCd > 0) { walkerCd -= dt; return; }
+    if (enemyAllowed('walker') && cityRoot && collBoxes.length && player.ready) spawnWalker();
+    return;
+  }
   const w = walker;
+  if (w.flashU.value > 0) w.flashU.value = Math.max(0, w.flashU.value - dt * 4);   // 被弾フラッシュ減衰
+  // 穴あきカーブの中心をウォーカーに追従させる（ビルは静的だがこちらは動く）
+  for (let i = 0; i < w.carve.pts.length; i++) {
+    const cp = w.carve.pts[i];
+    if (!cp) continue;
+    _wkV4.copy(cp.p).applyAxisAngle(_wkYAxis, w.yaw).add(w.pos);
+    for (const set of w.carve.sets) set.uCenters[i].value.copy(_wkV4);
+  }
+  if (w.dying) {   // 段階1: ゆっくり前へ倒れる → 地面に激突 → 段階2: 溶解して消える
+    w.dieT += dt;
+    if (w.dieT < WK.fallSec) {   // 転倒（加速しながら前へ75°）
+      const u = w.dieT / WK.fallSec;
+      const ang = (u * u) * (75 * Math.PI / 180);
+      _wkE.set(ang, w.yaw, 0, 'YXZ');
+      w.root.quaternion.setFromEuler(_wkE);
+      w.pos.y = w.dieStartY + (w.dieGroundY + 9 - w.dieStartY) * (u * u);
+      w.root.position.copy(w.pos);
+      for (const lg of w.legs) wkSolveLeg(lg, w.yaw, w.root.quaternion);   // 足は接地したまま＝脚が折れ崩れる
+      if ((w._dieFxT = (w._dieFxT || 0) - dt) <= 0) {
+        w._dieFxT = 0.5;
+        _wkV4.set(w.pos.x + (Math.random() - 0.5) * 12, w.pos.y + (Math.random() - 0.5) * 6, w.pos.z + (Math.random() - 0.5) * 12);
+        spawnImpactFx(_wkV4, 1.2);
+      }
+      return;
+    }
+    if (!w.slammed) {   // 激突: 土煙＋がれき＋焦げ＋bakuha
+      w.slammed = true;
+      const fwdX = Math.sin(w.yaw), fwdZ = Math.cos(w.yaw);
+      _wkV4.set(w.pos.x + fwdX * 12, w.dieGroundY, w.pos.z + fwdZ * 12);
+      playSfxAt('bakuha.ogg', _wkV4, 1.0);
+      spawnImpactFx(_wkV4, 2.6);
+      spawnDebrisBurst(_wkV4, 'bld', 2);
+      spawnScorch(_wkV4, 6);
+      spawnFirePillar(_wkV4, 1.4);
+      for (const set of w.carve.sets) { set.uKillOn.value = 1; set.uBaseY.value = w.dieGroundY; set.uHeight.value = 24; }
+      for (const o of w.accMeshes) o.visible = false;   // 溶解しないアクセントは消す
+    }
+    const mu = (w.dieT - WK.fallSec) / WK.meltSec;   // 溶解（上から白熱消滅）
+    for (const set of w.carve.sets) set.uKill.value = Math.min(1, mu);
+    w.pos.y -= dt * 0.8;
+    w.root.position.copy(w.pos);
+    if ((w._dieFxT = (w._dieFxT || 0) - dt) <= 0) {
+      w._dieFxT = 0.45;
+      _wkV4.set(w.pos.x + (Math.random() - 0.5) * 16, w.pos.y + (Math.random() - 0.5) * 6, w.pos.z + (Math.random() - 0.5) * 16);
+      spawnImpactFx(_wkV4, 1.4);
+      if (Math.random() < 0.4) spawnFirePillar(_wkV4, 0.7);
+    }
+    if (mu >= 1.1) walkerRemove();
+    return;
+  }
   // ── 徘徊: 目標点へ旋回して前進 ──
   w.retargetT -= dt;
   if (!w.target || w.retargetT <= 0 || Math.hypot(w.target.x - w.pos.x, w.target.z - w.pos.z) < 25) {
@@ -5663,20 +6429,468 @@ function updateWalker(dt) {
   // ── なぎ倒し ──
   w.smashT -= dt;
   if (w.smashT <= 0 && throttle > 0.2) { w.smashT = WK.smashInt; wkSmashRays(); }
-  // ── 砲塔: プレイヤーへ旋回→照準一致＋射程内で発射 ──
+  // ── 砲塔: キルゾーン内=プレイヤー狙い / 外=町（建物）を砲撃 ──
   const dx = player.pos.x - w.pos.x, dz = player.pos.z - w.pos.z;
   const distP = Math.hypot(dx, dz);
-  const wantT = Math.atan2(dx, dz) - w.yaw;   // 砲塔は胴体ローカルのヨー
+  const playerIn = distP < WK.killZone;
+  let aimX, aimY, aimZ;
+  if (playerIn) { aimX = player.pos.x; aimY = player.pos.y + 1.0; aimZ = player.pos.z; }
+  else {
+    w.townT = (w.townT || 0) - dt;
+    if (!w.townTarget || w.townT <= 0) {   // 砲撃目標＝射程内のランダムな建物
+      w.townTarget = null;
+      for (let tryN = 0; tryN < 40; tryN++) {
+        const b = collBoxes[(Math.random() * collBoxes.length) | 0];
+        if (!b || b.top <= b.bottom) continue;
+        const d = Math.hypot(b.x - w.pos.x, b.z - w.pos.z);
+        if (d < 40 || d > WK.beamRange * 0.9) continue;
+        w.townTarget = { x: b.x, y: b.bottom + (b.top - b.bottom) * 0.6, z: b.z };
+        break;
+      }
+      w.townT = 6 + Math.random() * 4;
+    }
+    if (w.townTarget) { aimX = w.townTarget.x; aimY = w.townTarget.y; aimZ = w.townTarget.z; }
+    else { aimX = player.pos.x; aimY = player.pos.y; aimZ = player.pos.z; }
+  }
+  const adx = aimX - w.pos.x, adz = aimZ - w.pos.z;
+  const aimD = Math.hypot(adx, adz);
+  const wantT = Math.atan2(adx, adz) - w.yaw;   // 砲塔は胴体ローカルのヨー
   let tdy = wantT - w.turret.rotation.y;
   while (tdy > Math.PI) tdy -= Math.PI * 2; while (tdy < -Math.PI) tdy += Math.PI * 2;
   w.turret.rotation.y += Math.max(-WK.turretYawRate * dt, Math.min(WK.turretYawRate * dt, tdy));
   w.muzzleTip.getWorldPosition(_wkV1);
-  const pitchWant = Math.atan2(player.pos.y - _wkV1.y, distP);
+  const pitchWant = Math.atan2(aimY - _wkV1.y, aimD);
   w.pitchPivot.rotation.x = Math.max(-0.9, Math.min(0.6, w.pitchPivot.rotation.x + Math.max(-0.8 * dt, Math.min(0.8 * dt, -pitchWant - w.pitchPivot.rotation.x))));
   w.beamT -= dt;
-  if (w.beamT <= 0 && distP < WK.beamRange && Math.abs(tdy) < WK.aimTol) {
+  const pitchOk = Math.abs(-pitchWant - w.pitchPivot.rotation.x) < 0.15;   // 俯角上限を超える目標（真下など）は撃てない
+  if (w.beamT <= 0 && aimD < WK.beamRange && Math.abs(tdy) < WK.aimTol && pitchOk) {
     w.beamT = WK.beamCd + Math.random() * 1.2;
-    wkFireBeam();
+    wkFireBeam(playerIn ? null : _wkV4.set(aimX, aimY, aimZ));
+  }
+}
+
+// ══════════ スパイダータンク（ウォーカー上位互換: 3倍・6脚・主砲＋誘導ミサイル＋腹部砲門2基） ══════════
+const SP = {
+  bodyW: 42, bodyH: 18, bodyD: 60, hipY: 72,       // 3倍スケール
+  L1: 54, L2: 72,                                   // クモのように長い足
+  speed: 13, turn: 0.35,
+  stepTrig: 20, stepDur: 0.7, stepArc: 22,          // 大股
+  smashInt: 0.14, smashDmg: 8, smashRange: 50,
+  beamCd: 3.2, beamRange: 500, aimTol: 0.12, turretYawRate: 0.8, beamDmg: 15,
+  mslCd: 6.5, mslN: 2, mslSpeed: 58, mslTurn: 1.6, mslLife: 7, mslDmg: 15, mslR: 3.2,   // 誘導ミサイル
+  bellyCd: 0.55, bellyR: 130, bellyDmg: 8,          // 腹部砲門（真下の敵へ戦闘機ショット連射）
+  hp: 240, respawnSec: 60, fallSec: 3.2, meltSec: 3.4,
+  killZone: 260,
+};
+let spider = null, spiderCd = 0;
+const spMissiles = [];
+const _spV1 = new THREE.Vector3(), _spV2 = new THREE.Vector3(), _spV3 = new THREE.Vector3(), _spV4 = new THREE.Vector3();
+const _spE = new THREE.Euler();
+
+function spawnSpider() {
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (const b of collBoxes) { if (b.top <= b.bottom) continue; x0 = Math.min(x0, b.x); x1 = Math.max(x1, b.x); z0 = Math.min(z0, b.z); z1 = Math.max(z1, b.z); }
+  if (x0 > x1) return;
+  const bounds = { x0: x0 + 60, x1: x1 - 60, z0: z0 + 60, z1: z1 - 60 };
+  const ang = Math.random() * Math.PI * 2;
+  const px = Math.max(bounds.x0, Math.min(bounds.x1, player.pos.x + Math.cos(ang) * 450));
+  const pz = Math.max(bounds.z0, Math.min(bounds.z1, player.pos.z + Math.sin(ang) * 450));
+  const matBody0 = new THREE.MeshStandardMaterial({ color: 0x2f3540, metalness: 0.7, roughness: 0.45 });
+  const matLeg0 = new THREE.MeshStandardMaterial({ color: 0x232830, metalness: 0.6, roughness: 0.55 });
+  const spFlashU = uniform(0);
+  const cmBody = makeCarveMaterial(matBody0, 0, 120, spFlashU);
+  const cmLeg = makeCarveMaterial(matLeg0, 0, 120, spFlashU);
+  const matBody = cmBody.mat, matLeg = cmLeg.mat;
+  const matAcc = new THREE.MeshStandardMaterial({ color: 0x8a2f2f, metalness: 0.5, roughness: 0.5, emissive: 0x300808, emissiveIntensity: 0.8 });
+  const root = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(SP.bodyW, SP.bodyH, SP.bodyD), matBody);
+  root.add(body);
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(SP.bodyW + 7, 4, SP.bodyD + 7), matLeg);
+  plate.position.y = SP.bodyH / 2 + 1.2; root.add(plate);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(20, 10, 16), matBody);   // 頭部（前方下）
+  head.position.set(0, -SP.bodyH / 2, SP.bodyD / 2 + 6); root.add(head);
+  // 主砲（ウォーカーと同形式・大型）
+  const turret = new THREE.Group(); turret.position.y = SP.bodyH / 2 + 3.4; root.add(turret);
+  const tBase = new THREE.Mesh(new THREE.CylinderGeometry(12, 14.5, 9, 12), matBody); tBase.position.y = 4.5; turret.add(tBase);
+  const pitchPivot = new THREE.Group(); pitchPivot.position.y = 10; turret.add(pitchPivot);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.2, 34, 10), matLeg);
+  barrel.rotation.x = Math.PI / 2; barrel.position.z = 17; pitchPivot.add(barrel);
+  const muzzleTip = new THREE.Object3D(); muzzleTip.position.set(0, 0, 34); pitchPivot.add(muzzleTip);
+  // 誘導ミサイルのボックス型タレット
+  const mslBox = new THREE.Mesh(new THREE.BoxGeometry(16, 8, 12), matLeg);
+  mslBox.position.set(-14, SP.bodyH / 2 + 6, -12); root.add(mslBox);
+  const mslCells = new THREE.Mesh(new THREE.BoxGeometry(14, 1.2, 10), matAcc);
+  mslCells.position.set(-14, SP.bodyH / 2 + 10.2, -12); root.add(mslCells);
+  // 腹部砲門2基（頭の下・真下の敵を狙う）
+  const bellyGuns = [];
+  for (const sgn of [-1, 1]) {
+    const g = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.0, 7, 8), matAcc);
+    g.position.set(sgn * 6, -SP.bodyH / 2 - 5.5, SP.bodyD / 2 + 6);
+    root.add(g);
+    bellyGuns.push(g);
+  }
+  // 6脚（前/中/後 ×左右）
+  const legs = [];
+  const hipDefs = [
+    [-SP.bodyW / 2, SP.bodyD / 2 - 5], [SP.bodyW / 2, SP.bodyD / 2 - 5],
+    [-SP.bodyW / 2, 0], [SP.bodyW / 2, 0],
+    [-SP.bodyW / 2, -SP.bodyD / 2 + 5], [SP.bodyW / 2, -SP.bodyD / 2 + 5],
+  ];
+  for (let i = 0; i < 6; i++) {
+    const [hx, hz] = hipDefs[i];
+    const femur = wkBoneMesh(5.2, SP.L1, matLeg);
+    const tibia = wkBoneMesh(3.6, SP.L2, matLeg);
+    const hipBall = new THREE.Mesh(new THREE.SphereGeometry(7.5, 10, 8), matBody);
+    const kneeBall = new THREE.Mesh(new THREE.SphereGeometry(5.4, 10, 8), matAcc);
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 7.5, 5, 10), matBody);
+    scene.add(femur, tibia, hipBall, kneeBall, foot);
+    legs.push({
+      idx: i,
+      hipOff: new THREE.Vector3(hx, -SP.bodyH / 2 + 1.5, hz),
+      homeOff: new THREE.Vector3(hx * 2.6, 0, hz * 1.9),   // クモらしく大きく広げる
+      foot: new THREE.Vector3(), step: null,
+      femur, tibia, hipBall, kneeBall, footMesh: foot,
+    });
+  }
+  scene.add(root);
+  const gy = groundYAt(px, pz, 500);
+  spider = {
+    root, turret, pitchPivot, muzzleTip, bellyGuns, legs, bounds,
+    pos: new THREE.Vector3(px, gy + SP.hipY, pz), yaw: Math.random() * Math.PI * 2,
+    target: null, retargetT: 0, smashT: 0, beamT: SP.beamCd, mslT: SP.mslCd, bellyT: 0, swayT: 0,
+    hp: SP.hp, carve: { sets: [cmBody, cmLeg], pts: [] }, dying: false, dieT: 0, accMeshes: [], flashU: spFlashU,
+  };
+  root.traverse((o) => { if (o.isMesh && o.material === matAcc) spider.accMeshes.push(o); });
+  for (const lg of legs) {
+    spider.accMeshes.push(lg.kneeBall);
+    lg.foot.copy(lg.homeOff).applyAxisAngle(_wkYAxis, spider.yaw).add(spider.pos);
+    lg.foot.y = groundYAt(lg.foot.x, lg.foot.z, spider.pos.y + 300);
+  }
+  window.__spider = spider;
+  window.__spiderDbg = { get msl() { return spMissiles; }, get bolts() { return enemyBolts; }, hit: spiderHit, fireMsl: spFireMissiles, destroyMsl: destroySpMissile, fireBolt: fireEnemyBolt };
+  console.log('spider spawn', px.toFixed(0), pz.toFixed(0));
+}
+function spSolveLeg(lg, yaw, quat) {   // 2ボーンIK（ウォーカーと同形・寸法のみ）
+  if (quat) _spV1.copy(lg.hipOff).applyQuaternion(quat).add(spider.pos);
+  else _spV1.copy(lg.hipOff).applyAxisAngle(_wkYAxis, yaw).add(spider.pos);
+  const hip = _spV1, foot = lg.foot;
+  _spV2.subVectors(foot, hip);
+  let d = _spV2.length();
+  const maxD = SP.L1 + SP.L2 - 1.5;
+  if (d > maxD) { _spV2.multiplyScalar(maxD / d); d = maxD; }
+  _spV2.normalize();
+  _spV4.copy(lg.hipOff).setY(0).normalize().applyAxisAngle(_wkYAxis, yaw);
+  _spV4.y = 1.5;   // クモらしく膝を高く
+  _spV4.normalize();
+  _spV3.copy(_spV4).addScaledVector(_spV2, -_spV2.dot(_spV4));
+  if (_spV3.lengthSq() < 1e-6) _spV3.set(0, 1, 0);
+  _spV3.normalize();
+  const a = (SP.L1 * SP.L1 - SP.L2 * SP.L2 + d * d) / (2 * d);
+  const h = Math.sqrt(Math.max(0, SP.L1 * SP.L1 - a * a));
+  const knee = _spV4.copy(hip).addScaledVector(_spV2, a).addScaledVector(_spV3, h);
+  lg.hipBall.position.copy(hip);
+  lg.kneeBall.position.copy(knee);
+  wkOrient(lg.femur, hip, knee);
+  wkOrient(lg.tibia, knee, foot);
+  lg.footMesh.position.copy(foot).y += 2.4;
+}
+function spiderHit(point, dmg) {
+  if (!spider || spider.dying) return;
+  spider.hp -= dmg;
+  spider.flashU.value = 1;
+  const c = spider.carve;
+  const local = point.clone().sub(spider.pos);
+  local.applyAxisAngle(_wkYAxis, -spider.yaw);
+  const i = Math.min(c.pts.length, 5);
+  c.pts[i] = { p: local, r: 5 + Math.random() * 2.5 };
+  for (const set of c.sets) set.uRadii[i].value = c.pts[i].r;
+  spawnImpactFx(point, 1.6);
+  spawnDebrisBurst(point, 'bld', 1.2);
+  if (spider.hp <= 0) spiderDie();
+}
+function spiderDie() {
+  addKill('spider');
+  const w = spider;
+  w.dying = true; w.dieT = 0; w.slammed = false;
+  w.dieStartY = w.pos.y;
+  w.dieGroundY = groundYAt(w.pos.x, w.pos.z, w.pos.y + 500);
+  playSfxAt('bomb.ogg', w.pos, 1.0);
+}
+function spiderRemove() {
+  const w = spider;
+  scene.remove(w.root);
+  for (const lg of w.legs) scene.remove(lg.femur, lg.tibia, lg.hipBall, lg.kneeBall, lg.footMesh);
+  spider = null;
+  spiderCd = SP.respawnSec;
+}
+function spFireBeam(tgt) {   // 主砲: さらに太いエネルギー弾（弾速105）
+  spider.muzzleTip.getWorldPosition(_spV1);
+  if (tgt) _spV2.copy(tgt);
+  else { _spV2.copy(player.pos); _spV2.y += 1.0; }
+  const dir = _spV3.subVectors(_spV2, _spV1).normalize();
+  fireEnemyBolt(_spV1, dir, { speed: 105, radius: 2.0, len: 16, color: 0xffb040, dmg: SP.beamDmg, knock: 30, bldDmg: DMG_SHOT * 2, fxScale: 1.6, range: SP.beamRange + 100 });
+  playSfxAt('beam.ogg', _spV1, 0.6);
+}
+const _mslGlowMat = new THREE.MeshBasicMaterial({ color: 0xffd06a });
+const _mslBodyMat = new THREE.MeshBasicMaterial({ color: 0xff7a20 });   // 夜でも見えるオレンジ（unlit）
+function spFireMissiles() {   // ボックスタレットから誘導ミサイル
+  for (let i = 0; i < SP.mslN; i++) {
+    const m = new THREE.Group();
+    const bodyM = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 4.4, 8), _mslBodyMat);
+    bodyM.rotation.x = Math.PI / 2; m.add(bodyM);
+    const glow = new THREE.Mesh(_bombGlowGeo, _mslGlowMat); glow.position.z = -2.4; m.add(glow);
+    _spV1.set(-14 + i * 6, SP.bodyH / 2 + 8, -12).applyAxisAngle(_wkYAxis, spider.yaw).add(spider.pos);
+    m.position.copy(_spV1);
+    scene.add(m);
+    const ms = { mesh: m, vel: new THREE.Vector3((Math.random() - 0.5) * 12, 42, (Math.random() - 0.5) * 12), t: 0, trailOffset: 2.6 };
+    ms.flyVel = ms.vel;   // トレイル共用（updateJetTrailはflyVelを見る）
+    makeJetTrail(ms);
+    resetJetTrail(ms);
+    spMissiles.push(ms);
+  }
+  playSfxAt('beam.ogg', spider.pos, 0.5);
+}
+function removeSpMissileFx(ms) { if (ms.trail) { scene.remove(ms.trail.line); ms.trail.line.geometry.dispose(); ms.trail = null; } }
+function updateSpMissiles(dt) {
+  for (let k = spMissiles.length - 1; k >= 0; k--) {
+    const ms = spMissiles[k];
+    ms.t += dt;
+    // 誘導: 目標へ旋回（発射直後0.5sは上へ吹き上がる）
+    if (ms.t > 0.5 && !playerDead) {
+      _spV1.copy(player.pos).sub(ms.mesh.position).normalize();
+      ms.vel.lerp(_spV1.multiplyScalar(SP.mslSpeed), Math.min(1, SP.mslTurn * dt));
+    }
+    const sp2 = ms.vel.length();
+    if (sp2 > 0.01) ms.vel.multiplyScalar(Math.min(SP.mslSpeed, sp2 + 30 * dt) / sp2);
+    ms.mesh.position.addScaledVector(ms.vel, dt);
+    _spV2.copy(ms.mesh.position).add(ms.vel);
+    ms.mesh.lookAt(_spV2);
+    updateJetTrail(ms, dt);
+    // 命中/着弾/寿命
+    const pos = ms.mesh.position;
+    const dP = pos.distanceTo(player.pos);
+    let boom = false, hitPlayer = false;
+    if (dP < SP.mslR && !playerDead) { boom = true; hitPlayer = true; }
+    if (!boom) {
+      const cx = Math.floor(pos.x / COLL_CELL), cz = Math.floor(pos.z / COLL_CELL);
+      outer: for (let dz2 = -1; dz2 <= 1; dz2++) for (let dx2 = -1; dx2 <= 1; dx2++) {
+        const arr = collGrid.get((cx + dx2) + '_' + (cz + dz2));
+        if (!arr) continue;
+        for (const idx of arr) {
+          const b = collBoxes[idx];
+          if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < b.h && pos.y > b.bottom && pos.y < b.top) { boom = true; break outer; }
+        }
+      }
+    }
+    const gy = groundYAt(pos.x, pos.z, pos.y + 300);
+    if (!boom && (pos.y <= gy || ms.t > SP.mslLife)) boom = true;
+    if (!boom) continue;
+    spMissiles.splice(k, 1);
+    scene.remove(ms.mesh);
+    removeSpMissileFx(ms);
+    playSfxAt('bomb.ogg', pos, 0.8);
+    spawnImpactFx(pos, 1.4);
+    if (hitPlayer) { _spV1.copy(ms.vel).normalize(); playerDamage(SP.mslDmg, _spV1); }
+    else {
+      _wkRay.set(_spV2.set(pos.x, pos.y + 30, pos.z), _spV3.set(0, -1, 0)); _wkRay.far = 80;
+      const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
+      const bh = _wkRay.intersectObjects(targets, true)[0];
+      if (bh) applyHitToBuilding(bh, DMG_SHOT, 1.2);
+      else spawnScorch(_spV3.set(pos.x, gy, pos.z), 3);
+    }
+  }
+}
+function destroySpMissile(ms) {   // プレイヤーの攻撃などで空中爆破
+  const i = spMissiles.indexOf(ms);
+  if (i < 0) return;
+  spMissiles.splice(i, 1);
+  scene.remove(ms.mesh);
+  removeSpMissileFx(ms);
+  playSfxAt('bomb_short.ogg', ms.mesh.position, 0.7);
+  spawnImpactFx(ms.mesh.position, 1.1);
+}
+function spBellyShot(gun) {   // 腹部砲門: 戦闘機と同じ紫筒ショットで真下の敵を撃つ
+  gun.getWorldPosition(_spV1);
+  _spV2.copy(player.pos); _spV2.y += 0.8;
+  const dir = _spV3.subVectors(_spV2, _spV1).normalize();
+  const plT = rayHitSphere(_spV1, dir, _spV2, 1.8, SP.bellyR * 1.4);
+  const end = _spV1.clone().addScaledVector(dir, plT === Infinity ? SP.bellyR : plT);
+  spawnBeam(_spV1.clone(), end, plT !== Infinity, 0xc46bff, true);
+  playSfxAt('beam.ogg', _spV1, 0.3);
+  if (plT !== Infinity) { playerDamage(SP.bellyDmg, dir); spawnImpactFx(end, 0.8); }
+}
+function updateSpider(dt) {
+  if (!KENNEY_CITY) return;
+  if (!spider) {
+    if (spiderCd > 0) { spiderCd -= dt; return; }
+    if (enemyAllowed('spider') && cityRoot && collBoxes.length && player.ready) spawnSpider();
+    return;
+  }
+  const w = spider;
+  updateSpMissiles(dt);
+  if (w.flashU.value > 0) w.flashU.value = Math.max(0, w.flashU.value - dt * 4);
+  for (let i = 0; i < w.carve.pts.length; i++) {
+    const cp = w.carve.pts[i];
+    if (!cp) continue;
+    _spV4.copy(cp.p).applyAxisAngle(_wkYAxis, w.yaw).add(w.pos);
+    for (const set of w.carve.sets) set.uCenters[i].value.copy(_spV4);
+  }
+  if (w.dying) {   // 転倒→激突→溶解（ウォーカーと同演出の大型版）
+    w.dieT += dt;
+    if (w.dieT < SP.fallSec) {
+      const u = w.dieT / SP.fallSec;
+      const ang = (u * u) * (65 * Math.PI / 180);
+      _spE.set(ang, w.yaw, 0, 'YXZ');
+      w.root.quaternion.setFromEuler(_spE);
+      w.pos.y = w.dieStartY + (w.dieGroundY + 24 - w.dieStartY) * (u * u);
+      w.root.position.copy(w.pos);
+      for (const lg of w.legs) spSolveLeg(lg, w.yaw, w.root.quaternion);
+      return;
+    }
+    if (!w.slammed) {
+      w.slammed = true;
+      _spV4.set(w.pos.x + Math.sin(w.yaw) * 30, w.dieGroundY, w.pos.z + Math.cos(w.yaw) * 30);
+      playSfxAt('bakuha.ogg', _spV4, 1.0);
+      spawnImpactFx(_spV4, 4);
+      spawnDebrisBurst(_spV4, 'bld', 3);
+      spawnScorch(_spV4, 12);
+      spawnFirePillar(_spV4, 2.2);
+      for (const set of w.carve.sets) { set.uKillOn.value = 1; set.uBaseY.value = w.dieGroundY; set.uHeight.value = 70; }
+      for (const o of w.accMeshes) o.visible = false;
+    }
+    const mu = (w.dieT - SP.fallSec) / SP.meltSec;
+    for (const set of w.carve.sets) set.uKill.value = Math.min(1, mu);
+    w.pos.y -= dt * 1.6;
+    w.root.position.copy(w.pos);
+    if ((w._dieFxT = (w._dieFxT || 0) - dt) <= 0) {
+      w._dieFxT = 0.35;
+      _spV4.set(w.pos.x + (Math.random() - 0.5) * 50, w.pos.y + (Math.random() - 0.5) * 16, w.pos.z + (Math.random() - 0.5) * 50);
+      spawnImpactFx(_spV4, 2.2);
+      if (Math.random() < 0.5) spawnFirePillar(_spV4, 1.2);
+    }
+    if (mu >= 1.1) spiderRemove();
+    return;
+  }
+  // ── 徘徊 ──
+  w.retargetT -= dt;
+  if (!w.target || w.retargetT <= 0 || Math.hypot(w.target.x - w.pos.x, w.target.z - w.pos.z) < 50) {
+    w.target = { x: w.bounds.x0 + Math.random() * (w.bounds.x1 - w.bounds.x0), z: w.bounds.z0 + Math.random() * (w.bounds.z1 - w.bounds.z0) };
+    w.retargetT = 40;
+  }
+  const wantYaw = Math.atan2(w.target.x - w.pos.x, w.target.z - w.pos.z);
+  let dy = wantYaw - w.yaw;
+  while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+  w.yaw += Math.max(-SP.turn * dt, Math.min(SP.turn * dt, dy));
+  const throttle = Math.max(0, 1 - Math.abs(dy) * 1.2);
+  w.pos.x += Math.sin(w.yaw) * SP.speed * throttle * dt;
+  w.pos.z += Math.cos(w.yaw) * SP.speed * throttle * dt;
+  let gsum = 0, gn = 0;
+  for (const lg of w.legs) { if (!lg.step) { gsum += lg.foot.y; gn++; } }
+  const gy = gn ? gsum / gn : groundYAt(w.pos.x, w.pos.z, w.pos.y + 300);
+  w.swayT += dt;
+  w.pos.y += ((gy + SP.hipY + Math.sin(w.swayT * 1.0) * 0.8) - w.pos.y) * Math.min(1, dt * 3);
+  w.root.position.copy(w.pos);
+  w.root.rotation.y = w.yaw;
+  // ── 6脚ゲイト: 最も遅れた脚を優先・同時2本まで ──
+  for (const lg of w.legs) {
+    if (!lg.step) continue;
+    const st = lg.step;
+    st.t = Math.min(1, st.t + dt / SP.stepDur);
+    lg.foot.lerpVectors(st.from, st.to, st.t);
+    lg.foot.y += Math.sin(st.t * Math.PI) * SP.stepArc;
+    if (st.t >= 1) {
+      lg.foot.copy(st.to);
+      lg.step = null;
+      _wkRay.set(_spV3.set(lg.foot.x, lg.foot.y + 60, lg.foot.z), _spV2.set(0, -1, 0)); _wkRay.far = 90;
+      const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
+      const hits = _wkRay.intersectObjects(targets, true);
+      if (hits.length) applyHitToBuilding(hits[0], SP.smashDmg, 2.4);
+      const onRoad = roadTopAt(lg.foot.x, lg.foot.z) != null;
+      spawnDebrisBurst(lg.foot, onRoad ? 'road' : 'ground', 1.6);
+      playSfxAt('bomb_short.ogg', lg.foot, 0.5);
+    }
+  }
+  const steppingN = w.legs.filter((l) => l.step).length;
+  if (steppingN < 2) {
+    let best = null, bestD = SP.stepTrig;
+    for (const lg of w.legs) {
+      if (lg.step) continue;
+      _spV1.copy(lg.homeOff).applyAxisAngle(_wkYAxis, w.yaw).add(w.pos);
+      _spV1.x += Math.sin(w.yaw) * SP.speed * throttle * 1.4;
+      _spV1.z += Math.cos(w.yaw) * SP.speed * throttle * 1.4;
+      const d = Math.hypot(_spV1.x - lg.foot.x, _spV1.z - lg.foot.z);
+      if (d > bestD) { bestD = d; best = lg; best._toX = _spV1.x; best._toZ = _spV1.z; }
+    }
+    if (best) {
+      const to = new THREE.Vector3(best._toX, 0, best._toZ);
+      to.y = groundYAt(to.x, to.z, w.pos.y + 300);
+      best.step = { from: best.foot.clone(), to, t: 0 };
+    }
+  }
+  for (const lg of w.legs) spSolveLeg(lg, w.yaw);
+  // ── なぎ倒し ──
+  w.smashT -= dt;
+  if (w.smashT <= 0 && throttle > 0.2) {
+    w.smashT = SP.smashInt;
+    const fwd = _spV1.set(Math.sin(w.yaw), 0, Math.cos(w.yaw));
+    const targets = cityDamaged ? [cityRoot, cityDamaged] : [cityRoot];
+    for (const yOff of [25, 55]) {
+      for (const aOff of [-0.3, 0, 0.3]) {
+        _spV2.copy(fwd).applyAxisAngle(_wkYAxis, aOff);
+        _spV3.set(w.pos.x, w.pos.y - SP.hipY + yOff, w.pos.z);
+        _wkRay.set(_spV3, _spV2); _wkRay.far = SP.smashRange;
+        const hits = _wkRay.intersectObjects(targets, true);
+        if (hits.length) applyHitToBuilding(hits[0], SP.smashDmg, 2.6);
+      }
+    }
+  }
+  // ── 主砲（キルゾーン内=プレイヤー/外=町。俯角が届かない真下は腹部砲門の担当）──
+  const dx = player.pos.x - w.pos.x, dz = player.pos.z - w.pos.z;
+  const distP = Math.hypot(dx, dz);
+  const playerIn = distP < SP.killZone;
+  let aimX, aimY, aimZ;
+  if (playerIn && !playerDead) { aimX = player.pos.x; aimY = player.pos.y + 1.0; aimZ = player.pos.z; }
+  else {
+    w.townT = (w.townT || 0) - dt;
+    if (!w.townTarget || w.townT <= 0) {
+      w.townTarget = null;
+      for (let tryN = 0; tryN < 40; tryN++) {
+        const b = collBoxes[(Math.random() * collBoxes.length) | 0];
+        if (!b || b.top <= b.bottom) continue;
+        const d = Math.hypot(b.x - w.pos.x, b.z - w.pos.z);
+        if (d < 90 || d > SP.beamRange * 0.9) continue;
+        w.townTarget = { x: b.x, y: b.bottom + (b.top - b.bottom) * 0.6, z: b.z };
+        break;
+      }
+      w.townT = 7 + Math.random() * 4;
+    }
+    if (w.townTarget) { aimX = w.townTarget.x; aimY = w.townTarget.y; aimZ = w.townTarget.z; }
+    else { aimX = player.pos.x; aimY = player.pos.y; aimZ = player.pos.z; }
+  }
+  const adx = aimX - w.pos.x, adz = aimZ - w.pos.z;
+  const aimD = Math.hypot(adx, adz);
+  const wantT = Math.atan2(adx, adz) - w.yaw;
+  let tdy = wantT - w.turret.rotation.y;
+  while (tdy > Math.PI) tdy -= Math.PI * 2; while (tdy < -Math.PI) tdy += Math.PI * 2;
+  w.turret.rotation.y += Math.max(-SP.turretYawRate * dt, Math.min(SP.turretYawRate * dt, tdy));
+  w.muzzleTip.getWorldPosition(_spV1);
+  const pitchWant = Math.atan2(aimY - _spV1.y, aimD);
+  w.pitchPivot.rotation.x = Math.max(-0.9, Math.min(0.55, w.pitchPivot.rotation.x + Math.max(-0.8 * dt, Math.min(0.8 * dt, -pitchWant - w.pitchPivot.rotation.x))));
+  w.beamT -= dt;
+  const pitchOk = Math.abs(-pitchWant - w.pitchPivot.rotation.x) < 0.15;
+  if (w.beamT <= 0 && aimD < SP.beamRange && Math.abs(tdy) < SP.aimTol && pitchOk) {
+    w.beamT = SP.beamCd + Math.random() * 1.4;
+    spFireBeam(playerIn ? null : _spV4.set(aimX, aimY, aimZ));
+  }
+  // ── 誘導ミサイル（キルゾーン内のみ）──
+  w.mslT -= dt;
+  if (playerIn && !playerDead && w.mslT <= 0) { w.mslT = SP.mslCd + Math.random() * 2; spFireMissiles(); }
+  // ── 腹部砲門: 真下〜近距離下方の敵へ連射 ──
+  w.bellyT -= dt;
+  const below = player.pos.y < w.pos.y - 8 && distP < SP.bellyR && !playerDead;
+  if (below && w.bellyT <= 0) {
+    w.bellyT = SP.bellyCd;
+    spBellyShot(w.bellyGuns[(Math.random() * 2) | 0]);
   }
 }
 
@@ -5684,13 +6898,25 @@ function tick() {
   const dt = Math.min(_clock.getDelta(), 1 / 30);
   if (SHOW_FPS) updateFpsMeter();
   updateFlight(dt);
-  updatePlayerAnim(dt);
+  updatePlayerDeath(dt);
+  if (!playerRagOn) updatePlayerAnim(dt);
   updateCars(dt);
   updateCarPhysics(dt);
   updateAttacks(dt);      // コンボ窓＋貫通ビーム
   updateKens(dt);         // 地上NPC ken
-  updateWalker(dt);       // 巨大ウォーカー（4足歩行・砲塔ビーム）
-  updateJets(dt);         // 戦闘機スウォーム
+  if (gameMode !== 'op' && gameMode !== 'ed') {   // シナリオ中は戦闘停止（敵AI・弾・被弾なし）
+    updateWalker(dt);       // 巨大ウォーカー（4足歩行・砲塔ビーム）
+    updateSpider(dt);       // スパイダータンク（6脚・主砲/誘導ミサイル/腹部砲門）
+    updateEnemyBolts(dt);   // 敵主砲のエネルギー弾
+    updateJets(dt);         // 戦闘機スウォーム
+  }
+  updateDamageFx();       // ダメージ損耗（マントの高さ基準追従）
+  updateDamageVignette(dt);
+  updateKillUI(dt);
+  evalEvents();
+  updateFlowTimer(dt);
+  updateTalk(dt);
+  scn.update(dt);
   updatePredation(dt);    // 掴んだ ken の接地判定→捕食
   updateTotem(dt);        // トーテム（旋回・溶解・成長）
   updateImpactFx(dt);     // 着弾の炎＋煙
@@ -5713,13 +6939,9 @@ function tick() {
   if (KENNEY_CITY && bldModels.length) { _lodT -= dt; if (_lodT <= 0) { _lodT = LOD_INTERVAL; partitionBuildings(); } }   // 建物LODの定期再振り分け
   updateCamera(dt);
   camera.updateMatrixWorld();
-  if (tiles) {
-    try { tiles.setResolutionFromRenderer(camera, renderer); tiles.update(); } catch (e) { showError('update失敗: ' + (e?.message || e)); tiles = null; }
-  }
   if (++_dbg % 30 === 0) {
-    const info = KENNEY_CITY
-      ? `建物 ${cityInfo ? cityInfo.count : 0} (近${_lodNearCount}/遠${_lodFarCount})`
-      : `タイル ${tiles && tiles.group ? tiles.group.children.length : -1}`;
+    const info = `建物 ${cityInfo ? cityInfo.count : 0} (近${_lodNearCount}/遠${_lodFarCount})`;
+    updateParamsUI();
     const clock = `${String(Math.floor(gameHour)).padStart(2, '0')}:${String(Math.floor((gameHour % 1) * 60)).padStart(2, '0')}`;
     const wanted = wantedLevel() > 0 ? ` / 手配${'★'.repeat(wantedLevel())}` : '';
     setStatus(`${clock}${timeScale > 1 ? `(x${timeScale})` : ''}${wanted} / 高度 ${Math.round(player.pos.y)}m / 速度上限 ${Math.round(flight.maxSpeed)} / ${info}${entryPrompt ? ' / ' + entryPrompt : ''}`);
@@ -5733,4 +6955,6 @@ function onResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+setupTitle();
+loadGameEvents();
 init().catch((e) => showError('初期化失敗: ' + (e?.message || e)));

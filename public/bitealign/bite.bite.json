@@ -1,24 +1,24 @@
 {
   "format": "bite-align",
   "version": 1,
-  "target": "ken",
+  "target": "",
   "player": {
     "target": "nei_vamp",
     "mouthBone": "head",
     "mouthOffset": [
       0,
-      -0.01,
+      -0.03,
       0.09
     ]
   },
   "npc": {
     "biteBone": "neck",
     "biteOffset": [
-      0,
-      0.065,
-      0.095
+      -0.03,
+      0.02,
+      0.03
     ],
-    "mode": "ragdoll"
+    "mode": "anim"
   },
   "align": {
     "pos": [
@@ -36,15 +36,13 @@
     "blendOut": 0.2
   },
   "anim": {
-    "playerVrma": "feed.vrma",
+    "playerVrma": "",
     "victimVrma": "",
     "fps": 30,
     "trimIn": 0,
-    "trimOut": 104,
+    "trimOut": 0,
     "loopVictim": true,
     "sound": "",
-    "eatTime": 10,
-    "loopStart": 75,
-    "loopEnd": 104
+    "eatTime": 4.5
   }
 }

@@ -374,6 +374,7 @@ function resolveGripBone(vrm, boneName) {
 
 function initHandGrabPoints(vrm) {
   disposeHandGrabPoints();
+  modelFrontFlip = !!(vrm?.lookAt?.faceFront && vrm.lookAt.faceFront.z > 0.5);   // +Z正面モデル＝オフセット読み替え対象
   let found = 0;
   for (const g of gripGroups) {
     g.boneNode = resolveGripBone(vrm, g.bone);
@@ -398,19 +399,32 @@ function onGripGizmoChange() {
     if (g.markerMesh !== obj || !g.boneNode) continue;
     g.boneNode.getWorldPosition(_gizPos);
     g.boneNode.getWorldQuaternion(_gizQuat);
-    g.offset.copy(obj.position).sub(_gizPos).applyQuaternion(_gizQuat.invert()).clampScalar(-0.4, 0.4);
+    g.offset.copy(obj.position).sub(_gizPos).applyQuaternion(_gizQuat.invert());
+    if (modelFrontFlip && !/breast/i.test(g.bone || '')) { g.offset.x *= -1; g.offset.z *= -1; }   // 正準（-Z正面）系で保存
+    g.offset.clampScalar(-0.4, 0.4);
     g.worldPos.copy(obj.position);
     break;
   }
 }
 
+// オフセットの規約: 正規化ボーンはrest回転ゼロ＝restではワールド軸そのままになるため、
+// 「-Z正面（Joy_reborn等VRM0系）」を正準として保存する。+Z正面モデル（VRM1系）では
+// 適用時にX/Zを反転して体基準の同じ位置（体の前は前）に来るよう読み替える。
+// これでモデル間でcloth.json/timelineのオフセットがそのまま流用できる。
+let modelFrontFlip = false;   // currentVRM が +Z 正面なら true（VRM読込時に判定）
+const _offConv = new THREE.Vector3();
+function gripOffsetConv(g) {
+  _offConv.copy(g.offset);
+  if (modelFrontFlip && !/breast/i.test(g.bone || '')) { _offConv.x *= -1; _offConv.z *= -1; }   // Breast系はrawボーン（体と一緒に回る）ので対象外
+  return _offConv;
+}
 // 各グループのグラブ点 worldPos = bonePos + boneQuat*offset（位置＋回転追従）。マーカー更新。
 function updateHandGrabPoints() {
   for (const g of gripGroups) {
     if (!g.boneNode) continue;
     g.boneNode.getWorldPosition(_anchorTmp);
     g.boneNode.getWorldQuaternion(_anchorBoneQuat);
-    _anchorWorldOff.copy(g.offset).applyQuaternion(_anchorBoneQuat);
+    _anchorWorldOff.copy(gripOffsetConv(g)).applyQuaternion(_anchorBoneQuat);
     g.worldPos.copy(_anchorTmp).add(_anchorWorldOff);
     if (g.markerMesh) g.markerMesh.position.copy(g.worldPos);
   }
@@ -1133,9 +1147,9 @@ function exportTimeline() {
   const tracks = [];
   for (const g of gripGroups) {
     const ranges = timeline.grip[g.id];
-    if (ranges && ranges.length) tracks.push({ kind: 'grip', groupId: g.id, ranges: ranges.map(r => ({ ...r })) });
+    if (ranges && ranges.length) tracks.push({ kind: 'grip', groupId: g.id, groupName: g.name, groupBone: g.bone, ranges: ranges.map(r => ({ ...r })) });
     const pos = timeline.gripPos[g.id];
-    if (pos && pos.size) tracks.push({ kind: 'gripPos', groupId: g.id,
+    if (pos && pos.size) tracks.push({ kind: 'gripPos', groupId: g.id, groupName: g.name, groupBone: g.bone,
       keyframes: [...pos.entries()].sort((a, b) => a[0] - b[0]).map(([frame, o]) => ({ frame, offset: [o.x, o.y, o.z] })) });
   }
   for (const [name, kfMap] of timeline.blendShape) {
@@ -1181,13 +1195,23 @@ function importTimeline(json) {
   timeline.trimOut = Number.isFinite(json.trimOut) ? Math.max(timeline.trimIn + 1, Math.min(json.trimOut, timeline.durationFrames)) : timeline.durationFrames;
 
   const byBone = (bone) => gripGroups.find(g => g.bone === bone)?.id;
+  // グループ解決：id一致（名前があれば検証）→名前一致→ボーン一致の順。
+  // 別キャラ用タイムラインを流用したとき、idの欠落・別グループへのid衝突を名前/ボーンで救う
+  const resolveGid = (track) => {
+    const byId = track.groupId ? groupById(track.groupId) : null;
+    if (byId && (!track.groupName || byId.name === track.groupName)) return byId.id;
+    if (track.groupName) { const g = gripGroups.find(g => g.name === track.groupName); if (g) return g.id; }
+    if (track.groupBone) { const gid = byBone(track.groupBone); if (gid) return gid; }
+    return byId ? byId.id : null;
+  };
+  const dropped = [];
   for (const track of json.tracks) {
     if (track.kind === 'grip') {
       // groupId(新) を優先、無ければ legacy side/type を leftHand/rightHand グループへマップ
-      let gid = track.groupId && groupById(track.groupId) ? track.groupId : null;
+      let gid = resolveGid(track);
       if (!gid && track.side)  gid = byBone(track.side === 'left' ? 'leftHand' : 'rightHand');
       if (!gid && track.type)  gid = byBone((track.type.includes('Left') || track.type === 'gripLeft') ? 'leftHand' : 'rightHand');
-      if (!gid) continue;
+      if (!gid) { dropped.push(track.groupName || track.groupId || '?'); continue; }
       if (!timeline.grip[gid]) timeline.grip[gid] = [];
       if (Array.isArray(track.ranges)) {
         for (const r of track.ranges) timeline.grip[gid].push({ start: r.start, end: r.end });
@@ -1195,8 +1219,8 @@ function importTimeline(json) {
         for (const f of track.frames) timeline.grip[gid].push({ start: f, end: f });
       }
     } else if (track.kind === 'gripPos') {
-      const gid = track.groupId && groupById(track.groupId) ? track.groupId : null;
-      if (!gid) continue;
+      const gid = resolveGid(track);
+      if (!gid) { dropped.push((track.groupName || track.groupId || '?') + '(位置)'); continue; }
       const m = new Map();
       if (Array.isArray(track.keyframes)) for (const k of track.keyframes) m.set(k.frame, { x: k.offset[0], y: k.offset[1], z: k.offset[2] });
       timeline.gripPos[gid] = m;
@@ -1208,6 +1232,10 @@ function importTimeline(json) {
       timeline.blendShape.set(track.name, kfMap);
     }
     // 未知の kind は無視（将来の effect トラック拡張用）
+  }
+  if (dropped.length) {   // 黙って捨てると「グラブされない」原因が分からないので通知
+    console.warn('タイムライン: 解決できなかったグリップトラック →', dropped.join(', '));
+    alert('このタイムラインのグリップトラックのうち ' + dropped.length + ' 本を現在の布のグループに対応付けできませんでした:\n' + dropped.join(', ') + '\n（布のグループ名/ボーンが一致すれば流用できます）');
   }
 
   document.getElementById('lbl-duration').textContent = timeline.durationFrames.toString();
@@ -2182,6 +2210,9 @@ async function init() {
 
   renderer.setAnimationLoop(render);
 }
+
+// デバッグ用（グラブ点座標系の検証）
+Object.defineProperty(window, '__cp', { get() { return { vrm: currentVRM, gripGroups, timeline, mixer: (typeof currentMixer!=='undefined'?currentMixer:null) }; } });
 
 init().catch(err => {
   console.error(err);

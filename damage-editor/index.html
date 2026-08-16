@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Damage Editor — ダメージ損耗エディタ</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #0d1017; color: #cfe; font-family: system-ui, sans-serif; overflow: hidden; }
+  #app { position: fixed; inset: 0; }
+  #panel { position: fixed; left: 10px; top: 10px; z-index: 10; width: 300px; max-height: calc(100% - 20px); overflow-y: auto;
+    background: rgba(14,18,30,0.93); border: 1px solid #35507a; border-radius: 8px; padding: 12px; font-size: 12px; }
+  h1 { font-size: 14px; margin: 0 0 8px; color: #9fe6ff; }
+  select, input[type=text] { width: 100%; background: #1a2233; color: #cfe; border: 1px solid #35507a; border-radius: 4px; padding: 4px; }
+  button { background: #25304a; border: 1px solid #46608c; color: #cfe; border-radius: 5px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+  button:hover { background: #31405f; }
+  .sec { border-top: 1px solid #26344d; margin-top: 10px; padding-top: 8px; color: #9fe6ff; font-weight: bold; }
+  .row { display: flex; gap: 6px; align-items: center; margin-top: 5px; }
+  .row label { flex: 0 0 74px; color: #9ab; }
+  .row input[type=range] { flex: 1; }
+  .row input[type=number] { width: 58px; background: #1a2233; color: #cfe; border: 1px solid #35507a; border-radius: 4px; padding: 2px 4px; }
+  #parts { margin-top: 6px; }
+  .part { display: flex; gap: 6px; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+  .part:hover { background: #1c2739; }
+  .part.sel { background: #2c4a68; }
+  .part .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .part .st { color: #7fa; font-size: 10px; }
+  #dmg-val { color: #ffd06a; font-weight: bold; font-size: 14px; width: 48px; text-align: right; }
+  #status { position: fixed; left: 10px; bottom: 10px; z-index: 10; color: #9fe6ff; font-size: 12px;
+    background: rgba(10,14,22,0.8); padding: 4px 10px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="panel">
+  <h1>💥 Damage Editor</h1>
+  <div class="row"><label>NPC</label><select id="npc-sel"></select></div>
+  <div class="row"><label>VRMA</label><select id="vrma-sel" style="flex:1;"><option value="">（停止）</option></select></div>
+  <div class="sec">ダメージ割合</div>
+  <div class="row"><input type="range" id="dmg" min="0" max="100" value="0" step="1"><span id="dmg-val">0%</span></div>
+  <div class="sec">部位（クリックで選択 / ✔で溶解有効）</div>
+  <div id="parts">（NPC読込中…）</div>
+  <div class="sec">選択部位のエフェクト</div>
+  <div id="part-ed" style="display:none;">
+    <div class="row"><label>方向</label>
+      <select id="p-mode" style="flex:1;">
+        <option value="bottom">先端(下)から溶解</option>
+        <option value="scatter">散り穴（ボロボロ）</option>
+        <option value="top">上から溶解</option>
+      </select></div>
+    <div class="row"><label>開始%</label><input type="number" id="p-start" min="0" max="100" value="10"><label style="flex:0 0 40px;">終了%</label><input type="number" id="p-end" min="0" max="100" value="90"></div>
+    <div class="row"><label>ノイズ密度</label><input type="range" id="p-noise" min="1" max="30" step="0.5" value="8"><span id="p-noise-v">8</span></div>
+    <div class="row"><label>ノイズ量</label><input type="range" id="p-namt" min="0" max="2" step="0.05" value="0.6"><span id="p-namt-v">0.6</span></div>
+    <div class="row"><label>縁の幅</label><input type="range" id="p-edge" min="0.02" max="0.4" step="0.01" value="0.1"><span id="p-edge-v">0.1</span></div>
+    <div class="row"><label>縁の色</label><input type="color" id="p-rim" value="#ff6a3a" style="flex:1;height:26px;"></div>
+    <div class="row"><label>縁の発光</label><input type="range" id="p-rimi" min="0" max="6" step="0.1" value="2.4"><span id="p-rimi-v">2.4</span></div>
+  </div>
+  <div class="sec">表情（ダメージ連動ブレンドシェイプ）</div>
+  <div class="row"><select id="expr-sel" style="flex:1;"></select></div>
+  <div class="row"><label>値</label><input type="range" id="expr-val" min="0" max="1" step="0.01" value="1"><span id="expr-val-v">1.00</span>
+  <button id="expr-add" style="padding:2px 8px;">＋キー</button></div>
+  <div id="expr-list" style="margin-top:4px;font-size:11px;"></div>
+  <div class="sec"></div>
+  <div class="row"><button id="btn-save" style="flex:1;">💾 保存（damage/&lt;npc&gt;.damage.json）</button></div>
+</div>
+<div id="status">初期化中…</div>
+<script type="module" src="./damage-editor.js"></script>
+</body>
+</html>

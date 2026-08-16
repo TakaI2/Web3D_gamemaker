@@ -138,7 +138,7 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content, encoding } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma', vamp_param: 'vamp_param', image: 'image', tools: 'tools' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma', vamp_param: 'vamp_param', image: 'image', tools: 'tools', damage: 'damage' };
               const sub = allowed[dir];
               const safe = path.basename(String(filename || ''));
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
@@ -280,7 +280,7 @@ export default defineConfig({
           res.end(JSON.stringify(files));
         });
 
-        // 道路グラフ一覧（public/roads/*.json。参照プロジェクトのOSM道路。plateau-fly の車走行用）
+        // 道路グラフ一覧（public/roads/*.json。参照プロジェクトのOSM道路。city-fly の車走行用）
         server.middlewares.use((req, res, next) => {
           const url = (req.url || '').split('?')[0];
           if (!url.endsWith('/roads/manifest.json')) return next();

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "cityfly_ed_bad",
+  "title": "ED：Bad（戦後）",
+  "mode": "2d",
+  "actors": [],
+  "script": [
+    { "op": "bg", "color": "#180a12", "image": "postwar_bad.png" },
+    { "op": "fade.in", "duration": 900 },
+    { "op": "say", "actor": "kanbu", "face": "panic", "lines": ["スパイダーキャリア沈黙！　わが軍の損害90%以上。　　・・・さすがに潮時かと。"] },
+    { "op": "say", "actor": "elix", "face": "smile", "lines": ["ふふふ・・・♡　いい余興だったわ！", "見込みのある子ね・・・。　よく調べてちょうだい"] },
+    { "op": "say", "actor": "hakase", "face": "worry", "lines": ["・・・やっと気が済んだようね？　化け物め。"] },
+    { "op": "say", "actor": "hakase", "face": "normal", "lines": ["今度は念入りに調整が必要ね。"] },
+    { "op": "fade.out", "duration": 1200 }
+  ]
+}

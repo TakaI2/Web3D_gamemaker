@@ -15,7 +15,7 @@ const PORT = Number(process.env.PORT) || 8788;
 const MP_MAX = Number(process.env.MP_MAX) || 5;   // ルームごとの参加人数上限
 
 if (!fs.existsSync(path.join(DIST, 'index.html'))) {
-  console.error(path.basename(DIST) + ' が見つかりません。先に  MP=1 node scripts/build-plateau-fly.mjs  を実行してください。');
+  console.error(path.basename(DIST) + ' が見つかりません。先に  MP=1 node scripts/build-cityfly.mjs  を実行してください。');
   process.exit(1);
 }
 

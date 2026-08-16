@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "id": "cityfly_bad_route",
+  "title": "Badルート移行：ネイ暴走",
+  "mode": "2d",
+  "actors": [],
+  "script": [
+    { "op": "bg", "color": "#200610", "image": "berserk.png" },
+    { "op": "fade.in", "duration": 500 },
+    { "op": "say", "actor": "nei", "face": "weak", "lines": ["はぁ・・・はぁ・・・、精気・・・、　吸わせて・・・、あなたの・・・。"] },
+    { "op": "say", "actor": "nei", "face": "angry", "lines": ["許さない・・・！！　もう怒った！！", "邪魔するもの。　全部・・・壊す！！"] },
+    { "op": "say", "actor": "hakase", "face": "panic", "lines": ["ネイ！！　何をしているの！！　一旦引きなさい！"] },
+    { "op": "say", "actor": "mayor", "face": "panic", "lines": ["これは！！　一体どういうことだ！？"] },
+    { "op": "say", "actor": "hakase", "face": "worry", "lines": ["まずい！　暴走しているっ！", "人間から直接精気を吸ったりなんかするから・・・！！"] },
+    { "op": "say", "actor": "elix", "face": "smile", "lines": ["あらあら、なにやら面白いことになっているわね・・・。"] },
+    { "op": "fade.out", "duration": 600 }
+  ]
+}

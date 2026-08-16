@@ -2,14 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// CityFly（旧 PLATEAU Fly）を自己完結の dist-cityfly/ に書き出す。
+// CityFlyを自己完結の dist-cityfly/ に書き出す。
 // three / three-vrm 等は CDN（esm.sh / jsdelivr）から実行時取得するため同梱不要。
 // ローカル参照（lib / npc / timeline / vrma / roads / models / maps）だけを dist 内へコピーし、
 // 相対パスを ./ 起点へ書き換える。DEFAULT_MAP を index.html に注入＝起動時から自作マップで動く
-// （PLATEAU/GSIへはアクセスしない。道路スプライン未保存のマップはOSMフォールバック＝OSM表記が自動表示される）。
+// （外部配信へはアクセスしない。道路スプライン未保存のマップはOSMフォールバック＝OSM表記が自動表示される）。
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
-const src  = path.join(root, 'plateau-fly');
+const src  = path.join(root, 'city-fly');
 const MP_BUILD = process.env.MP === '1';   // MP=1 → マルチプレイ専用ビルド（別出力・ログイン画面つき）
 const dest = path.join(root, MP_BUILD ? 'dist-cityfly-mp' : 'dist-cityfly');
 const pub  = path.join(root, 'public');
@@ -24,8 +24,8 @@ const html = fs.readFileSync(path.join(src, 'index.html'), 'utf8')
 fs.writeFileSync(path.join(dest, 'index.html'), html);
 console.log(`copied: index.html (DEFAULT_MAP=${DEFAULT_MAP}${MP_BUILD ? ' / MPビルド' : ''})`);
 
-// plateau-fly.js: ローカル相対参照を dist 内ローカル（./）へ書き換え
-const jsSrc = fs.readFileSync(path.join(src, 'plateau-fly.js'), 'utf8')
+// city-fly.js: ローカル相対参照を dist 内ローカル（./）へ書き換え
+const jsSrc = fs.readFileSync(path.join(src, 'city-fly.js'), 'utf8')
   .replace(/\.\.\/lib\//g, './')
   .replace(/\.\.\/models\//g, './models/')
   .replace(/\.\.\/npc\//g, './npc/')
@@ -39,8 +39,8 @@ const jsSrc = fs.readFileSync(path.join(src, 'plateau-fly.js'), 'utf8')
   .replace(/\.\.\/audio\//g, './audio/')
   .replace(/\.\.\/api\//g, './api/')   // api/save は開発サーバ専用（本番は保存ボタンが失敗表示になるだけ）
   .replace(/\.\.\/([\w\-]+\.png)/g, './$1');   // コード直参照のテクスチャ（electric.png等）
-fs.writeFileSync(path.join(dest, 'plateau-fly.js'), jsSrc);
-console.log('copied: plateau-fly.js (paths rewritten)');
+fs.writeFileSync(path.join(dest, 'city-fly.js'), jsSrc);
+console.log('copied: city-fly.js (paths rewritten)');
 
 // 自作マップ（.map.json）。植生が参照する木モデル（forest.model）も収集して後で同梱
 const mapsSrc = path.join(pub, 'maps');
@@ -203,7 +203,7 @@ if (hkFiles.length) {
   for (const f of hkFiles) fs.copyFileSync(path.join(hkSrc, f), path.join(hkDest, f));
   console.log(`copied: ${hkFiles.length} hk buildings`);
 }
-// plateau-fly は ../models/manifest.json から hk ビルを検出する（本番用に静的生成。hk のみで十分）
+// city-fly は ../models/manifest.json から hk ビルを検出する（本番用に静的生成。hk のみで十分）
 const modelsDest = path.join(dest, 'models'); fs.mkdirSync(modelsDest, { recursive: true });
 fs.writeFileSync(path.join(modelsDest, 'manifest.json'), JSON.stringify(hkFiles.map((f) => 'hk_GLB format/' + f)));
 console.log('written: models/manifest.json (hk entries)');

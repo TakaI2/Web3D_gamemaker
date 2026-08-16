@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "cityfly_ed_good",
+  "title": "ED：Good（仮・脚本は後日追補）",
+  "mode": "2d",
+  "actors": [],
+  "script": [
+    { "op": "bg", "color": "#0a1830", "image": "postwar_good.png" },
+    { "op": "fade.in", "duration": 900 },
+    { "op": "say", "actor": "kanbu", "face": "panic", "lines": ["ウォーカータンク、撃破される！？　ば・・・化け物め！！"] },
+    { "op": "say", "actor": "kanbu", "face": "normal", "lines": ["これ以上の損害は許容できん。　全軍、撤退！！"] },
+    { "op": "say", "actor": "hakase", "face": "normal", "lines": ["敵軍が引いていくわ。　・・・お疲れ様、ネイ。初任務、上出来よ。"] },
+    { "op": "fade.out", "duration": 1200 }
+  ]
+}

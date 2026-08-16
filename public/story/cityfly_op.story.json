@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "cityfly_op",
+  "title": "OP：ブリーフィング",
+  "mode": "2d",
+  "actors": [],
+  "script": [
+    { "op": "bg", "color": "#0a1024", "image": "briefing.png" },
+    { "op": "fade.in", "duration": 700 },
+    { "op": "say", "actor": "hakase", "face": "normal", "lines": ["ネイ、聞こえる？　ブリーフィングを始めるわよ"] },
+    { "op": "say", "actor": "hakase", "face": "worry", "lines": ["現在、デッドアトモスの軍団が本市に接近中。かなり大規模な攻撃が予想されるわ"] },
+    { "op": "say", "actor": "hakase", "face": "normal", "lines": ["市長から我々に出動要請がでている。初任務だからしっかりね！"] },
+    { "op": "fade.out", "duration": 700 }
+  ]
+}
