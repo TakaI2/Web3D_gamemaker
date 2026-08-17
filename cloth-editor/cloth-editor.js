@@ -31,6 +31,15 @@ const timer = new THREE.Timer();
 
 // ── VRM 状態 ──────────────────────────────────────────────────
 let currentVRM       = null;
+// グラブ点オフセットの正準規約: 保存値は「-Z正面(VRM0/Joy)基準」。+Z正面(VRM1)モデルでは
+// 表示/編集時に X/Z を反転する（cloth-preview の gripOffsetConv / City-Fly と同じ規約）。
+// 反転は自己逆操作なので、読込時と保存時に同じ変換を掛ければよい。Breast系はrawボーンのため対象外。
+const gripFrontFlip = () => !!(currentVRM?.lookAt?.faceFront && currentVRM.lookAt.faceFront.z > 0.5);
+function convGripOff(arr, bone) {
+  const a = [arr?.[0] || 0, arr?.[1] || 0, arr?.[2] || 0];
+  if (!gripFrontFlip() || /breast/i.test(bone || '')) return a;
+  return [-a[0], a[1], -a[2]];
+}
 let currentVRMFile   = null;   // NPCバンドル書き出し用：アップロードしたVRMのFile（バイト保持）
 let currentVRMAName  = null;   // NPCバンドル書き出し用：選択中のVRMAファイル名
 let currentVRMADataURI = null; // 再インポートで埋め込みVRMAを読んだ場合の dataURI（再書き出しで再利用）
@@ -755,7 +764,7 @@ function loadMantleJSON(json) {
     for (const gd of json.gripGroups) {
       const g = makeGroup(gd.name || gd.bone, gd.bone, typeof gd.color === 'number' ? gd.color : undefined);
       if (gd.id) { g.id = gd.id; _gidCounter = Math.max(_gidCounter, +((`${gd.id}`.match(/\d+/) || [0])[0])); }
-      if (gd.offset) g.offset.set(gd.offset[0], gd.offset[1], gd.offset[2]);
+      if (gd.offset) { const o = convGripOff(gd.offset, gd.bone); g.offset.set(o[0], o[1], o[2]); }   // 保存値(正準)→表示基準
       gripGroups.push(g); _bindBone(g);
       for (const idx of (gd.vertices || [])) gripMap.set(idx, g.id);
     }
@@ -767,13 +776,13 @@ function loadMantleJSON(json) {
       for (const bone of ['leftHand', 'rightHand', 'leftLowerArm', 'rightLowerArm']) {
         const g = byBone(bone); if (!g) continue;
         for (const idx of (json.gripIndices[bone] || [])) gripMap.set(idx, g.id);
-        const off = json.gripOffsets?.[bone]; if (off) g.offset.set(off[0], off[1], off[2]);
+        const off = json.gripOffsets?.[bone]; if (off) { const o = convGripOff(off, bone); g.offset.set(o[0], o[1], o[2]); }
       }
     } else {  // legacy left/right
       const addLegacy = (indices, bone, off) => {
         const g = byBone(bone); if (!g) return;
         if (indices) for (const idx of indices) gripMap.set(idx, g.id);
-        if (off) g.offset.set(off[0], off[1], off[2]);
+        if (off) { const o = convGripOff(off, bone); g.offset.set(o[0], o[1], o[2]); }
       };
       addLegacy(json.leftGripIndices, 'leftHand', json.handGrabOffsets?.left);
       addLegacy(json.rightGripIndices, 'rightHand', json.handGrabOffsets?.right);
@@ -1684,12 +1693,12 @@ function buildMantleExport() {
   for (const [idx, gid] of gripMap) (vertsByGroup[gid] ??= []).push(idx);
   const gripGroupsOut = gripGroups.map(g => ({
     id: g.id, name: g.name, bone: g.bone, color: g.color,
-    offset: [g.offset.x, g.offset.y, g.offset.z],
+    offset: convGripOff([g.offset.x, g.offset.y, g.offset.z], g.bone),   // 表示基準→保存値(正準)
     vertices: vertsByGroup[g.id] || [],
   }));
   // 互換: ゲーム/cloth-preview 用に leftHand/rightHand bone のグループを従来フィールドへ合成（union）
   const unionByBone = (bone) => { const r = []; for (const g of gripGroups) if (g.bone === bone) r.push(...(vertsByGroup[g.id] || [])); return r; };
-  const firstOff = (bone) => { const g = gripGroups.find(x => x.bone === bone); return g ? [g.offset.x, g.offset.y, g.offset.z] : [0, 0, 0]; };
+  const firstOff = (bone) => { const g = gripGroups.find(x => x.bone === bone); return g ? convGripOff([g.offset.x, g.offset.y, g.offset.z], bone) : [0, 0, 0]; };
   const leftGripIndices  = unionByBone('leftHand');
   const rightGripIndices = unionByBone('rightHand');
   const handGrabOffsets  = { left: firstOff('leftHand'), right: firstOff('rightHand') };
