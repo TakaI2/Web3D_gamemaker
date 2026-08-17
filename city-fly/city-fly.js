@@ -904,7 +904,7 @@ function runEvAction(a) {
 const PORTRAIT_LAYER = 3;          // このレイヤに載せたものだけをポートレートカメラが見る（街を描かない）
 const PORTRAIT_ACTOR = 'nei';      // 立体表示する話者ID（＝操作キャラ）
 // 頭ボーン基準の構図パラメータ（実行中に window.__pt で微調整可）
-const PT = { dist: 0.72, up: 0.05, fwd: 0.02, sign: 1, fov: 30 };   // sign=+1: 頭ボーンの +Z が顔の向き
+const PT = { dist: 0.60, up: 0.06, fwd: 0.02, sign: 1, fov: 27 };   // sign=+1: 頭ボーンの +Z が顔の向き。顔が読める寄り構図
 let portraitCam = null, portraitLip = null, portraitOn = false, portraitBg = null;
 const _ptV1 = new THREE.Vector3(), _ptV2 = new THREE.Vector3(), _ptV3 = new THREE.Vector3(), _ptEye = new THREE.Vector3(), _ptQ = new THREE.Quaternion();
 window.__pt = PT;   // 構図の微調整用
@@ -966,21 +966,21 @@ function ensureTalkUI() {
   if (talkEls) return;
   const wrap = document.createElement('div');
   // 背景は本文パネル側に持たせ、顔枠は「窓の穴」にする（立体ポートレートをDOMで覆わないため）
-  wrap.style.cssText = 'position:fixed;left:50%;bottom:46px;transform:translateX(-50%);width:min(860px,92vw);z-index:30;'
-    + 'pointer-events:none;gap:12px;align-items:center;display:none;';
+  wrap.style.cssText = 'position:fixed;left:50%;bottom:46px;transform:translateX(-50%);width:min(1100px,92vw);z-index:30;'
+    + 'pointer-events:none;gap:18px;align-items:center;display:none;';
   const face = document.createElement('div');
-  face.style.cssText = 'width:92px;height:92px;flex:0 0 92px;border-radius:8px;overflow:hidden;position:relative;background:#223;'
+  face.style.cssText = 'width:138px;height:138px;flex:0 0 138px;border-radius:12px;overflow:hidden;position:relative;background:#223;'
     + 'border:1px solid rgba(140,150,255,0.45);box-shadow:0 4px 18px rgba(0,0,0,0.5);';
   const fb = document.createElement('div');   // 顔グラ未配置時の仮表示（イニシャル）
-  fb.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:900 44px Meiryo,sans-serif;color:#fff;';
+  fb.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:900 66px Meiryo,sans-serif;color:#fff;';
   const img = document.createElement('img');
   img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;';
   face.appendChild(fb); face.appendChild(img);
   const body = document.createElement('div');
   body.style.cssText = 'flex:1;min-width:0;background:rgba(8,10,24,0.82);border:1px solid rgba(140,150,255,0.45);'
-    + 'border-radius:10px;padding:10px 14px;box-shadow:0 4px 18px rgba(0,0,0,0.5);';
-  const name = document.createElement('div'); name.style.cssText = 'font:700 14px Meiryo,sans-serif;margin-bottom:4px;';
-  const text = document.createElement('div'); text.style.cssText = 'font:16px/1.6 Meiryo,sans-serif;color:#eef;min-height:3.2em;';
+    + 'border-radius:15px;padding:15px 21px;box-shadow:0 4px 18px rgba(0,0,0,0.5);';
+  const name = document.createElement('div'); name.style.cssText = 'font:700 21px Meiryo,sans-serif;margin-bottom:6px;';
+  const text = document.createElement('div'); text.style.cssText = 'font:24px/1.6 Meiryo,sans-serif;color:#eef;min-height:3.2em;';
   body.appendChild(name); body.appendChild(text);
   wrap.appendChild(face); wrap.appendChild(body);
   document.body.appendChild(wrap);
