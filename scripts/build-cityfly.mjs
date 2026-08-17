@@ -84,7 +84,7 @@ if (fs.existsSync(clSrc)) { fs.copyFileSync(clSrc, path.join(npcDest, 'char-ligh
 
 // timeline（飛行＋攻撃＋トーテム）+ それが参照する vrma
 const timelines = [
-  'Joy_reborn_Fly_idle', 'Joy_reborn_Fly_f', 'Joy_reborn_front_down', 'Joy_reborn_Fly_back', 'Joy_reborn_Fly_L', 'Joy_reborn_Fly_R',
+  'Joy_reborn_Fly_idle', 'Joy_reborn_groggy', 'Joy_reborn_Fly_f', 'Joy_reborn_front_down', 'Joy_reborn_Fly_back', 'Joy_reborn_Fly_L', 'Joy_reborn_Fly_R',
   'Joy_reborn_Fly_f2', 'Joy_reborn_capcher1', 'Joy_reborn_throw', 'Joy_reborn_cas1_L1', 'Joy_reborn_large_shot_load', 'Joy_reborn_large_beam', 'Joy_reborn_lightning', 'Joy_reborn_totem',
   'Joy_reborn_drain_0', 'Joy_reborn_drain_1',   // アルティメット（電撃乱射）
 ];

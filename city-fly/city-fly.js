@@ -40,6 +40,7 @@ const cam = { dist: 4.0, height: 1.2, follow: 8, side: 0.75 };   // side=肩越�
 const FADE = 0.18, DESCEND_SIN = 0.3;
 const STATE_DEFS = {   // 飛行アニメ状態（各 timeline→VRMA）。tps-flight と同じ
   idle:      { tl: 'Joy_reborn_Fly_idle',   loop: true },
+  groggy:    { tl: 'Joy_reborn_groggy',     loop: true },    // 低HP時の静止（GROGGY_HP以下）
   fwd:       { tl: 'Joy_reborn_Fly_f',      loop: true },
   frontDown: { tl: 'Joy_reborn_front_down', loop: true },
   back:      { tl: 'Joy_reborn_Fly_back',   loop: true },
@@ -655,6 +656,7 @@ function disposePlayerModel() {
 }
 // ── プレイヤーHP＋ダメージ損耗（damage-editor の damage.json 準拠）──
 const PLAYER_HP_MAX = 100;
+const GROGGY_HP = 0.30;   // この割合以下の静止は groggy モーション
 let playerHp = PLAYER_HP_MAX;
 const dmgParts = [];   // [{id, kind, dis, range:[s,e]}]
 let dmgExpressions = [];   // ダメージ連動表情 [{name, keys:[{at,value}]}]
@@ -1341,14 +1343,15 @@ function desiredState() {
   const moving = keysDown['KeyW'] || keysDown['ArrowUp'] || keysDown['KeyS'] || keysDown['ArrowDown']
               || keysDown['KeyA'] || keysDown['ArrowLeft'] || keysDown['KeyD'] || keysDown['ArrowRight'];
   if (player.charging && player.chargeT >= TAP_THRESHOLD) return 'largeLoad';   // 閾値超過の長押し＝溜め
-  if (isHolding()) return moving ? 'grabMove' : 'idle';
+  const idleName = playerHp <= PLAYER_HP_MAX * GROGGY_HP ? 'groggy' : 'idle';   // 低HPの静止はぐったりモーション
+  if (isHolding()) return moving ? 'grabMove' : idleName;
   const fwd = keysDown['KeyW'] || keysDown['ArrowUp'];
   if (fwd && player.fwdY < -DESCEND_SIN) return 'frontDown';
   if (fwd) return 'fwd';
   if (keysDown['KeyS'] || keysDown['ArrowDown']) return 'back';
   if (keysDown['KeyA'] || keysDown['ArrowLeft']) return 'left';
   if (keysDown['KeyD'] || keysDown['ArrowRight']) return 'right';
-  return 'idle';
+  return idleName;
 }
 function triggerOneShot(name) {
   const st = player.states[name];
