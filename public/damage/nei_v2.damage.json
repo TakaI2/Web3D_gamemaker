@@ -1,0 +1,368 @@
+{
+ "format": "damage-config",
+ "version": 1,
+ "npc": "nei_v2.npc.json",
+ "parts": [
+  {
+   "id": "mesh:Face_(merged)",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Face_(merged)_1",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Face_(merged)_2",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Face_(merged)_3",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Face_(merged)_4",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Face_(merged)_5",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Face_(merged)_6",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Face_(merged)_7",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Body_(merged)",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Body_(merged)_1",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Body_(merged)_2",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "bottom",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 5.5,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff4000",
+   "rimIntensity": 4.3
+  },
+  {
+   "id": "mesh:Body_(merged)_3",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Body_(merged)_4",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Body_(merged)_5",
+   "kind": "mesh",
+   "enabled": true,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 26,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Body_(merged)_6",
+   "kind": "mesh",
+   "enabled": true,
+   "mode": "bottom",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 20,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff0000",
+   "rimIntensity": 1.7
+  },
+  {
+   "id": "mesh:Body_(merged)_7",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Hair001_(merged)",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Hair001_(merged)_1",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Hair001_(merged)_2",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "mesh:Hair001_(merged)_3",
+   "kind": "mesh",
+   "enabled": false,
+   "mode": "scatter",
+   "range": [
+    20,
+    100
+   ],
+   "noiseScale": 8,
+   "noiseAmt": 0.6,
+   "edge": 0.1,
+   "rimColor": "#ff6a3a",
+   "rimIntensity": 2.4
+  },
+  {
+   "id": "cape",
+   "kind": "cloth",
+   "enabled": true,
+   "mode": "bottom",
+   "range": [
+    5,
+    100
+   ],
+   "noiseScale": 24.5,
+   "noiseAmt": 0.4,
+   "edge": 0.05,
+   "rimColor": "#e52424",
+   "rimIntensity": 2.2
+  }
+ ],
+ "expressions": [
+  {
+   "name": "sad",
+   "keys": [
+    {
+     "at": 0,
+     "value": 0
+    },
+    {
+     "at": 50,
+     "value": 1
+    }
+   ]
+  },
+  {
+   "name": "aa",
+   "keys": [
+    {
+     "at": 0,
+     "value": 0
+    },
+    {
+     "at": 50,
+     "value": 0.47
+    }
+   ]
+  },
+  {
+   "name": "angry",
+   "keys": [
+    {
+     "at": 100,
+     "value": 0.43
+    }
+   ]
+  },
+  {
+   "name": "blink",
+   "keys": [
+    {
+     "at": 100,
+     "value": 0.26
+    }
+   ]
+  }
+ ]
+}

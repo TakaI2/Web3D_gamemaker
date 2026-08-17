@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "id": "nei_v2",
+ "boneMaxBend": {},
+ "params": {
+  "gravity": -22,
+  "stiffness": 1,
+  "iterations": 8,
+  "foldLimit": 0.6,
+  "drag": 0.015,
+  "limitDamp": 0.4,
+  "selfCollision": true,
+  "bodyScale": 1,
+  "rigidBones": [
+   "leftShoulder",
+   "rightShoulder",
+   "leftUpperLeg",
+   "rightUpperLeg"
+  ]
+ }
+}

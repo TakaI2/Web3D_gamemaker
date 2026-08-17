@@ -75,7 +75,7 @@ for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-build
 // NPCバンドル（nei_vamp=プレイヤー / ken=地上NPC・捕食対象）
 const npcDest = path.join(dest, 'npc');
 fs.mkdirSync(npcDest, { recursive: true });
-for (const n of ['nei_vamp.npc.json', 'ken.npc.json']) {
+for (const n of ['nei_v2.npc.json', 'ken.npc.json']) {
   fs.copyFileSync(path.join(pub, 'npc', n), path.join(npcDest, n));
   console.log(`copied: npc/${n}`);
 }
@@ -132,7 +132,7 @@ if (fs.existsSync(spSrc)) {
 }
 
 // ラグドール調整値（ken＋プレイヤー nei_vamp）
-for (const rg of ['ken.ragdoll.json', 'nei_vamp.ragdoll.json']) {
+for (const rg of ['ken.ragdoll.json', 'nei_v2.ragdoll.json']) {
   const ragSrc = path.join(pub, 'ragdoll', rg);
   if (!fs.existsSync(ragSrc)) { console.warn(`skip missing ragdoll: ${rg}`); continue; }
   const rDest = path.join(dest, 'ragdoll'); fs.mkdirSync(rDest, { recursive: true });
@@ -140,11 +140,11 @@ for (const rg of ['ken.ragdoll.json', 'nei_vamp.ragdoll.json']) {
   console.log(`copied: ragdoll/${rg}`);
 }
 // ダメージ損耗設定（プレイヤー）
-const dmgSrc = path.join(pub, 'damage', 'nei_vamp.damage.json');
+const dmgSrc = path.join(pub, 'damage', 'nei_v2.damage.json');
 if (fs.existsSync(dmgSrc)) {
   const dDest = path.join(dest, 'damage'); fs.mkdirSync(dDest, { recursive: true });
-  fs.copyFileSync(dmgSrc, path.join(dDest, 'nei_vamp.damage.json'));
-  console.log('copied: damage/nei_vamp.damage.json');
+  fs.copyFileSync(dmgSrc, path.join(dDest, 'nei_v2.damage.json'));
+  console.log('copied: damage/nei_v2.damage.json');
 }
 // 効果音（SFX。ビーム/爆発/雷）
 const sndSrc = path.join(pub, 'sound');

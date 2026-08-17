@@ -34,7 +34,7 @@ const keysDown = {};
 let locked = false, recentered = false;
 // TPS プレイヤー（tps-flight から移植・WebGL）
 const KENNEY_CITY = true;   // 実道路網に Kenney 建物を手続き配置（破壊・都市ゲームの土台）
-const PLAYER_NPC = 'nei_vamp.npc.json';
+const PLAYER_NPC = 'nei_v2.npc.json';
 const FACE_OFFSET = Math.PI;   // Joy_reborn は正面が逆焼き→180°補正
 const flight = { accel: 32, drag: 2.4, maxSpeed: 9, turn: 8 };   // TPS-Flight と同じ操作感（ホイールで増速可）
 const cam = { dist: 4.0, height: 1.2, follow: 8, side: 0.75 };   // side=肩越しオフセット(m)。プレイヤーを画面中心よりやや左へ＝クロスヘア/エフェクトが見やすい
