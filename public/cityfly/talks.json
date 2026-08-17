@@ -8,7 +8,8 @@
     },
     "hakase": {
       "name": "博士",
-      "color": "#5a8fe0"
+      "color": "#5a8fe0",
+      "vrm": "doctor_mil.vrm"
     },
     "mayor": {
       "name": "市長",

@@ -906,6 +906,9 @@ const PORTRAIT_ACTOR = 'nei';      // 立体表示する話者ID（＝操作キ�
 // 頭ボーン基準の構図パラメータ（実行中に window.__pt で微調整可）
 const PT = { dist: 0.60, up: 0.06, fwd: 0.02, sign: 1, fov: 27 };   // sign=+1: 頭ボーンの +Z が顔の向き。顔が読める寄り構図
 let portraitCam = null, portraitLip = null, portraitOn = false, portraitBg = null;
+const portraitGuests = new Map();   // actorId -> { vrm, lip, loading } （talks.json の actor.vrm を遅延読込）
+let portraitWho = PORTRAIT_ACTOR;   // 今ポートレートに映している話者
+const GUEST_POS = new THREE.Vector3(0, -800, 0);   // 本編カメラから見えない控え位置（ポートレート専用レイヤなので実害なし）
 const _ptV1 = new THREE.Vector3(), _ptV2 = new THREE.Vector3(), _ptV3 = new THREE.Vector3(), _ptEye = new THREE.Vector3(), _ptQ = new THREE.Quaternion();
 window.__pt = PT;   // 構図の微調整用
 function setupPortrait() {   // プレイヤーVRM読込後に呼ぶ
@@ -922,14 +925,59 @@ function setupPortrait() {   // プレイヤーVRM読込後に呼ぶ
   if (player.cloth && player.cloth.clothMesh) player.cloth.clothMesh.layers.enable(PORTRAIT_LAYER);
   for (const l of [dayRefs.amb, dayRefs.sun, dayRefs.hemi, charFill.key]) if (l) l.layers.enable(PORTRAIT_LAYER);
   try { portraitLip = createLipSync(player.vrm); } catch (e) { console.warn('リップシンク初期化失敗:', e); }
+  preloadGuestVrms();   // 会話相手のVRMを裏で先読み（初回のセリフから立体表示にするため）
 }
-function portraitHeadNode() {
-  const hm = player.vrm && player.vrm.humanoid;
+async function preloadGuestVrms() {
+  for (let i = 0; i < 40 && !(ev.talks && ev.talks.actors); i++) await new Promise((r) => setTimeout(r, 500));   // talks.json 待ち
+  const actors = (ev.talks && ev.talks.actors) || {};
+  for (const [aid, a] of Object.entries(actors)) {
+    if (!a || !a.vrm || aid === PORTRAIT_ACTOR) continue;
+    await ensureGuestVrm(aid, a.vrm);   // 直列＝読込集中で本編がカクつかないように
+  }
+}
+function headNodeOf(vrm) {
+  const hm = vrm && vrm.humanoid;
   if (!hm) return null;
   return (hm.getNormalizedBoneNode ? hm.getNormalizedBoneNode('head') : null) || (hm.getRawBoneNode ? hm.getRawBoneNode('head') : null);
 }
+function portraitSubject() {   // 現在の話者のVRM（プレイヤー or ゲスト）
+  if (portraitWho === PORTRAIT_ACTOR) return player.vrm;
+  const g = portraitGuests.get(portraitWho);
+  return (g && g.vrm) || null;
+}
+function portraitHeadNode() { return headNodeOf(portraitSubject()); }
+async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポートレート専用レイヤへ読み込む
+  let g = portraitGuests.get(actorId);
+  if (g) return g.vrm;
+  g = { vrm: null, lip: null, loading: true };
+  portraitGuests.set(actorId, g);
+  try {
+    const loader = new GLTFLoader();
+    loader.register((pl) => new VRMLoaderPlugin(pl, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(pl, { materialType: MToonNodeMaterial }) }));
+    const gltf = await loader.loadAsync('../vrm/' + encodeURIComponent(file));
+    const vrm = gltf.userData.vrm;
+    if (!vrm) throw new Error('VRM拡張なし: ' + file);
+    vrm.scene.position.copy(GUEST_POS);
+    vrm.scene.traverse((o) => { o.layers.set(PORTRAIT_LAYER); o.frustumCulled = false; });   // 本編カメラには映らない
+    scene.add(vrm.scene);
+    vrm.scene.updateMatrixWorld(true);
+    g.vrm = vrm;
+    try { g.lip = createLipSync(vrm); } catch (e) { console.warn('ゲストのリップシンク初期化失敗:', actorId, e); }
+    try { await renderer.compileAsync(scene, portraitCam); } catch { /* 事前コンパイル失敗は無視（初回に少し詰まるだけ） */ }
+    console.log('ポートレート用VRM読込:', actorId, file);
+  } catch (e) {
+    console.warn('ポートレート用VRM読込失敗:', actorId, file, e);
+  }
+  g.loading = false;
+  return g.vrm;
+}
 function updatePortrait(dt) {
   if (portraitLip) portraitLip.update(dt * 1000);
+  const gCur = portraitWho !== PORTRAIT_ACTOR ? portraitGuests.get(portraitWho) : null;
+  if (gCur && gCur.vrm) {   // ゲストは会話中だけ更新（表情/リップ/揺れもの）
+    if (gCur.lip) gCur.lip.update(dt * 1000);
+    gCur.vrm.update(dt);
+  }
   if (!portraitOn || !portraitCam) return;
   const h = portraitHeadNode();
   if (!h) { portraitOn = false; return; }
@@ -1000,12 +1048,33 @@ function showTalkLine(ln) {
   talkEls.fb.textContent = (actor.name || '?').slice(0, 1);
   talkEls.fb.style.background = actor.color || '#445';
   talkEls.img.style.display = 'none';
-  const live = !NO_PORTRAIT && portraitCam && ln.who === PORTRAIT_ACTOR && player.ready && !playerDead;
-  portraitOn = !!live;
+  portraitWho = ln.who;
+  let live = false;
+  if (!NO_PORTRAIT && portraitCam) {
+    if (ln.who === PORTRAIT_ACTOR) live = player.ready && !playerDead;
+    else {
+      const av = actor && actor.vrm;   // talks.json の actor.vrm（例: doctor_mil.vrm）
+      const g = portraitGuests.get(ln.who);
+      if (g && g.vrm) live = true;
+      else if (av) { ensureGuestVrm(ln.who, av).then((v) => { if (v && talkCur === ln) showTalkLine(ln); }); }   // 読込完了で立体表示へ
+    }
+  }
+  portraitOn = live;
+  if (live && ln.who !== PORTRAIT_ACTOR) {   // ゲストの表情（talks.json の face を VRM表情名として適用）
+    const g = portraitGuests.get(ln.who);
+    const em = g && g.vrm && g.vrm.expressionManager;
+    if (em) {
+      for (const nm of ['happy', 'angry', 'sad', 'relaxed', 'surprised']) { try { em.setValue(nm, 0); } catch { /* noop */ } }
+      const map = { smile: 'happy', angry: 'angry', worry: 'sad', panic: 'surprised', weak: 'sad', damage: 'sad' };
+      const ex = map[ln.face || 'normal'];
+      if (ex) { try { em.setValue(ex, 1); } catch { /* noop */ } }
+    }
+  }
   talkEls.face.style.background = live ? 'transparent' : '#223';   // 立体表示中はキャンバスを透かす
   talkEls.fb.style.display = live ? 'none' : '';
   if (live) {
-    if (portraitLip) portraitLip.play(ln.text, TALK_CPS);
+    const lip = ln.who === PORTRAIT_ACTOR ? portraitLip : (portraitGuests.get(ln.who) || {}).lip;
+    if (lip) lip.play(ln.text, TALK_CPS);
   } else {
     talkEls.img.onload = () => { talkEls.img.style.display = ''; };
     talkEls.img.onerror = () => { talkEls.img.style.display = 'none'; };   // 仮画像のまま
@@ -1297,7 +1366,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; } };
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; } };
 // ── キャラ選択パネル（👤ボタン）──
 function setupCharUI() {
   const btn = document.createElement('button');

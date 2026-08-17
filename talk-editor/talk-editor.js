@@ -93,8 +93,11 @@ function renderActors() {
     name.oninput = () => { a.name = name.value; renderLinesSoft(); };
     const color = document.createElement('input'); color.className = 'acolor'; color.type = 'color'; color.value = a.color || '#8899aa';
     color.oninput = () => { a.color = color.value; };
+    const vrm = document.createElement('input'); vrm.className = 'avrm'; vrm.value = a.vrm || ''; vrm.placeholder = '立体表示VRM';
+    vrm.title = 'public/vrm/ のファイル名。指定すると会話ウィンドウにそのVRMの顔＋リップシンクが出る（例: doctor_mil.vrm）';
+    vrm.onchange = () => { if (vrm.value.trim()) a.vrm = vrm.value.trim(); else delete a.vrm; };
     const del = mini('✕', () => { delete data.actors[aid]; renderAll(); });
-    row.appendChild(id); row.appendChild(name); row.appendChild(color); row.appendChild(del);
+    row.appendChild(id); row.appendChild(name); row.appendChild(color); row.appendChild(vrm); row.appendChild(del);
     el.appendChild(row);
   }
 }
