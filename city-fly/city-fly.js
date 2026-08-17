@@ -17,6 +17,7 @@ import { createTornado } from '../lib/fx-tornado.js';
 import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.js';
 import { createDissolve } from '../lib/fx-dissolve.js';
 import { createScenario2D } from '../lib/scenario2d.js';
+import { createLipSync } from '../lib/lip-sync.js';
 import { createFlow } from '../lib/flow-runner.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
@@ -218,6 +219,7 @@ const MAP_NAME = new URLSearchParams(location.search).get('map') || window.DEFAU
 //   ?nocape=1 マント無効 / ?nocity=1 建物無効 / ?nonpc=1 NPC(ken)と車を無効 / ?dpr=1 解像度を下げる
 const _qs = new URLSearchParams(location.search);
 const NO_CAPE = _qs.get('nocape') === '1';
+const NO_PORTRAIT = _qs.get('noportrait') === '1';   // 会話ウィンドウの立体ポートレートを無効化（負荷比較用）
 const NO_CITY = _qs.get('nocity') === '1';
 const NO_NPC = _qs.get('nonpc') === '1';
 const DIAG = _qs.get('diag') === '1';
@@ -898,28 +900,91 @@ function runEvAction(a) {
     if (!flowTimer) flowTimer = { port: a.port, t: a.delay ?? 0 };   // 先勝ち（win/bad の競合は先に発火した方）
   }
 }
+// ── 立体ポートレート: 会話ウィンドウの顔枠にプレイヤーVRMの顔を実描画＋リップシンク ──
+const PORTRAIT_LAYER = 3;          // このレイヤに載せたものだけをポートレートカメラが見る（街を描かない）
+const PORTRAIT_ACTOR = 'nei';      // 立体表示する話者ID（＝操作キャラ）
+// 頭ボーン基準の構図パラメータ（実行中に window.__pt で微調整可）
+const PT = { dist: 0.72, up: 0.05, fwd: 0.02, sign: 1, fov: 30 };   // sign=+1: 頭ボーンの +Z が顔の向き
+let portraitCam = null, portraitLip = null, portraitOn = false, portraitBg = null;
+const _ptV1 = new THREE.Vector3(), _ptV2 = new THREE.Vector3(), _ptV3 = new THREE.Vector3(), _ptEye = new THREE.Vector3(), _ptQ = new THREE.Quaternion();
+window.__pt = PT;   // 構図の微調整用
+function setupPortrait() {   // プレイヤーVRM読込後に呼ぶ
+  if (NO_PORTRAIT || portraitCam || !player.vrm) return;
+  portraitCam = new THREE.PerspectiveCamera(26, 1, 0.02, 8);
+  portraitCam.layers.set(PORTRAIT_LAYER);
+  portraitBg = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), new THREE.MeshBasicMaterial({ color: 0x0d1120 }));
+  portraitBg.layers.set(PORTRAIT_LAYER);   // 専用レイヤ＝本編カメラには映らない背景板
+  portraitBg.frustumCulled = false;
+  scene.add(portraitBg);
+  // 注意: ポートレート専用のライトを足してはいけない。本編パスとライト構成が変わると
+  // ノード材質が毎フレーム再コンパイルされ 16ms→1600ms に落ちる（実測）。既存ライトを共有する。
+  player.vrm.scene.traverse((o) => o.layers.enable(PORTRAIT_LAYER));
+  if (player.cloth && player.cloth.clothMesh) player.cloth.clothMesh.layers.enable(PORTRAIT_LAYER);
+  for (const l of [dayRefs.amb, dayRefs.sun, dayRefs.hemi, charFill.key]) if (l) l.layers.enable(PORTRAIT_LAYER);
+  try { portraitLip = createLipSync(player.vrm); } catch (e) { console.warn('リップシンク初期化失敗:', e); }
+}
+function portraitHeadNode() {
+  const hm = player.vrm && player.vrm.humanoid;
+  if (!hm) return null;
+  return (hm.getNormalizedBoneNode ? hm.getNormalizedBoneNode('head') : null) || (hm.getRawBoneNode ? hm.getRawBoneNode('head') : null);
+}
+function updatePortrait(dt) {
+  if (portraitLip) portraitLip.update(dt * 1000);
+  if (!portraitOn || !portraitCam) return;
+  const h = portraitHeadNode();
+  if (!h) { portraitOn = false; return; }
+  h.getWorldPosition(_ptV1); h.getWorldQuaternion(_ptQ);
+  const fwd = _ptV2.set(0, 0, PT.sign).applyQuaternion(_ptQ);   // 顔の向き（体の傾き・首振りに追従）
+  const up = _ptV3.set(0, 1, 0).applyQuaternion(_ptQ);
+  _ptEye.copy(_ptV1).addScaledVector(up, PT.up).addScaledVector(fwd, PT.fwd);   // 頭ボーン=首元→目の高さへ
+  portraitCam.position.copy(_ptEye).addScaledVector(fwd, PT.dist);
+  portraitCam.up.copy(up);
+  portraitCam.lookAt(_ptEye);
+  if (portraitCam.fov !== PT.fov) { portraitCam.fov = PT.fov; portraitCam.updateProjectionMatrix(); }
+  if (portraitBg) { portraitBg.position.copy(_ptEye).addScaledVector(fwd, -0.9); portraitBg.lookAt(portraitCam.position); }
+}
+function renderPortrait() {   // メイン描画の直後に、顔枠の矩形だけへ追加描画
+  if (!portraitOn || !portraitCam || !talkEls) return;
+  const r = talkEls.face.getBoundingClientRect();
+  if (r.width < 4 || r.bottom <= 0) return;
+  const x = Math.round(r.left), y = Math.round(r.top);   // WebGPU は左上原点
+  const w = Math.round(r.width), h = Math.round(r.height);
+  renderer.autoClear = false;
+  renderer.setScissorTest(true);
+  renderer.setScissor(x, y, w, h);
+  renderer.setViewport(x, y, w, h);
+  renderer.setClearColor(0x10131f, 1);
+  renderer.clear(true, true, false);
+  renderer.render(scene, portraitCam);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+  renderer.autoClear = true;
+}
 // 会話ウィンドウ: 画面下部・顔グラ＋話者名＋テキスト。時間経過で自動送り（ポインタロック中のためクリック送りなし）
 let talkEls = null; const talkQ = []; let talkCur = null, talkT = 0;
 function ensureTalkUI() {
   if (talkEls) return;
   const wrap = document.createElement('div');
+  // 背景は本文パネル側に持たせ、顔枠は「窓の穴」にする（立体ポートレートをDOMで覆わないため）
   wrap.style.cssText = 'position:fixed;left:50%;bottom:46px;transform:translateX(-50%);width:min(860px,92vw);z-index:30;'
-    + 'background:rgba(8,10,24,0.82);border:1px solid rgba(140,150,255,0.45);border-radius:10px;padding:10px 14px;pointer-events:none;'
-    + 'box-shadow:0 4px 18px rgba(0,0,0,0.5);gap:12px;align-items:center;display:none;';
+    + 'pointer-events:none;gap:12px;align-items:center;display:none;';
   const face = document.createElement('div');
-  face.style.cssText = 'width:92px;height:92px;flex:0 0 92px;border-radius:8px;overflow:hidden;position:relative;background:#223;';
+  face.style.cssText = 'width:92px;height:92px;flex:0 0 92px;border-radius:8px;overflow:hidden;position:relative;background:#223;'
+    + 'border:1px solid rgba(140,150,255,0.45);box-shadow:0 4px 18px rgba(0,0,0,0.5);';
   const fb = document.createElement('div');   // 顔グラ未配置時の仮表示（イニシャル）
   fb.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:900 44px Meiryo,sans-serif;color:#fff;';
   const img = document.createElement('img');
   img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;';
   face.appendChild(fb); face.appendChild(img);
-  const body = document.createElement('div'); body.style.cssText = 'flex:1;min-width:0;';
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1;min-width:0;background:rgba(8,10,24,0.82);border:1px solid rgba(140,150,255,0.45);'
+    + 'border-radius:10px;padding:10px 14px;box-shadow:0 4px 18px rgba(0,0,0,0.5);';
   const name = document.createElement('div'); name.style.cssText = 'font:700 14px Meiryo,sans-serif;margin-bottom:4px;';
   const text = document.createElement('div'); text.style.cssText = 'font:16px/1.6 Meiryo,sans-serif;color:#eef;min-height:3.2em;';
   body.appendChild(name); body.appendChild(text);
   wrap.appendChild(face); wrap.appendChild(body);
   document.body.appendChild(wrap);
-  talkEls = { wrap, img, fb, name, text };
+  talkEls = { wrap, face, img, fb, name, text };
 }
 function queueTalk(id) {
   const lines = ev.talks && ev.talks.talks && ev.talks.talks[id];
@@ -935,9 +1000,17 @@ function showTalkLine(ln) {
   talkEls.fb.textContent = (actor.name || '?').slice(0, 1);
   talkEls.fb.style.background = actor.color || '#445';
   talkEls.img.style.display = 'none';
-  talkEls.img.onload = () => { talkEls.img.style.display = ''; };
-  talkEls.img.onerror = () => { talkEls.img.style.display = 'none'; };   // 仮画像のまま
-  talkEls.img.src = '../scenario2d/face/' + ln.who + '/' + (ln.face || 'normal') + '.png';
+  const live = !NO_PORTRAIT && portraitCam && ln.who === PORTRAIT_ACTOR && player.ready && !playerDead;
+  portraitOn = !!live;
+  talkEls.face.style.background = live ? 'transparent' : '#223';   // 立体表示中はキャンバスを透かす
+  talkEls.fb.style.display = live ? 'none' : '';
+  if (live) {
+    if (portraitLip) portraitLip.play(ln.text, TALK_CPS);
+  } else {
+    talkEls.img.onload = () => { talkEls.img.style.display = ''; };
+    talkEls.img.onerror = () => { talkEls.img.style.display = 'none'; };   // 仮画像のまま
+    talkEls.img.src = '../scenario2d/face/' + ln.who + '/' + (ln.face || 'normal') + '.png';
+  }
   talkT = Math.max(TALK_MIN_SEC, ln.text.length / TALK_CPS);
 }
 function updateTalk(dt) {
@@ -947,7 +1020,7 @@ function updateTalk(dt) {
     talkCur = null;
   }
   if (talkQ.length) { talkCur = talkQ.shift(); showTalkLine(talkCur); }
-  else if (talkEls) talkEls.wrap.style.display = 'none';
+  else if (talkEls) { talkEls.wrap.style.display = 'none'; portraitOn = false; }
 }
 let killCount = 0, killShowT = 0, killEl = null;
 function addKill(kind = 'jet') {
@@ -1206,6 +1279,7 @@ async function loadPlayer() {
         player.states[name] = { action: action2, timeline: null, fps: 30, dur: clip2.duration, loop: false, trimIn: 0, trimOut: total2, total: total2, speed: 1, effects: [] };
       } catch (e) { console.warn('rawState失敗:', name, e); }
     };
+    setupPortrait();   // 会話ウィンドウの立体ポートレート
     await addRawState('hit', 'hit_front.vrma');
     await addRawState('bighit', 'dead03.vrma');
     try {
@@ -1223,7 +1297,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; } };
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; } };
 // ── キャラ選択パネル（👤ボタン）──
 function setupCharUI() {
   const btn = document.createElement('button');
@@ -6971,6 +7045,7 @@ function tick() {
   evalEvents();
   updateFlowTimer(dt);
   updateTalk(dt);
+  updatePortrait(dt);
   scn.update(dt);
   updatePredation(dt);    // 掴んだ ken の接地判定→捕食
   updateTotem(dt);        // トーテム（旋回・溶解・成長）
@@ -7002,6 +7077,7 @@ function tick() {
     setStatus(`${clock}${timeScale > 1 ? `(x${timeScale})` : ''}${wanted} / 高度 ${Math.round(player.pos.y)}m / 速度上限 ${Math.round(flight.maxSpeed)} / ${info}${entryPrompt ? ' / ' + entryPrompt : ''}`);
   }
   renderer.render(scene, camera);
+  renderPortrait();   // 会話中のみ: 顔枠へキャラだけを追加描画
   if (DIAG) { const r = renderer.info?.render; if (r) { _diagDraw = r.drawCalls; _diagTri = r.triangles; } }   // 描画直後に採取（render前はリセット済み）
 }
 
