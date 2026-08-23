@@ -943,8 +943,9 @@ async function preloadGuestVrms() {
   for (let i = 0; i < 40 && !(ev.talks && ev.talks.actors); i++) await new Promise((r) => setTimeout(r, 500));   // talks.json 待ち
   const actors = (ev.talks && ev.talks.actors) || {};
   for (const [aid, a] of Object.entries(actors)) {
-    if (!a || !a.vrm || aid === PORTRAIT_ACTOR) continue;
-    await ensureGuestVrm(aid, a.vrm);   // 直列＝読込集中で本編がカクつかないように
+    const file = a && (a.npc || a.vrm);
+    if (!file || aid === PORTRAIT_ACTOR) continue;
+    await ensureGuestVrm(aid, file);   // 直列＝読込集中で本編がカクつかないように
   }
   guestPreloadDone = true;
 }
@@ -972,17 +973,46 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
   g = { vrm: null, lip: null, loading: true };
   portraitGuests.set(actorId, g);
   try {
+    const isBundle = /\.npc\.json$/i.test(file);   // .npc.json＝マント等を含むバンドル / それ以外は素のVRM
+    let bundle = null, srcUrl = '../vrm/' + encodeURIComponent(file);
+    if (isBundle) {
+      bundle = await (await fetch('../npc/' + encodeURIComponent(file))).json();
+      if (!bundle || !bundle.vrm) throw new Error('バンドルにVRMがありません: ' + file);
+      srcUrl = URL.createObjectURL(dataURIToBlob(bundle.vrm));
+    }
     const loader = new GLTFLoader();
     loader.register((pl) => new VRMLoaderPlugin(pl, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(pl, { materialType: MToonNodeMaterial }) }));
-    const gltf = await loader.loadAsync('../vrm/' + encodeURIComponent(file));
+    const gltf = await loader.loadAsync(srcUrl);
     const vrm = gltf.userData.vrm;
     if (!vrm) throw new Error('VRM拡張なし: ' + file);
     vrm.scene.position.copy(GUEST_POS).x += portraitGuests.size * 8;   // 1体ずつ離す（重ねると隣の後頭部が映り込む）
+    // モデルの正面をカメラ基準に合わせる（VRM0は180°ラップ）
+    const faceOff = bundle && bundle.faceOffsetDeg != null ? bundle.faceOffsetDeg * Math.PI / 180 : (vrm.meta?.metaVersion === '0' ? Math.PI : 0);
+    vrm.scene.rotation.y = faceOff;
     vrm.scene.traverse((o) => { o.layers.set(PORTRAIT_LAYER); o.frustumCulled = false; });   // 本編カメラには映らない
     vrm.scene.visible = false;   // 喋る時だけ表示
     scene.add(vrm.scene);
     vrm.scene.updateMatrixWorld(true);
     g.vrm = vrm;
+    if (bundle && bundle.cloth && !NO_CAPE) {   // マント（GPUクロス）。プレイヤーと同じ正準化を適用
+      try {
+        const gripFlip = Math.cos(faceOff) > 0;
+        const _flipO = (o) => { if (Array.isArray(o) && o.length >= 3) { o[0] = -o[0]; o[2] = -o[2]; } };
+        if (gripFlip) {
+          for (const gg of (bundle.cloth.gripGroups || [])) _flipO(gg.offset);
+          if (bundle.cloth.handGrabOffsets) { _flipO(bundle.cloth.handGrabOffsets.left); _flipO(bundle.cloth.handGrabOffsets.right); }
+        }
+        const tr0 = bundle.cloth.editorTransform ?? { tx: 0, ty: 0, tz: 0, ry: 0, scale: 1 };
+        const yawDeg = faceOff * 180 / Math.PI;   // 初期配置はモデルの向きを見ないので ry に合成が必要
+        const c0 = Math.cos(faceOff), s0 = Math.sin(faceOff);
+        const trAdj = { ...tr0, ry: (tr0.ry || 0) + yawDeg,
+          tx: (tr0.tx || 0) * c0 - (tr0.tz || 0) * s0,
+          tz: (tr0.tx || 0) * s0 + (tr0.tz || 0) * c0 };
+        g.basePos = vrm.scene.position.clone();
+        g.cloth = createVRMCloth({ renderer, scene, vrm, cloth: { ...bundle.cloth, editorTransform: trAdj }, basePos: g.basePos, floorY: -1e9 });
+        if (g.cloth.clothMesh) { g.cloth.clothMesh.layers.set(PORTRAIT_LAYER); g.cloth.clothMesh.frustumCulled = false; g.cloth.clothMesh.visible = false; }
+      } catch (e) { console.warn('会話相手のマント生成失敗:', actorId, e); }
+    }
     try {   // アイドル再生（Tポーズ回避）。VRMAが無ければ腕だけ下ろす
       const vres = await fetch('../vrma/' + encodeURIComponent(GUEST_IDLE_VRMA));
       if (!vres.ok) throw new Error('idle vrma ' + vres.status);
@@ -1016,6 +1046,7 @@ function updatePortrait(dt) {
     if (gCur.lip) gCur.lip.update(dt * 1000);
     if (gCur.mixer) gCur.mixer.update(dt);
     gCur.vrm.update(dt);
+    if (gCur.cloth) { try { gCur.cloth.update(dt); } catch { /* noop */ } }
   }
   if (!portraitOn || !portraitCam) return;
   const h = portraitHeadNode();
@@ -1105,10 +1136,10 @@ let activeGuest = null;
 function setActiveGuest(who) {   // 喋っているゲストだけ表示（シーンからの出し入れは切替時に250msのヒッチが出るので不可）
   if (activeGuest === who) return;
   const prev = activeGuest && portraitGuests.get(activeGuest);
-  if (prev && prev.vrm) prev.vrm.scene.visible = false;
+  if (prev && prev.vrm) { prev.vrm.scene.visible = false; if (prev.cloth && prev.cloth.clothMesh) prev.cloth.clothMesh.visible = false; }
   activeGuest = who;
   const cur = who && portraitGuests.get(who);
-  if (cur && cur.vrm) cur.vrm.scene.visible = true;
+  if (cur && cur.vrm) { cur.vrm.scene.visible = true; if (cur.cloth && cur.cloth.clothMesh) cur.cloth.clothMesh.visible = true; }
 }
 function beginPortraitFor(who, face, text, stage) {   // 話者の立体表示を開始（戻り値=立体表示できたか）
   if (NO_PORTRAIT || !portraitCam) return false;
@@ -1119,7 +1150,7 @@ function beginPortraitFor(who, face, text, stage) {   // 話者の立体表示�
     const a = (ev.talks && ev.talks.actors && ev.talks.actors[who]) || {};
     const g = portraitGuests.get(who);
     if (g && g.vrm) live = true;
-    else if (a.vrm) ensureGuestVrm(who, a.vrm);   // 未読込なら読込だけ走らせる（次の行から立体表示）
+    else if (a.npc || a.vrm) ensureGuestVrm(who, a.npc || a.vrm);   // 未読込なら読込だけ走らせる（次の行から立体表示）
   }
   portraitStage = !!stage && live;
   portraitOn = live;
@@ -1153,8 +1184,8 @@ function showTalkLine(ln) {
   talkEls.fb.style.background = actor.color || '#445';
   talkEls.img.style.display = 'none';
   const live = beginPortraitFor(ln.who, ln.face, ln.text, false);   // 会話ウィンドウ＝顔枠モード
-  if (!live && actor && actor.vrm) {   // 読込中だった場合、完了したら立体表示へ差し替え
-    ensureGuestVrm(ln.who, actor.vrm).then((v) => { if (v && talkCur === ln) showTalkLine(ln); });
+  if (!live && actor && (actor.npc || actor.vrm)) {   // 読込中だった場合、完了したら立体表示へ差し替え
+    ensureGuestVrm(ln.who, actor.npc || actor.vrm).then((v) => { if (v && talkCur === ln) showTalkLine(ln); });
   }
   talkEls.face.style.background = live ? 'transparent' : '#223';   // 立体表示中はキャンバスを透かす
   talkEls.fb.style.display = live ? 'none' : '';
@@ -1172,7 +1203,10 @@ function updateTalk(dt) {
     talkCur = null;
   }
   if (talkQ.length) { talkCur = talkQ.shift(); showTalkLine(talkCur); }
-  else if (talkEls) { talkEls.wrap.style.display = 'none'; portraitOn = false; setActiveGuest(null); }
+  else if (talkEls) {   // 会話キューが空＝会話ウィンドウを閉じる。ただしシナリオのステージ表示中は消さない
+    talkEls.wrap.style.display = 'none';
+    if (!portraitStage) { portraitOn = false; setActiveGuest(null); }
+  }
 }
 let killCount = 0, killShowT = 0, killEl = null;
 function addKill(kind = 'jet') {

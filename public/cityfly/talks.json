@@ -28,7 +28,7 @@
     "elix": {
       "name": "エリクシラ",
       "color": "#a55ae0",
-      "vrm": "JOY_vamp.vrm"
+      "npc": "JOY_vamp.npc.json"
     }
   },
   "talks": {

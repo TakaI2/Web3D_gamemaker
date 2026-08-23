@@ -160,15 +160,24 @@ fs.mkdirSync(path.join(dest, 'cityfly'), { recursive: true });
 // 会話ポートレート用VRM（talks.json の actor.vrm）
 try {
   const tj = JSON.parse(fs.readFileSync(path.join(pub, 'cityfly', 'talks.json'), 'utf8'));
-  const need = [...new Set(Object.values(tj.actors || {}).map((a) => a && a.vrm).filter(Boolean))];
-  if (need.length) {
+  const acts = Object.values(tj.actors || {});
+  const needVrm = [...new Set(acts.map((a) => a && a.vrm).filter(Boolean))];
+  const needNpc = [...new Set(acts.map((a) => a && a.npc).filter(Boolean))];   // .npc.json バンドル（マント付き）
+  if (needVrm.length) {
     const vDest = path.join(dest, 'vrm'); fs.mkdirSync(vDest, { recursive: true });
-    for (const f of need) {
+    for (const f of needVrm) {
       const src2 = path.join(pub, 'vrm', f);
       if (!fs.existsSync(src2)) { console.warn('skip missing portrait vrm: ' + f); continue; }
       fs.copyFileSync(src2, path.join(vDest, f));
       console.log('copied: vrm/' + f + ' (portrait)');
     }
+  }
+  for (const f of needNpc) {
+    const src2 = path.join(pub, 'npc', f);
+    if (!fs.existsSync(src2)) { console.warn('skip missing portrait npc: ' + f); continue; }
+    fs.mkdirSync(path.join(dest, 'npc'), { recursive: true });
+    fs.copyFileSync(src2, path.join(dest, 'npc', f));
+    console.log('copied: npc/' + f + ' (portrait)');
   }
 } catch (e) { console.warn('ポートレートVRMの収集に失敗:', e.message); }
 for (const f of ['events.json', 'talks.json']) {
