@@ -768,10 +768,12 @@ function setupTitle() {
     + '<button id="cf-training" style="' + btn + '" disabled>トレーニングモード</button>';
   document.body.appendChild(titleEl);
   const bs = titleEl.querySelector('#cf-start'), bt = titleEl.querySelector('#cf-training');
-  const iv = setInterval(() => {   // 都市生成＋プレイヤー準備が済んだらボタン有効化
-    if (cityRoot && collBoxes.length && player.ready) {
-      bs.disabled = bt.disabled = false; bs.textContent = 'ゲームスタート'; clearInterval(iv);
-    }
+  const iv = setInterval(() => {   // 都市生成＋プレイヤー＋会話キャストの先読みが済んだらボタン有効化
+    const worldOk = cityRoot && collBoxes.length && player.ready;
+    if (worldOk) bt.disabled = false;   // トレーニングはキャスト不要
+    if (worldOk && guestPreloadDone) {  // 本編はOP直後に会話キャストを使うので待つ
+      bs.disabled = false; bs.textContent = 'ゲームスタート'; clearInterval(iv);
+    } else if (worldOk) bs.textContent = 'キャスト読込中…';
   }, 400);
   bs.addEventListener('click', () => startMode('play'));
   bt.addEventListener('click', () => startMode('training'));
@@ -803,7 +805,13 @@ function updateParamsUI() {   // デバッグ兼HUD: 都市被害/敵損耗/手�
 const ev = { defs: [], talks: null, fired: new Set(), flags: {}, spawnAllow: {}, kills: [], pendingOn: new Set(), lastPort: null };
 const TALK_MIN_SEC = 3.2, TALK_CPS = 9;   // 1行の表示時間 = max(最低秒, 文字数/読速)
 // 2D紙芝居プレイヤ（OP/ED。素材: public/scenario2d/、脚本: public/story/*.story.json）
-const scn = createScenario2D({ basePath: '../scenario2d', soundPath: '../sound', actors: () => (ev.talks && ev.talks.actors) || null });
+const scn = createScenario2D({
+  basePath: '../scenario2d', soundPath: '../sound', actors: () => (ev.talks && ev.talks.actors) || null,
+  stage: {   // OP/ED: 話者を全画面で3D表示（モデルは起動時に先読み済み＝追加ロードなし）
+    begin: (who, face, text) => { const ok = beginPortraitFor(who, face, text, true); setGameHudVisible(false); return ok; },
+    end: () => { portraitStage = false; portraitOn = false; setActiveGuest(null); setGameHudVisible(true); },
+  },
+});
 async function playScenario(name, after = 'play') {   // after: 'play'=本編へ / 'title'=リロードでタイトルへ
   let story = null;
   try { story = await (await fetch('../story/' + name + '.story.json')).json(); }
@@ -904,12 +912,15 @@ function runEvAction(a) {
 const PORTRAIT_LAYER = 3;          // このレイヤに載せたものだけをポートレートカメラが見る（街を描かない）
 const PORTRAIT_ACTOR = 'nei';      // 立体表示する話者ID（＝操作キャラ）
 // 頭ボーン基準の構図パラメータ（実行中に window.__pt で微調整可）
-const PT = { dist: 0.60, up: 0.06, fwd: 0.02, sign: 1, fov: 27 };   // sign=+1: 頭ボーンの +Z が顔の向き。顔が読める寄り構図
+const PT = { dist: 0.60, up: 0.06, fwd: 0.02, sign: 1, fov: 27, basis: 'chest', basisMix: 0.4 };   // basisMix: 0=頭固定(常に正対) / 1=胸固定(首振りが強く出る)   // sign=+1: 頭ボーンの +Z が顔の向き。顔が読める寄り構図
 let portraitCam = null, portraitLip = null, portraitOn = false, portraitBg = null;
 const portraitGuests = new Map();   // actorId -> { vrm, lip, loading } （talks.json の actor.vrm を遅延読込）
 let portraitWho = PORTRAIT_ACTOR;   // 今ポートレートに映している話者
+let portraitStage = false;         // true=シナリオ中の全画面ステージ表示
+const PT_STAGE = { dist: 1.5, up: 0.02, fwd: 0, fov: 32 };   // バストアップ寄りの引き
 const GUEST_POS = new THREE.Vector3(0, -800, 0);   // 本編カメラから見えない控え位置（ポートレート専用レイヤなので実害なし）
-const _ptV1 = new THREE.Vector3(), _ptV2 = new THREE.Vector3(), _ptV3 = new THREE.Vector3(), _ptEye = new THREE.Vector3(), _ptQ = new THREE.Quaternion();
+const GUEST_IDLE_VRMA = 'HumanM@Idle01.vrma';      // 会話相手の待機モーション
+const _ptV1 = new THREE.Vector3(), _ptV2 = new THREE.Vector3(), _ptV3 = new THREE.Vector3(), _ptEye = new THREE.Vector3(), _ptQ = new THREE.Quaternion(), _ptQ2 = new THREE.Quaternion();
 window.__pt = PT;   // 構図の微調整用
 function setupPortrait() {   // プレイヤーVRM読込後に呼ぶ
   if (NO_PORTRAIT || portraitCam || !player.vrm) return;
@@ -927,6 +938,7 @@ function setupPortrait() {   // プレイヤーVRM読込後に呼ぶ
   try { portraitLip = createLipSync(player.vrm); } catch (e) { console.warn('リップシンク初期化失敗:', e); }
   preloadGuestVrms();   // 会話相手のVRMを裏で先読み（初回のセリフから立体表示にするため）
 }
+let guestPreloadDone = false;
 async function preloadGuestVrms() {
   for (let i = 0; i < 40 && !(ev.talks && ev.talks.actors); i++) await new Promise((r) => setTimeout(r, 500));   // talks.json 待ち
   const actors = (ev.talks && ev.talks.actors) || {};
@@ -934,6 +946,7 @@ async function preloadGuestVrms() {
     if (!a || !a.vrm || aid === PORTRAIT_ACTOR) continue;
     await ensureGuestVrm(aid, a.vrm);   // 直列＝読込集中で本編がカクつかないように
   }
+  guestPreloadDone = true;
 }
 function headNodeOf(vrm) {
   const hm = vrm && vrm.humanoid;
@@ -946,6 +959,13 @@ function portraitSubject() {   // 現在の話者のVRM（プレイヤー or ゲ
   return (g && g.vrm) || null;
 }
 function portraitHeadNode() { return headNodeOf(portraitSubject()); }
+function portraitBasisNode(vrm) {   // カメラの基準は胸（頭に固定すると首を振っても追従して顔が動いて見えない）
+  const hm = vrm && vrm.humanoid;
+  if (!hm) return null;
+  const get = (n) => (hm.getNormalizedBoneNode ? hm.getNormalizedBoneNode(n) : null) || (hm.getRawBoneNode ? hm.getRawBoneNode(n) : null);
+  for (const n of (PT.basis === 'head' ? ['head'] : ['chest', 'upperChest', 'spine', 'hips', 'head'])) { const b = get(n); if (b) return b; }
+  return null;
+}
 async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポートレート専用レイヤへ読み込む
   let g = portraitGuests.get(actorId);
   if (g) return g.vrm;
@@ -959,11 +979,29 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
     if (!vrm) throw new Error('VRM拡張なし: ' + file);
     vrm.scene.position.copy(GUEST_POS).x += portraitGuests.size * 8;   // 1体ずつ離す（重ねると隣の後頭部が映り込む）
     vrm.scene.traverse((o) => { o.layers.set(PORTRAIT_LAYER); o.frustumCulled = false; });   // 本編カメラには映らない
+    vrm.scene.visible = false;   // 喋る時だけ表示
     scene.add(vrm.scene);
     vrm.scene.updateMatrixWorld(true);
     g.vrm = vrm;
+    try {   // アイドル再生（Tポーズ回避）。VRMAが無ければ腕だけ下ろす
+      const vres = await fetch('../vrma/' + encodeURIComponent(GUEST_IDLE_VRMA));
+      if (!vres.ok) throw new Error('idle vrma ' + vres.status);
+      const al = new GLTFLoader(); al.register((pl) => new VRMAnimationLoaderPlugin(pl));
+      const ag = await al.loadAsync(URL.createObjectURL(await vres.blob()));
+      const anims = ag.userData.vrmAnimations;
+      if (!anims || !anims.length) throw new Error('vrmAnimations なし');
+      const clip = createVRMAnimationClip(anims[0], vrm); stripRootMotion(clip);
+      g.mixer = new THREE.AnimationMixer(vrm.scene);
+      g.mixer.clipAction(clip).setLoop(THREE.LoopRepeat, Infinity).play();
+    } catch (e) {
+      console.warn('ゲストのアイドル再生失敗（腕を下ろすだけにします）:', actorId, e.message || e);
+      const hm = vrm.humanoid;
+      const arm = (n, z) => { const b2 = hm.getNormalizedBoneNode ? hm.getNormalizedBoneNode(n) : null; if (b2) b2.rotation.z = z; };
+      arm('leftUpperArm', 1.15); arm('rightUpperArm', -1.15);
+    }
     try { g.lip = createLipSync(vrm); } catch (e) { console.warn('ゲストのリップシンク初期化失敗:', actorId, e); }
     try { await renderer.compileAsync(scene, portraitCam); } catch { /* 事前コンパイル失敗は無視（初回に少し詰まるだけ） */ }
+
     console.log('ポートレート用VRM読込:', actorId, file);
   } catch (e) {
     console.warn('ポートレート用VRM読込失敗:', actorId, file, e);
@@ -974,31 +1012,56 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
 function updatePortrait(dt) {
   if (portraitLip) portraitLip.update(dt * 1000);
   const gCur = portraitWho !== PORTRAIT_ACTOR ? portraitGuests.get(portraitWho) : null;
-  if (gCur && gCur.vrm) {   // ゲストは会話中だけ更新（表情/リップ/揺れもの）
+  if (gCur && gCur.vrm) {   // ゲストは会話中だけ更新（モーション/表情/リップ/揺れもの）
     if (gCur.lip) gCur.lip.update(dt * 1000);
+    if (gCur.mixer) gCur.mixer.update(dt);
     gCur.vrm.update(dt);
   }
   if (!portraitOn || !portraitCam) return;
   const h = portraitHeadNode();
   if (!h) { portraitOn = false; return; }
-  h.getWorldPosition(_ptV1); h.getWorldQuaternion(_ptQ);
+  h.getWorldPosition(_ptV1);   // 注視点＝頭（顔は常に画面内）
+  h.getWorldQuaternion(_ptQ);
+  const bn = portraitBasisNode(portraitSubject());   // 向き＝頭と胸の中間（首振りが画に出るが顔は外れない）
+  if (bn && bn !== h) { bn.getWorldQuaternion(_ptQ2); _ptQ.slerp(_ptQ2, Math.max(0, Math.min(1, PT.basisMix))); }
   // 顔の向き（体の傾き・首振りに追従）。VRM0は前方が -Z なのでモデルごとに符号を判定
   const fz = portraitSubject()?.lookAt?.faceFront?.z;
   const fwd = _ptV2.set(0, 0, PT.sign * (typeof fz === 'number' && fz < 0 ? -1 : 1)).applyQuaternion(_ptQ);
   const up = _ptV3.set(0, 1, 0).applyQuaternion(_ptQ);
-  const ov = ((ev.talks && ev.talks.actors && ev.talks.actors[portraitWho]) || {}).pt || {};   // 話者ごとの構図上書き（頭の大きさ/被り物の差を吸収）
-  const dist = ov.dist ?? PT.dist, upOff = ov.up ?? PT.up, fwdOff = ov.fwd ?? PT.fwd, fov = ov.fov ?? PT.fov;
+  const ov0 = ((ev.talks && ev.talks.actors && ev.talks.actors[portraitWho]) || {}).pt || {};   // 話者ごとの構図上書き（頭の大きさ/被り物の差を吸収）
+  const base = portraitStage ? PT_STAGE : PT;
+  const ov = portraitStage ? (ov0.stage || {}) : ov0;
+  const dist = ov.dist ?? base.dist, upOff = ov.up ?? base.up, fwdOff = ov.fwd ?? base.fwd, fov = ov.fov ?? base.fov;
   _ptEye.copy(_ptV1).addScaledVector(up, upOff).addScaledVector(fwd, fwdOff);   // 頭ボーン=首元→目の高さへ
   portraitCam.position.copy(_ptEye).addScaledVector(fwd, dist);
   portraitCam.up.copy(up);
   portraitCam.lookAt(_ptEye);
-  if (portraitCam.fov !== fov) { portraitCam.fov = fov; portraitCam.updateProjectionMatrix(); }
-  if (portraitBg) { portraitBg.position.copy(_ptEye).addScaledVector(fwd, -0.9); portraitBg.lookAt(portraitCam.position); }
+  const rr = portraitRect();
+  const asp = rr && rr.height > 0 ? rr.width / rr.height : 1;
+  if (portraitCam.fov !== fov || portraitCam.aspect !== asp) { portraitCam.fov = fov; portraitCam.aspect = asp; portraitCam.updateProjectionMatrix(); }
+  if (portraitBg) {   // 背景板は画角を必ず覆うサイズに（街が見えないように）
+    const back = portraitStage ? 2.2 : 0.9;
+    portraitBg.position.copy(_ptEye).addScaledVector(fwd, -back);
+    portraitBg.lookAt(portraitCam.position);
+    const halfH = Math.tan(fov * Math.PI / 360) * (dist + back) * 2.2;
+    portraitBg.scale.setScalar(Math.max(1, halfH * Math.max(1, asp)));
+  }
 }
-function renderPortrait() {   // メイン描画の直後に、顔枠の矩形だけへ追加描画
-  if (!portraitOn || !portraitCam || !talkEls) return;
-  const r = talkEls.face.getBoundingClientRect();
-  if (r.width < 4 || r.bottom <= 0) return;
+const HUD_IDS = ['status', 'crosshair', 'hint', 'attrib'];   // シナリオ中に隠すゲームHUD
+function setGameHudVisible(on) {
+  for (const id of HUD_IDS) { const el = $(id); if (el) el.style.visibility = on ? '' : 'hidden'; }
+  if (hpBarEl && hpBarEl.parentElement && hpBarEl.parentElement.parentElement) hpBarEl.parentElement.parentElement.style.visibility = on ? '' : 'hidden';
+  if (paramsEl) paramsEl.style.visibility = on ? '' : 'hidden';
+  if (killEl) killEl.style.visibility = on ? '' : 'hidden';
+}
+function portraitRect() {   // 描画先の矩形（会話=顔枠 / シナリオ=画面全体）
+  if (portraitStage) return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight, bottom: window.innerHeight };
+  return talkEls ? talkEls.face.getBoundingClientRect() : null;
+}
+function renderPortrait() {   // メイン描画の直後に、対象矩形へキャラだけを追加描画
+  if (!portraitOn || !portraitCam) return;
+  const r = portraitRect();
+  if (!r || r.width < 4 || r.bottom <= 0) return;
   const x = Math.round(r.left), y = Math.round(r.top);   // WebGPU は左上原点
   const w = Math.round(r.width), h = Math.round(r.height);
   renderer.autoClear = false;
@@ -1038,6 +1101,43 @@ function ensureTalkUI() {
   document.body.appendChild(wrap);
   talkEls = { wrap, face, img, fb, name, text };
 }
+let activeGuest = null;
+function setActiveGuest(who) {   // 喋っているゲストだけ表示（シーンからの出し入れは切替時に250msのヒッチが出るので不可）
+  if (activeGuest === who) return;
+  const prev = activeGuest && portraitGuests.get(activeGuest);
+  if (prev && prev.vrm) prev.vrm.scene.visible = false;
+  activeGuest = who;
+  const cur = who && portraitGuests.get(who);
+  if (cur && cur.vrm) cur.vrm.scene.visible = true;
+}
+function beginPortraitFor(who, face, text, stage) {   // 話者の立体表示を開始（戻り値=立体表示できたか）
+  if (NO_PORTRAIT || !portraitCam) return false;
+  portraitWho = who;
+  let live = false;
+  if (who === PORTRAIT_ACTOR) live = player.ready && !playerDead;
+  else {
+    const a = (ev.talks && ev.talks.actors && ev.talks.actors[who]) || {};
+    const g = portraitGuests.get(who);
+    if (g && g.vrm) live = true;
+    else if (a.vrm) ensureGuestVrm(who, a.vrm);   // 未読込なら読込だけ走らせる（次の行から立体表示）
+  }
+  portraitStage = !!stage && live;
+  portraitOn = live;
+  setActiveGuest(live && who !== PORTRAIT_ACTOR ? who : null);
+  if (!live) return false;
+  const lip = who === PORTRAIT_ACTOR ? portraitLip : (portraitGuests.get(who) || {}).lip;
+  if (lip && text) lip.play(text, TALK_CPS);
+  if (who !== PORTRAIT_ACTOR) {   // 表情（talks.json の face を VRM表情へ）
+    const em = (portraitGuests.get(who) || {}).vrm?.expressionManager;
+    if (em) {
+      for (const nm of ['happy', 'angry', 'sad', 'relaxed', 'surprised']) { try { em.setValue(nm, 0); } catch { /* noop */ } }
+      const map = { smile: 'happy', angry: 'angry', worry: 'sad', panic: 'surprised', weak: 'sad', damage: 'sad' };
+      const ex = map[face || 'normal'];
+      if (ex) { try { em.setValue(ex, 1); } catch { /* noop */ } }
+    }
+  }
+  return true;
+}
 function queueTalk(id) {
   const lines = ev.talks && ev.talks.talks && ev.talks.talks[id];
   if (!lines) { console.warn('talk未定義:', id); return; }
@@ -1052,34 +1152,13 @@ function showTalkLine(ln) {
   talkEls.fb.textContent = (actor.name || '?').slice(0, 1);
   talkEls.fb.style.background = actor.color || '#445';
   talkEls.img.style.display = 'none';
-  portraitWho = ln.who;
-  let live = false;
-  if (!NO_PORTRAIT && portraitCam) {
-    if (ln.who === PORTRAIT_ACTOR) live = player.ready && !playerDead;
-    else {
-      const av = actor && actor.vrm;   // talks.json の actor.vrm（例: doctor_mil.vrm）
-      const g = portraitGuests.get(ln.who);
-      if (g && g.vrm) live = true;
-      else if (av) { ensureGuestVrm(ln.who, av).then((v) => { if (v && talkCur === ln) showTalkLine(ln); }); }   // 読込完了で立体表示へ
-    }
-  }
-  portraitOn = live;
-  if (live && ln.who !== PORTRAIT_ACTOR) {   // ゲストの表情（talks.json の face を VRM表情名として適用）
-    const g = portraitGuests.get(ln.who);
-    const em = g && g.vrm && g.vrm.expressionManager;
-    if (em) {
-      for (const nm of ['happy', 'angry', 'sad', 'relaxed', 'surprised']) { try { em.setValue(nm, 0); } catch { /* noop */ } }
-      const map = { smile: 'happy', angry: 'angry', worry: 'sad', panic: 'surprised', weak: 'sad', damage: 'sad' };
-      const ex = map[ln.face || 'normal'];
-      if (ex) { try { em.setValue(ex, 1); } catch { /* noop */ } }
-    }
+  const live = beginPortraitFor(ln.who, ln.face, ln.text, false);   // 会話ウィンドウ＝顔枠モード
+  if (!live && actor && actor.vrm) {   // 読込中だった場合、完了したら立体表示へ差し替え
+    ensureGuestVrm(ln.who, actor.vrm).then((v) => { if (v && talkCur === ln) showTalkLine(ln); });
   }
   talkEls.face.style.background = live ? 'transparent' : '#223';   // 立体表示中はキャンバスを透かす
   talkEls.fb.style.display = live ? 'none' : '';
-  if (live) {
-    const lip = ln.who === PORTRAIT_ACTOR ? portraitLip : (portraitGuests.get(ln.who) || {}).lip;
-    if (lip) lip.play(ln.text, TALK_CPS);
-  } else {
+  if (!live) {
     talkEls.img.onload = () => { talkEls.img.style.display = ''; };
     talkEls.img.onerror = () => { talkEls.img.style.display = 'none'; };   // 仮画像のまま
     talkEls.img.src = '../scenario2d/face/' + ln.who + '/' + (ln.face || 'normal') + '.png';
@@ -1093,7 +1172,7 @@ function updateTalk(dt) {
     talkCur = null;
   }
   if (talkQ.length) { talkCur = talkQ.shift(); showTalkLine(talkCur); }
-  else if (talkEls) { talkEls.wrap.style.display = 'none'; portraitOn = false; }
+  else if (talkEls) { talkEls.wrap.style.display = 'none'; portraitOn = false; setActiveGuest(null); }
 }
 let killCount = 0, killShowT = 0, killEl = null;
 function addKill(kind = 'jet') {
@@ -1370,7 +1449,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; } };
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; } };
 // ── キャラ選択パネル（👤ボタン）──
 function setupCharUI() {
   const btn = document.createElement('button');
