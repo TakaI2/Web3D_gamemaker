@@ -957,7 +957,7 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
     const gltf = await loader.loadAsync('../vrm/' + encodeURIComponent(file));
     const vrm = gltf.userData.vrm;
     if (!vrm) throw new Error('VRM拡張なし: ' + file);
-    vrm.scene.position.copy(GUEST_POS);
+    vrm.scene.position.copy(GUEST_POS).x += portraitGuests.size * 8;   // 1体ずつ離す（重ねると隣の後頭部が映り込む）
     vrm.scene.traverse((o) => { o.layers.set(PORTRAIT_LAYER); o.frustumCulled = false; });   // 本編カメラには映らない
     scene.add(vrm.scene);
     vrm.scene.updateMatrixWorld(true);
@@ -982,13 +982,17 @@ function updatePortrait(dt) {
   const h = portraitHeadNode();
   if (!h) { portraitOn = false; return; }
   h.getWorldPosition(_ptV1); h.getWorldQuaternion(_ptQ);
-  const fwd = _ptV2.set(0, 0, PT.sign).applyQuaternion(_ptQ);   // 顔の向き（体の傾き・首振りに追従）
+  // 顔の向き（体の傾き・首振りに追従）。VRM0は前方が -Z なのでモデルごとに符号を判定
+  const fz = portraitSubject()?.lookAt?.faceFront?.z;
+  const fwd = _ptV2.set(0, 0, PT.sign * (typeof fz === 'number' && fz < 0 ? -1 : 1)).applyQuaternion(_ptQ);
   const up = _ptV3.set(0, 1, 0).applyQuaternion(_ptQ);
-  _ptEye.copy(_ptV1).addScaledVector(up, PT.up).addScaledVector(fwd, PT.fwd);   // 頭ボーン=首元→目の高さへ
-  portraitCam.position.copy(_ptEye).addScaledVector(fwd, PT.dist);
+  const ov = ((ev.talks && ev.talks.actors && ev.talks.actors[portraitWho]) || {}).pt || {};   // 話者ごとの構図上書き（頭の大きさ/被り物の差を吸収）
+  const dist = ov.dist ?? PT.dist, upOff = ov.up ?? PT.up, fwdOff = ov.fwd ?? PT.fwd, fov = ov.fov ?? PT.fov;
+  _ptEye.copy(_ptV1).addScaledVector(up, upOff).addScaledVector(fwd, fwdOff);   // 頭ボーン=首元→目の高さへ
+  portraitCam.position.copy(_ptEye).addScaledVector(fwd, dist);
   portraitCam.up.copy(up);
   portraitCam.lookAt(_ptEye);
-  if (portraitCam.fov !== PT.fov) { portraitCam.fov = PT.fov; portraitCam.updateProjectionMatrix(); }
+  if (portraitCam.fov !== fov) { portraitCam.fov = fov; portraitCam.updateProjectionMatrix(); }
   if (portraitBg) { portraitBg.position.copy(_ptEye).addScaledVector(fwd, -0.9); portraitBg.lookAt(portraitCam.position); }
 }
 function renderPortrait() {   // メイン描画の直後に、顔枠の矩形だけへ追加描画

@@ -13,15 +13,22 @@
     },
     "mayor": {
       "name": "市長",
-      "color": "#c09a4a"
+      "color": "#c09a4a",
+      "vrm": "sicho.vrm"
     },
     "kanbu": {
       "name": "幹部",
-      "color": "#8a93a5"
+      "color": "#8a93a5",
+      "vrm": "commander.vrm",
+      "pt": {
+        "up": -0.03,
+        "dist": 0.72
+      }
     },
     "elix": {
       "name": "エリクシラ",
-      "color": "#a55ae0"
+      "color": "#a55ae0",
+      "vrm": "JOY_vamp.vrm"
     }
   },
   "talks": {

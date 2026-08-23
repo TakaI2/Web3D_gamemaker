@@ -31,6 +31,7 @@ const jsSrc = fs.readFileSync(path.join(src, 'city-fly.js'), 'utf8')
   .replace(/\.\.\/npc\//g, './npc/')
   .replace(/\.\.\/timeline\//g, './timeline/')
   .replace(/\.\.\/vrma\//g, './vrma/')
+  .replace(/\.\.\/vrm\//g, './vrm/')   // 会話ポートレート用VRM（vrma より後に置くと誤置換するので順序注意）
   .replace(/\.\.\/roads\//g, './roads/')
   .replace(/\.\.\/maps\//g, './maps/')
   .replace(/\.\.\/fx\//g, './fx/')
@@ -156,6 +157,20 @@ if (fs.existsSync(sndSrc)) {
 }
 // ゲームループ定義（イベント・会話・2Dシナリオ・フロー）
 fs.mkdirSync(path.join(dest, 'cityfly'), { recursive: true });
+// 会話ポートレート用VRM（talks.json の actor.vrm）
+try {
+  const tj = JSON.parse(fs.readFileSync(path.join(pub, 'cityfly', 'talks.json'), 'utf8'));
+  const need = [...new Set(Object.values(tj.actors || {}).map((a) => a && a.vrm).filter(Boolean))];
+  if (need.length) {
+    const vDest = path.join(dest, 'vrm'); fs.mkdirSync(vDest, { recursive: true });
+    for (const f of need) {
+      const src2 = path.join(pub, 'vrm', f);
+      if (!fs.existsSync(src2)) { console.warn('skip missing portrait vrm: ' + f); continue; }
+      fs.copyFileSync(src2, path.join(vDest, f));
+      console.log('copied: vrm/' + f + ' (portrait)');
+    }
+  }
+} catch (e) { console.warn('ポートレートVRMの収集に失敗:', e.message); }
 for (const f of ['events.json', 'talks.json']) {
   fs.copyFileSync(path.join(pub, 'cityfly', f), path.join(dest, 'cityfly', f));
   console.log(`copied: cityfly/${f}`);
