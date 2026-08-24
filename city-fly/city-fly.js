@@ -923,6 +923,7 @@ const GUEST_POS = new THREE.Vector3(0, -800, 0);   // 本編カメラから見�
 const exprDefsP = fetch('../cityfly/expressions.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);   // カスタム表情の合成定義
 const GUEST_IDLE_VRMA = 'HumanM@Idle01.vrma';      // 会話相手の待機モーション
 const _ptV1 = new THREE.Vector3(), _ptV2 = new THREE.Vector3(), _ptV3 = new THREE.Vector3(), _ptEye = new THREE.Vector3(), _ptQ = new THREE.Quaternion(), _ptQ2 = new THREE.Quaternion();
+const _ptSunPos = new THREE.Vector3(), _ptSunCol = new THREE.Color();   // ポートレート描画中のライト退避用
 window.__pt = PT;   // 構図の微調整用
 function setupPortrait() {   // プレイヤーVRM読込後に呼ぶ
   if (NO_PORTRAIT || portraitCam || !player.vrm) return;
@@ -1126,7 +1127,29 @@ function renderPortrait() {   // メイン描画の直後に、対象矩形へ�
   renderer.setViewport(x, y, w, h);
   renderer.setClearColor(0x10131f, 1);
   renderer.clear(true, true, false);
+  // 立体表示は時刻に依らず常に昼の標準照明で描く。強さ・色・向きの差し替え＝uniform更新のみで
+  // 再コンパイルは走らない（ライトの追加・削除は構造が変わるので厳禁＝既存の鉄則どおり）。
+  // 注意: ライトuniformはフレーム単位キャッシュ（AnalyticLightNode=FRAME更新・Animationが1tick1回frameId++）のため、
+  // 値だけ変えても同一フレーム2回目のrenderには反映されない。前後で frameId を進めて強制再評価させる。
+  const s = dayRefs.sun, am = dayRefs.amb, hm = dayRefs.hemi, k = charFill.key;
+  const nf = renderer._nodes && renderer._nodes.nodeFrame;
+  const lit = !!(s && am && hm && nf);
+  let sI, amI, hmI, kI;
+  if (lit) {
+    sI = s.intensity; amI = am.intensity; hmI = hm.intensity;
+    _ptSunPos.copy(s.position); _ptSunCol.copy(s.color);
+    s.intensity = 1.7; s.color.setHex(0xfff4e0); s.position.set(3000, 6000, 3600);   // 起動時の昼標準（ポートレート構図はこの光で調整済み）
+    am.intensity = 1.0; hm.intensity = 0.6;
+    if (k) { kI = k.intensity; k.intensity = charLightCfg.dirI; }
+    nf.frameId++;
+  }
   renderer.render(scene, portraitCam);
+  if (lit) {
+    s.intensity = sI; s.color.copy(_ptSunCol); s.position.copy(_ptSunPos);
+    am.intensity = amI; hm.intensity = hmI;
+    if (k) k.intensity = kI;
+    nf.frameId++;   // 次のメイン描画でも必ず再評価させる（戻した夜の値を確実に反映）
+  }
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
   renderer.autoClear = true;
@@ -1509,7 +1532,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; } };
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; } };
 // ── キャラ選択パネル（👤ボタン）──
 function setupCharUI() {
   const btn = document.createElement('button');
