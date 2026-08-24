@@ -65,7 +65,7 @@ if (fs.existsSync(mapsSrc)) {
 }
 
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js']) {
+for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js', 'vrm-expressions.js']) {
   const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8')
     .replace(/\.\.\/lib\//g, './')
     .replace(/\.\.\/speech\//g, './speech/');   // speech-set.js は import.meta.url 相対（distではlibがルート直下）
@@ -180,7 +180,7 @@ try {
     console.log('copied: npc/' + f + ' (portrait)');
   }
 } catch (e) { console.warn('ポートレートVRMの収集に失敗:', e.message); }
-for (const f of ['events.json', 'talks.json']) {
+for (const f of ['events.json', 'talks.json', 'expressions.json']) {
   fs.copyFileSync(path.join(pub, 'cityfly', f), path.join(dest, 'cityfly', f));
   console.log(`copied: cityfly/${f}`);
 }

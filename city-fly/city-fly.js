@@ -18,6 +18,7 @@ import { createFxSystem, cloneFxConfig, FX_PRESETS } from '../lib/fx-particles.j
 import { createDissolve } from '../lib/fx-dissolve.js';
 import { createScenario2D } from '../lib/scenario2d.js';
 import { createLipSync } from '../lib/lip-sync.js';
+import { registerCustomExpressions, resetEmotionExpressions } from '../lib/vrm-expressions.js';
 import { createFlow } from '../lib/flow-runner.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
@@ -919,6 +920,7 @@ let portraitWho = PORTRAIT_ACTOR;   // 今ポートレートに映している�
 let portraitStage = false;         // true=シナリオ中の全画面ステージ表示
 const PT_STAGE = { dist: 1.5, up: 0.02, fwd: 0, fov: 32 };   // バストアップ寄りの引き
 const GUEST_POS = new THREE.Vector3(0, -800, 0);   // 本編カメラから見えない控え位置（ポートレート専用レイヤなので実害なし）
+const exprDefsP = fetch('../cityfly/expressions.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);   // カスタム表情の合成定義
 const GUEST_IDLE_VRMA = 'HumanM@Idle01.vrma';      // 会話相手の待機モーション
 const _ptV1 = new THREE.Vector3(), _ptV2 = new THREE.Vector3(), _ptV3 = new THREE.Vector3(), _ptEye = new THREE.Vector3(), _ptQ = new THREE.Quaternion(), _ptQ2 = new THREE.Quaternion();
 window.__pt = PT;   // 構図の微調整用
@@ -936,6 +938,7 @@ function setupPortrait() {   // プレイヤーVRM読込後に呼ぶ
   if (player.cloth && player.cloth.clothMesh) player.cloth.clothMesh.layers.enable(PORTRAIT_LAYER);
   for (const l of [dayRefs.amb, dayRefs.sun, dayRefs.hemi, charFill.key]) if (l) l.layers.enable(PORTRAIT_LAYER);
   try { portraitLip = createLipSync(player.vrm); } catch (e) { console.warn('リップシンク初期化失敗:', e); }
+  exprDefsP.then((d) => { try { if (d && player.vrm) registerCustomExpressions(player.vrm, d); } catch (e) { console.warn('カスタム表情登録失敗(player):', e); } });
   preloadGuestVrms();   // 会話相手のVRMを裏で先読み（初回のセリフから立体表示にするため）
 }
 let guestPreloadDone = false;
@@ -1030,6 +1033,7 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
       arm('leftUpperArm', 1.15); arm('rightUpperArm', -1.15);
     }
     try { g.lip = createLipSync(vrm); } catch (e) { console.warn('ゲストのリップシンク初期化失敗:', actorId, e); }
+    try { registerCustomExpressions(vrm, await exprDefsP); } catch (e) { console.warn('カスタム表情登録失敗:', actorId, e); }
     try { await warmGuest(g); } catch (e) { console.warn('ゲストの事前コンパイル失敗（初回表示が詰まります）:', actorId, e); }
 
     console.log('ポートレート用VRM読込:', actorId, file);
@@ -1183,7 +1187,7 @@ function beginPortraitFor(who, face, text, stage, extra) {   // 話者の立体�
   if (exOv || who !== PORTRAIT_ACTOR) {
     const em = (who === PORTRAIT_ACTOR ? player.vrm : (portraitGuests.get(who) || {}).vrm)?.expressionManager;
     if (em) {
-      for (const nm of ['neutral', 'happy', 'angry', 'sad', 'relaxed', 'surprised']) { try { em.setValue(nm, 0); } catch { /* noop */ } }
+      resetEmotionExpressions(em);   // 感情系（プリセット＋カスタム）を全て0へ。口パク・まばたきは触らない
       const map = { smile: 'happy', angry: 'angry', worry: 'sad', panic: 'surprised', weak: 'sad', damage: 'sad' };
       const ex = exOv || map[face || 'normal'];
       if (ex) { try { em.setValue(ex, exOv ? (extra.weight ?? 1) : 1); } catch { /* noop */ } }

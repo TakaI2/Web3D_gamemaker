@@ -1,0 +1,10 @@
+{
+  "format": "vrm-custom-expressions",
+  "version": 1,
+  "_comment": "カスタム表情の合成定義。expressions.<表情名> = { <モーフ名>: weight }。モーフ名はVRoid標準（モデルに無いものはスキップ）。story-editorの状態表情プルダウンに自動で追加される",
+  "expressions": {
+    "wink": { "Fcl_EYE_Close_L": 1.0, "Fcl_BRW_Fun": 0.6, "Fcl_MTH_Fun": 0.5 },
+    "kiba": { "Fcl_HA_Fung1": 1.0, "Fcl_MTH_A": 0.6, "Fcl_MTH_Large": 0.3, "Fcl_BRW_Angry": 0.7, "Fcl_EYE_Angry": 0.5 },
+    "zetsubo": { "Fcl_EYE_Highlight_Hide": 1.0, "Fcl_ALL_Sorrow": 0.8, "Fcl_EYE_Spread": 0.3 }
+  }
+}

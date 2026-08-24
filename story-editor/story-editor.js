@@ -11,6 +11,7 @@ let stage = null;
 let story = newStory();
 let selected = null;            // 選択中コマンドの index
 let npcFiles = [], vrmaFiles = [], stageFiles = [];
+let exprOptions = [...EXPR_PRESETS];   // 状態表情の候補（cityfly/expressions.json のカスタム表情を追加で読み込む）
 
 function newStory() { return { version: 1, id: 'untitled', title: '', stage: '', actors: [], script: [] }; }
 
@@ -102,7 +103,7 @@ function buildField(op, f) {
     return rowEl(f.key, wrap);
   }
   if (t === 'expr') {
-    const sel = selectEl(['', ...EXPR_PRESETS], op[f.key] ?? '', (v) => { op[f.key] = v; renderCmdList(); }, '(なし)');
+    const sel = selectEl(['', ...exprOptions], op[f.key] ?? '', (v) => { op[f.key] = v; renderCmdList(); }, '(なし)');
     return rowEl(f.key, sel);
   }
   if (t === 'actorRef') {
@@ -155,7 +156,7 @@ function buildLinesField(op) {
     txt.oninput = () => { v.text = txt.value; writeLine(lines, i, v); };
     wr.appendChild(txt);
     const ctl = document.createElement('div'); ctl.style.cssText = 'display:flex;gap:4px;margin-top:4px;align-items:center;';
-    const sel = selectEl(['', ...EXPR_PRESETS], v.expression, (val) => { v.expression = val; writeLine(lines, i, v); refresh(); }, '(状態表情)');
+    const sel = selectEl(['', ...exprOptions], v.expression, (val) => { v.expression = val; writeLine(lines, i, v); refresh(); }, '(状態表情)');
     sel.style.flex = '1'; ctl.appendChild(sel);
     if (v.expression) {
       const w = document.createElement('input'); w.type = 'range'; w.min = '0'; w.max = '1'; w.step = '0.05'; w.value = v.weight; w.style.cssText = 'flex:1;min-width:0;';
@@ -224,7 +225,7 @@ async function play2D(fromSelected) {
   if (!scn2d) {
     try { scn2dActors = (await (await fetch('../cityfly/talks.json')).json()).actors || null; } catch { /* 仮表示にフォールバック */ }
     scn2dStage = createScenario2DStage({ actors: () => scn2dActors });   // 話者を全画面3D表示（ゲームのOP/EDと同じ構図）
-    window.__scn2dStage = scn2dStage;   // デバッグ・自動テスト用
+    window.__scn2dStage = scn2dStage; window.__scn2dActors = () => scn2dActors;   // デバッグ・自動テスト用
     scn2d = createScenario2D({ basePath: '../scenario2d', soundPath: '../sound', actors: () => scn2dActors, stage: scn2dStage.hooks });
     const loop = (t) => { const dt = Math.min(0.1, (t - scn2dLast) / 1000); scn2dLast = t; scn2d.update(dt); scn2dStage.update(dt); requestAnimationFrame(loop); };
     requestAnimationFrame((t) => { scn2dLast = t; requestAnimationFrame(loop); });
@@ -252,6 +253,10 @@ async function init() {
     fetchList('../vrma/manifest.json', []),
     fetchList('../models/manifest.json', []),
   ]);
+  try {   // カスタム表情（合成表情）を状態表情の候補へ追加
+    const ed = await (await fetch('../cityfly/expressions.json')).json();
+    exprOptions = [...EXPR_PRESETS, ...Object.keys((ed && ed.expressions) || {})];
+  } catch { /* 定義なし=プリセットのみ */ }
 
   // op ピッカー
   const picker = $('op-picker'); picker.innerHTML = '';
