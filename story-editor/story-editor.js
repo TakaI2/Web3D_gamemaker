@@ -3,6 +3,7 @@
 
 import { createStoryStage } from '../lib/story-stage.js';
 import { createScenario2D } from '../lib/scenario2d.js';
+import { createScenario2DStage } from '../lib/scenario2d-stage.js';
 import { STORY_OPS, OP_ORDER, makeOp, EXPR_PRESETS } from '../lib/story-ops.js';
 
 const $ = (id) => document.getElementById(id);
@@ -109,6 +110,16 @@ function buildField(op, f) {
     const sel = selectEl(ids, op[f.key] ?? '', (v) => { op[f.key] = v; renderCmdList(); }, '(アクター)');
     return rowEl(f.key, sel);
   }
+  if (t === 'combo') {   // 候補つき自由入力（datalist）
+    const inp = document.createElement('input'); inp.type = 'text'; inp.value = op[f.key] ?? '';
+    const dlId = 'dl-combo-' + f.key;
+    let dl = document.getElementById(dlId);
+    if (!dl) { dl = document.createElement('datalist'); dl.id = dlId; document.body.appendChild(dl); }
+    dl.innerHTML = (f.options || []).map((o) => `<option value="${o}">`).join('');
+    inp.setAttribute('list', dlId);
+    inp.oninput = () => { op[f.key] = inp.value; renderCmdList(); };
+    return rowEl(f.key, inp);
+  }
   if (t === 'npcRef')  return rowEl(f.key, selectEl(npcFiles, op[f.key] ?? '', (v) => { op[f.key] = v; renderCmdList(); }, '(npc)'));
   if (t === 'vrmaRef') return rowEl(f.key, selectEl(vrmaFiles, op[f.key] ?? '', (v) => { op[f.key] = v; renderCmdList(); }, '(vrma)'));
   if (t === 'stageRef')return rowEl(f.key, selectEl(['', ...stageFiles], op[f.key] ?? '', (v) => { op[f.key] = v; renderCmdList(); }, '(stage)'));
@@ -207,18 +218,26 @@ async function refreshStoryList(current) {
   if (current && files.includes(current)) sel.value = current;
 }
 
-// ── 2D紙芝居プレビュー（ゲームと同じ lib/scenario2d を全画面再生。Escで終了）──
-let scn2d = null, scn2dActors = null, scn2dLast = 0;
+// ── 2D紙芝居プレビュー（ゲームと同じ lib/scenario2d を全画面再生＋3D話者ステージ。Escで終了）──
+let scn2d = null, scn2dStage = null, scn2dActors = null, scn2dLast = 0;
 async function play2D(fromSelected) {
   if (!scn2d) {
     try { scn2dActors = (await (await fetch('../cityfly/talks.json')).json()).actors || null; } catch { /* 仮表示にフォールバック */ }
-    scn2d = createScenario2D({ basePath: '../scenario2d', soundPath: '../sound', actors: () => scn2dActors });
-    const loop = (t) => { const dt = Math.min(0.1, (t - scn2dLast) / 1000); scn2dLast = t; scn2d.update(dt); requestAnimationFrame(loop); };
+    scn2dStage = createScenario2DStage({ actors: () => scn2dActors });   // 話者を全画面3D表示（ゲームのOP/EDと同じ構図）
+    window.__scn2dStage = scn2dStage;   // デバッグ・自動テスト用
+    scn2d = createScenario2D({ basePath: '../scenario2d', soundPath: '../sound', actors: () => scn2dActors, stage: scn2dStage.hooks });
+    const loop = (t) => { const dt = Math.min(0.1, (t - scn2dLast) / 1000); scn2dLast = t; scn2d.update(dt); scn2dStage.update(dt); requestAnimationFrame(loop); };
     requestAnimationFrame((t) => { scn2dLast = t; requestAnimationFrame(loop); });
   }
   syncMeta();
   const from = fromSelected && selected != null ? selected : 0;
-  scn2d.play({ ...story, script: story.script.slice(from) }, {});
+  const script = story.script.slice(from);
+  const ids = [...new Set(script.filter((o) => o.op === 'say' && o.actor).map((o) => o.actor))];
+  if (ids.some((id) => !scn2dStage.cast.has(id))) {   // 初回のみ: 話者モデルを読込＋事前コンパイル（以後はキャッシュ）
+    toast('話者モデルを読込中…');
+    await scn2dStage.preload(ids, (id) => toast('読込: ' + id));
+  }
+  scn2d.play({ ...story, script }, {});
 }
 
 // ── プレビュー ──

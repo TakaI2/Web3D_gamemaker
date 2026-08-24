@@ -4,7 +4,8 @@
   "actors": {
     "nei": {
       "name": "ネイ",
-      "color": "#e05a7a"
+      "color": "#e05a7a",
+      "npc": "nei_v2.npc.json"
     },
     "hakase": {
       "name": "博士",

@@ -808,7 +808,7 @@ const TALK_MIN_SEC = 3.2, TALK_CPS = 9;   // 1行の表示時間 = max(最低秒
 const scn = createScenario2D({
   basePath: '../scenario2d', soundPath: '../sound', actors: () => (ev.talks && ev.talks.actors) || null,
   stage: {   // OP/ED: 話者を全画面で3D表示（モデルは起動時に先読み済み＝追加ロードなし）
-    begin: (who, face, text) => { const ok = beginPortraitFor(who, face, text, true); setGameHudVisible(false); return ok; },
+    begin: (who, face, text, extra) => { const ok = beginPortraitFor(who, face, text, true, extra); setGameHudVisible(false); return ok; },
     end: () => { portraitStage = false; portraitOn = false; setActiveGuest(null); setGameHudVisible(true); },
   },
 });
@@ -1162,7 +1162,7 @@ function setActiveGuest(who) {   // 喋っているゲストだけ表示（シ�
   const cur = who && portraitGuests.get(who);
   if (cur && cur.vrm) { cur.vrm.scene.visible = true; if (cur.cloth && cur.cloth.clothMesh) cur.cloth.clothMesh.visible = true; }
 }
-function beginPortraitFor(who, face, text, stage) {   // 話者の立体表示を開始（戻り値=立体表示できたか）
+function beginPortraitFor(who, face, text, stage, extra) {   // 話者の立体表示を開始（戻り値=立体表示できたか）。extra={lipCps,expression,weight}
   if (NO_PORTRAIT || !portraitCam) return false;
   portraitWho = who;
   let live = false;
@@ -1178,14 +1178,15 @@ function beginPortraitFor(who, face, text, stage) {   // 話者の立体表示�
   setActiveGuest(live && who !== PORTRAIT_ACTOR ? who : null);
   if (!live) return false;
   const lip = who === PORTRAIT_ACTOR ? portraitLip : (portraitGuests.get(who) || {}).lip;
-  if (lip && text) lip.play(text, TALK_CPS);
-  if (who !== PORTRAIT_ACTOR) {   // 表情（talks.json の face を VRM表情へ）
-    const em = (portraitGuests.get(who) || {}).vrm?.expressionManager;
+  if (lip && text) lip.play(text, (extra && extra.lipCps) || TALK_CPS);   // say.lipCps で口パク速度を上書き可
+  const exOv = extra && extra.expression;   // 行単位の表情（VRM表情名）。face（2D表情名）より優先
+  if (exOv || who !== PORTRAIT_ACTOR) {
+    const em = (who === PORTRAIT_ACTOR ? player.vrm : (portraitGuests.get(who) || {}).vrm)?.expressionManager;
     if (em) {
-      for (const nm of ['happy', 'angry', 'sad', 'relaxed', 'surprised']) { try { em.setValue(nm, 0); } catch { /* noop */ } }
+      for (const nm of ['neutral', 'happy', 'angry', 'sad', 'relaxed', 'surprised']) { try { em.setValue(nm, 0); } catch { /* noop */ } }
       const map = { smile: 'happy', angry: 'angry', worry: 'sad', panic: 'surprised', weak: 'sad', damage: 'sad' };
-      const ex = map[face || 'normal'];
-      if (ex) { try { em.setValue(ex, 1); } catch { /* noop */ } }
+      const ex = exOv || map[face || 'normal'];
+      if (ex) { try { em.setValue(ex, exOv ? (extra.weight ?? 1) : 1); } catch { /* noop */ } }
     }
   }
   return true;
