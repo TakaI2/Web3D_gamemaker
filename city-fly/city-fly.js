@@ -1030,7 +1030,7 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
       arm('leftUpperArm', 1.15); arm('rightUpperArm', -1.15);
     }
     try { g.lip = createLipSync(vrm); } catch (e) { console.warn('ゲストのリップシンク初期化失敗:', actorId, e); }
-    try { await renderer.compileAsync(scene, portraitCam); } catch { /* 事前コンパイル失敗は無視（初回に少し詰まるだけ） */ }
+    try { await warmGuest(g); } catch (e) { console.warn('ゲストの事前コンパイル失敗（初回表示が詰まります）:', actorId, e); }
 
     console.log('ポートレート用VRM読込:', actorId, file);
   } catch (e) {
@@ -1038,6 +1038,27 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
   }
   g.loading = false;
   return g.vrm;
+}
+async function warmGuest(g) {   // 初登場ヒッチ対策: visible=false のままでは compileAsync が素通りする（Renderer._projectObject が非表示ツリーをスキップ）ため、一時表示して実コンパイル＋1pxの実描画まで済ませる
+  if (!g.vrm || !portraitCam) return;
+  const cm = g.cloth && g.cloth.clothMesh;
+  g.vrm.scene.visible = true;
+  if (cm) cm.visible = true;
+  try {
+    await renderer.compileAsync(scene, portraitCam);
+    if (g.cloth) for (let i = 0; i < 2; i++) { try { g.cloth.update(1 / 60); } catch { /* noop */ } }   // マントの計算パイプラインも温める
+    renderer.autoClear = false;
+    renderer.setScissorTest(true);
+    renderer.setScissor(0, 0, 1, 1);
+    renderer.setViewport(0, 0, 1, 1);
+    renderer.render(scene, portraitCam);   // テクスチャ転送など残りを実描画で確定させる
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+    renderer.autoClear = true;
+  } finally {
+    g.vrm.scene.visible = false;
+    if (cm) cm.visible = false;
+  }
 }
 function updatePortrait(dt) {
   if (portraitLip) portraitLip.update(dt * 1000);
