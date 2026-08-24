@@ -10,6 +10,9 @@
     #topbar { position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 30; display: flex; align-items: center; gap: 8px; padding: 0 10px;
       background: rgba(12,14,22,0.95); border-bottom: 1px solid rgba(255,255,255,0.12); }
     #topbar a, #topbar button, #topbar select, #topbar input { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.22); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; text-decoration: none; }
+    /* ドロップダウン展開時の白地白文字対策: 半透明背景は白ポップアップに合成されるため、select/option に不透明ダークを明示 */
+    select { background-color: #202040; }
+    option { background: #202040; color: #ddd; }
     #topbar input { cursor: text; }
     #topbar .prim { border-color: #6cf; color: #aef; }
     #topbar .spacer { flex: 1; }
