@@ -201,6 +201,20 @@ function cityOk(x, z) {   // 道路・建物を置ける地形か
   return slopeAt(x, z) < 0.42;
 }
 
+// ── 2.5) 埠頭（中央の川の河口の東側。海へ張り出す平らなコンクリ地盤）──
+const WHARF = { x0: 470, x1: 1360, z0: 1420, z1: 1720, h: 2.6 };
+for (let j = 0; j < RES; j++) {
+  for (let i = 0; i < RES; i++) {
+    const x = (i / (RES - 1) - 0.5) * SIZE, z = (j / (RES - 1) - 0.5) * SIZE;
+    if (x < WHARF.x0 || x > WHARF.x1 || z < WHARF.z0 - 60 || z > WHARF.z1) continue;
+    const idx = j * RES + i;
+    if (z >= WHARF.z0) T.heights[idx] = WHARF.h;                                    // 本体=完全フラット
+    else T.heights[idx] = T.heights[idx] + (WHARF.h - T.heights[idx]) * smooth((z - (WHARF.z0 - 60)) / 60);   // 北側は緩くすり付け
+  }
+}
+const inWharf = (x, z) => (x > WHARF.x0 - 10 && x < WHARF.x1 + 10 && z > WHARF.z0 - 45 && z < WHARF.z1)
+  || (z > 1140 && z <= WHARF.z0 && (Math.abs(x - 620) < 25 || Math.abs(x - 1150) < 25));   // 接続路の回廊
+
 // ── 3) 道路網（大通り格子→セル毎の街路→中心部の路地。川・海・山裾でクリップ、大通りの川越え=橋）──
 const NS_ART = [-2050, -1250, -600, 0, 620, 1250, 1850];
 const EW_ART = [-1100, -550, 0, 560, 1150];
@@ -262,6 +276,14 @@ for (let ci = 0; ci < XB.length - 1; ci++) {
     for (let i = 0; i < xs2.length - 1; i++) for (let j = 0; j < zs2.length - 1; j++) subdivide(xs2[i], zs2[j], xs2[i + 1], zs2[j + 1], 0);
   }
 }
+// 埠頭の直線道路（周回＋中通り）と海岸大通り(z=1150)からの接続路
+segs.push({ x1: 520, z1: 1470, x2: 1310, z2: 1470, kind: 'street' });
+segs.push({ x1: 520, z1: 1660, x2: 1310, z2: 1660, kind: 'street' });
+segs.push({ x1: 520, z1: 1470, x2: 520, z2: 1660, kind: 'street' });
+segs.push({ x1: 1310, z1: 1470, x2: 1310, z2: 1660, kind: 'street' });
+segs.push({ x1: 900, z1: 1470, x2: 900, z2: 1660, kind: 'street' });
+segs.push({ x1: 620, z1: 1150, x2: 620, z2: 1470, kind: 'street' });
+segs.push({ x1: 1150, z1: 1150, x2: 1150, z2: 1470, kind: 'street' });
 // クリップ: 10m刻みで 地形OK/川/不可 を判定 → OK区間へ分割。大通りの短い川越え区間は橋として残す
 const bridges = [];
 const pieces = [];
@@ -274,7 +296,7 @@ for (const sg of segs) {
     const t = i / n;
     const x = sg.x1 + (sg.x2 - sg.x1) * t, z = sg.z1 + (sg.z2 - sg.z1) * t;
     const rv = riverAt(x, z);
-    cls.push(rv.d <= 6 ? 1 : cityOk(x, z) ? 0 : 2);
+    cls.push(rv.d <= 6 ? 1 : (cityOk(x, z) || inWharf(x, z)) ? 0 : 2);
   }
   if (sg.kind === 'avenue') {   // 川区間が240m未満で両側がOKなら橋化（クラスを0に書き戻し＋橋サイト記録）
     let i = 0;
@@ -432,6 +454,13 @@ const added = [];
   for (const [cx, cz] of [WS, ES]) {
     offs.forEach((o, i) => added.push({ kit: 'city', model: models[i], tier: 'mid', x: cx + o[0], z: cz + o[1], ry: Math.floor(rng() * 4) * Math.PI / 2, s: 1 }));
   }
+  // 埠頭の工業建物（通常の建物パイプライン=破壊可能）
+  const IND = ['building-e', 'building-g', 'building-k', 'building-i', 'building-q'];
+  let ii = 0;
+  const put = (x, z, ry) => added.push({ kit: 'industrial', model: IND[ii++ % IND.length], tier: 'mid', x, z, ry, s: 1 });
+  for (const x of [560, 690, 820, 1000, 1120, 1250]) put(x, 1502, Math.PI);   // 北通り南側
+  for (const x of [640, 850, 1080, 1240]) put(x, 1438, 0);                    // 北通り北側
+  for (const x of [570, 760, 970, 1170, 1290]) put(x, 1628, 0);               // 海側通り北側
 }
 const g = buildRoadGraph(roads);
 const genEdges = g.edges.map(([aId, bId]) => { const A = g.nodes.get(aId), B = g.nodes.get(bId); return [A.x, 0, A.z, B.x, 0, B.z]; });
@@ -487,6 +516,7 @@ const removed = [];
 for (const it of gen.instances) {
   const rv = riverAt(it.x, it.z);
   let bad = rv.d < 6 || hAt(it.x, it.z) < 1.6 || slopeAt(it.x, it.z) > 0.5 || it.z > coastZ(it.x) - 90;
+  if (!bad && it.z > WHARF.z0 - 50 && it.x > WHARF.x0 - 20 && it.x < WHARF.x1 + 20) bad = true;   // 埠頭は工業建物(added)専用
   if (!bad) for (const br of bridges) {
     const alo = (it.x - br.x) * br.dx + (it.z - br.z) * br.dz;
     const per = -(it.x - br.x) * br.dz + (it.z - br.z) * br.dx;
@@ -504,7 +534,9 @@ for (let j = 0; j < RES; j++) {
   for (let i = 0; i < RES; i++) {
     const x = (i / (RES - 1) - 0.5) * SIZE, z = (j / (RES - 1) - 0.5) * SIZE;
     const h = T.heights[j * RES + i], o = (j * RES + i) * 3, cz = coastZ(x);
-    if (h < 0 && z > cz - 400) {
+    if (h > 1 && z > WHARF.z0 - 8 && z < WHARF.z1 + 4 && x > WHARF.x0 - 4 && x < WHARF.x1 + 4) {
+      T.colors[o] = 148; T.colors[o + 1] = 150; T.colors[o + 2] = 154;   // 埠頭=コンクリ
+    } else if (h < 0 && z > cz - 400) {
       const t = clamp(-h / 42, 0, 1);
       T.colors[o] = 180 - 128 * t; T.colors[o + 1] = 170 - 106 * t; T.colors[o + 2] = 140 - 62 * t;
     } else if (z > cz - 260 && h < 4.5) {
@@ -521,6 +553,11 @@ const out = {
   bridges,
   rails,
   parks,
+  port: {
+    rect: [WHARF.x0, WHARF.z0, WHARF.x1, WHARF.z1], h: WHARF.h,
+    containers: [{ x0: 560, x1: 830, z: 1697 }, { x0: 960, x1: 1300, z: 1697 }],
+    ship: { x: 900, z: WHARF.z1, len: 150 },
+  },
   buildings: { seed: 20260706, removed, moved: {}, added, params: BLD_PARAMS },
   water,
   forest: { cell: FCELL, res: FRES, yOff: 0, model: 'fantasy_GLB format/tree-high-round.glb', treeH: 20, data: b64(forest) },
