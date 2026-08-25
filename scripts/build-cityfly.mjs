@@ -45,6 +45,7 @@ const jsSrc = fs.readFileSync(path.join(src, 'city-fly.js'), 'utf8')
   .replace(/\.\.\/damage\//g, './damage/')     // ダメージ損耗設定
   .replace(/\.\.\/scenario2d/g, './scenario2d')   // 顔グラ・背景（未配置なら404→仮表示）
   .replace(/\.\.\/api\//g, './api/')   // api/save は開発サーバ専用（本番は保存ボタンが失敗表示になるだけ）
+  .replace(/const PUB_ROOT = '\.\.\/'/, "const PUB_ROOT = './'")   // BGM/gif等の動的パスの基点
   .replace(/\.\.\/([\w\-]+\.png)/g, './$1');   // コード直参照のテクスチャ（electric.png等）
 fs.writeFileSync(path.join(dest, 'city-fly.js'), jsSrc);
 console.log('copied: city-fly.js (paths rewritten)');
@@ -180,6 +181,15 @@ try {
     console.log('copied: npc/' + f + ' (portrait)');
   }
 } catch (e) { console.warn('ポートレートVRMの収集に失敗:', e.message); }
+for (const dir of ['BGM', 'gif']) {   // BGM・シナリオ背景GIF
+  const srcD = path.join(pub, dir);
+  if (fs.existsSync(srcD)) {
+    const dd = path.join(dest, dir);
+    fs.mkdirSync(dd, { recursive: true });
+    for (const f of fs.readdirSync(srcD)) fs.copyFileSync(path.join(srcD, f), path.join(dd, f));
+    console.log('copied: ' + dir + '/*');
+  }
+}
 for (const f of ['events.json', 'talks.json', 'expressions.json']) {
   fs.copyFileSync(path.join(pub, 'cityfly', f), path.join(dest, 'cityfly', f));
   console.log(`copied: cityfly/${f}`);

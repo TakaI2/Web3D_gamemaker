@@ -173,7 +173,7 @@ for (const r of RIVERS) {
   }
   flushChunk();
 }
-water.push({ x: 0, z: 2380, w: SIZE, d: 1640, level: 0 });
+for (let ix = 0; ix < 4; ix++) for (let iz = 0; iz < 2; iz++) water.push({ x: -2400 + ix * 1600, z: 1970 + iz * 820, w: 1600, d: 820, level: 0 });   // 海（4x2分割=近景マテリアルの範囲を絞る）
 
 // ── 共通ヘルパ（川回廊への距離・地形適性）──
 const RCELL = 64, RHASH = new Map();
@@ -438,9 +438,9 @@ for (let j = 0; j < FRES; j++) {
     const slope = slopeAt(x, z);
     let den = 0;
     const mf = clamp((h - 130) / 110, 0, 1) * clamp((1.15 - slope) / 1.0, 0, 1);
-    if (mf > 0) den = 200 * mf * (0.55 + 0.45 * fbm(x, z, 5));
+    if (mf > 0) den = 130 * mf * (0.55 + 0.45 * fbm(x, z, 5));
     const rv = riverAt(x, z);
-    if (rv.d > -4 && rv.d < 34 && h < 110) den = Math.max(den, 62 * (0.5 + 0.5 * fbm(x + 999, z, 7)));
+    if (rv.d > -4 && rv.d < 34 && h < 110) den = Math.max(den, 46 * (0.5 + 0.5 * fbm(x + 999, z, 7)));
     forest[j * FRES + i] = Math.round(clamp(den, 0, 255));
   }
 }

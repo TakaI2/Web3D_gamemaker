@@ -6,6 +6,7 @@
   "actors": [],
   "script": [
     { "op": "bg", "color": "#0a1830", "image": "postwar_good.png" },
+    { "op": "bgm.play", "name": "BGM/Destiny.ogg", "loop": true, "volume": 0.55 },
     { "op": "fade.in", "duration": 900 },
     { "op": "say", "actor": "kanbu", "face": "panic", "lines": ["ウォーカータンク、撃破される！？　ば・・・化け物め！！"] },
     { "op": "say", "actor": "kanbu", "face": "normal", "lines": ["これ以上の損害は許容できん。　全軍、撤退！！"] },

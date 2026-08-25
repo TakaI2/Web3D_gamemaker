@@ -223,6 +223,8 @@ const NO_CAPE = _qs.get('nocape') === '1';
 const NO_PORTRAIT = _qs.get('noportrait') === '1';   // 会話ウィンドウの立体ポートレートを無効化（負荷比較用）
 const NO_CITY = _qs.get('nocity') === '1';
 const NO_NPC = _qs.get('nonpc') === '1';
+const NO_FOREST = _qs.get('noforest') === '1';   // 性能切り分け: 森を生やさない
+const PUB_ROOT = '../';   // public直下への相対パス（distビルドが './' へ書換える。BGM/gif等の動的パスに使用）
 const DIAG = _qs.get('diag') === '1';
 const DPR_CAP = parseFloat(_qs.get('dpr') || '') || 0;   // 例 ?dpr=1 で等倍（GPU負荷を大きく下げる）
 // 低スペック向け: ?low=1 で MSAA/環境マップ(IBL)/空シェーダ/雲 をまとめて切り、DPR も 1 に。
@@ -795,9 +797,36 @@ function startMode(mode) {
 function showGameOver() {
   if (goEl) return;
   goEl = document.createElement('div');
-  goEl.style.cssText = 'position:fixed;inset:0;z-index:39;display:flex;align-items:center;justify-content:center;background:rgba(12,0,8,0.55);';
+  goEl.style.cssText = 'position:fixed;inset:0;z-index:39;display:flex;flex-direction:column;gap:26px;align-items:center;justify-content:center;background:rgba(12,0,8,0.55);';
   goEl.innerHTML = '<div style="font:900 76px \'Yu Gothic\',\'Arial Black\',Meiryo,sans-serif;color:#ff4a5e;letter-spacing:0.1em;text-shadow:0 4px 20px #000;">GAME OVER</div>';
+  const btnCss = 'font:700 22px Meiryo,sans-serif;padding:12px 44px;border-radius:10px;cursor:pointer;border:1px solid rgba(255,255,255,0.4);';
+  const retry = document.createElement('button');
+  retry.textContent = 'リトライ（その場で復帰）';
+  retry.style.cssText = btnCss + 'background:#a12736;color:#fff;';
+  retry.onclick = () => { hideGameOver(); revivePlayer(); };
+  const toTitle = document.createElement('button');
+  toTitle.textContent = 'タイトルへ';
+  toTitle.style.cssText = btnCss + 'background:rgba(255,255,255,0.12);color:#ddd;';
+  toTitle.onclick = () => location.reload();
+  goEl.appendChild(retry); goEl.appendChild(toTitle);
   document.body.appendChild(goEl);
+  try { document.exitPointerLock(); } catch { /* noop */ }
+}
+function hideGameOver() { if (goEl) { goEl.remove(); goEl = null; } }
+function revivePlayer() {   // リトライ＝その場で復帰（パラメータ・戦況は継続。保留中のED遷移も再開される）
+  playerDead = false; playerRagOn = false; playerDeathT = 0;
+  if (playerLandRag && playerRagdoll) setRagdollActive(playerRagdoll, false);
+  playerLandRag = false;
+  try { player.vrm.humanoid?.resetNormalizedPose?.(); } catch { /* noop */ }
+  playerHp = PLAYER_HP_MAX;
+  updateHpUI(); applyDamageFx();
+  const gy = groundYAt(player.pos.x, player.pos.z, player.pos.y + 100);
+  player.pos.y = Math.max(player.pos.y, (gy ?? 0) + 30);   // 少し浮かせて即戦線復帰
+  player.vel.set(0, 0, 0);
+  player.vrm.scene.position.copy(player.pos);
+  player.vrm.scene.rotation.set(0, player.yaw + player.faceOffset, 0);
+  player.oneShot = null;
+  setState('idle');
 }
 function updateParamsUI() {   // デバッグ兼HUD: 都市被害/敵損耗/手配（タイトル中は非表示）
   if (gameMode === 'title') { if (paramsEl) paramsEl.style.display = 'none'; return; }
@@ -813,12 +842,89 @@ function updateParamsUI() {   // デバッグ兼HUD: 都市被害/敵損耗/手�
 // ── ゲームループP3: イベントシステム＋ゲーム内会話（public/cityfly/events.json / talks.json）──
 const ev = { defs: [], talks: null, fired: new Set(), flags: {}, spawnAllow: {}, kills: [], pendingOn: new Set(), lastPort: null };
 const TALK_MIN_SEC = 3.2, TALK_CPS = 9;   // 1行の表示時間 = max(最低秒, 文字数/読速)
+// ── 本編BGM（Sound_Waveループ。OP/ED中はシナリオ側のbgm.play、死亡中は停止）──
+let gameBgm = null;
+function updateGameBgm() {
+  const want = gameMode === 'play' && !playerDead;
+  if (want) {
+    if (!gameBgm) { gameBgm = new Audio(PUB_ROOT + 'BGM/Sound_Wave.ogg'); gameBgm.loop = true; gameBgm.volume = 0.45; }
+    if (gameBgm.paused) gameBgm.play().catch(() => { /* 自動再生制限 */ });
+  } else if (gameBgm && !gameBgm.paused) gameBgm.pause();
+}
+// ── シナリオのステージ背景（画像/GIF）: 全画面3D表示の背景板にテクスチャを貼る。GIFはImageDecoderでコマ送り ──
+let stageBg = null;   // {url, tex, gif:{dec,count,idx,accum,dur,cv,ctx,busy}}
+function makeBlankTex() {   // 背景板は最初からmap付き＝差し替えてもパイプライン構造が変わらない
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 2;
+  const cx = cv.getContext('2d');
+  cx.fillStyle = '#fff'; cx.fillRect(0, 0, 2, 2);
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+let blankBgTex = null;
+async function setStageBg(image) {
+  if (!image) { clearStageBg(); return; }
+  const url = image.includes('/') ? (PUB_ROOT + image) : ('../scenario2d/bg/' + image);
+  if (stageBg && stageBg.url === url) return;
+  clearStageBg();
+  const cur = { url, tex: null, gif: null };
+  stageBg = cur;
+  try {
+    if (/\.gif$/i.test(url) && typeof ImageDecoder !== 'undefined') {
+      const buf = await (await fetch(url)).arrayBuffer();
+      const dec = new ImageDecoder({ data: buf, type: 'image/gif' });
+      await dec.tracks.ready;
+      const track = dec.tracks.selectedTrack;
+      const first = await dec.decode({ frameIndex: 0 });
+      const cv = document.createElement('canvas');
+      cv.width = first.image.displayWidth; cv.height = first.image.displayHeight;
+      const ctx = cv.getContext('2d');
+      ctx.drawImage(first.image, 0, 0);
+      const dur0 = Math.max(0.03, (first.image.duration || 50000) / 1e6);
+      first.image.close();
+      if (stageBg !== cur) { try { dec.close(); } catch { /* noop */ } return; }
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      cur.tex = tex;
+      cur.gif = { dec, count: track.frameCount || 1, idx: 0, accum: 0, dur: dur0, cv, ctx, busy: false };
+    } else {
+      const tex = await new THREE.TextureLoader().loadAsync(url);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      if (stageBg !== cur) return;
+      cur.tex = tex;
+    }
+    if (portraitBg && cur.tex) { portraitBg.material.map = cur.tex; portraitBg.material.color.set(0xffffff); }
+  } catch (e) { console.warn('ステージ背景の読込失敗:', image, e); }
+}
+function clearStageBg() {
+  if (stageBg && stageBg.gif) { try { stageBg.gif.dec.close(); } catch { /* noop */ } }
+  stageBg = null;
+  if (portraitBg) { portraitBg.material.map = blankBgTex; portraitBg.material.color.set(0x0d1120); }
+}
+function updateStageBg(dt) {   // GIFのコマ送り（フレーム時間はGIF側の値）
+  const g = stageBg && stageBg.gif;
+  if (!g || g.busy || g.count < 2) return;
+  g.accum += dt;
+  if (g.accum < g.dur) return;
+  g.accum = 0;
+  g.busy = true;
+  g.idx = (g.idx + 1) % g.count;
+  g.dec.decode({ frameIndex: g.idx }).then((res) => {
+    g.dur = Math.max(0.03, (res.image.duration || 50000) / 1e6);
+    g.ctx.drawImage(res.image, 0, 0);
+    res.image.close();
+    if (stageBg && stageBg.tex) stageBg.tex.needsUpdate = true;
+    g.busy = false;
+  }).catch(() => { g.busy = false; });
+}
 // 2D紙芝居プレイヤ（OP/ED。素材: public/scenario2d/、脚本: public/story/*.story.json）
 const scn = createScenario2D({
-  basePath: '../scenario2d', soundPath: '../sound', actors: () => (ev.talks && ev.talks.actors) || null,
+  basePath: '../scenario2d', soundPath: '../sound', rootPath: PUB_ROOT, actors: () => (ev.talks && ev.talks.actors) || null,
   stage: {   // OP/ED: 話者を全画面で3D表示（モデルは起動時に先読み済み＝追加ロードなし）
     begin: (who, face, text, extra) => { const ok = beginPortraitFor(who, face, text, true, extra); setGameHudVisible(false); return ok; },
-    end: () => { portraitStage = false; portraitOn = false; setActiveGuest(null); setGameHudVisible(true); },
+    end: () => { portraitStage = false; portraitOn = false; setActiveGuest(null); setGameHudVisible(true); clearStageBg(); },
+    bg: (image) => { setStageBg(image); },   // 背景画像/GIF（bg opから）
   },
 });
 async function playScenario(name, after = 'play') {   // after: 'play'=本編へ / 'title'=リロードでタイトルへ
@@ -867,6 +973,7 @@ async function playFlowStory(name) {
 }
 function updateFlowTimer(dt) {   // battle中のポート発火遅延（例: ウォーカー崩壊を5秒見せてからGood ED）
   if (!flowTimer) return;
+  if (playerDead) return;   // 撃破と死亡が同時でもゲームオーバー優先（ED遷移は停止。リトライで復帰したら再開）
   flowTimer.t -= dt;
   if (flowTimer.t > 0) return;
   const port = flowTimer.port; flowTimer = null;
@@ -937,7 +1044,8 @@ function setupPortrait() {   // プレイヤーVRM読込後に呼ぶ
   if (NO_PORTRAIT || portraitCam || !player.vrm) return;
   portraitCam = new THREE.PerspectiveCamera(26, 1, 0.02, 8);
   portraitCam.layers.set(PORTRAIT_LAYER);
-  portraitBg = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), new THREE.MeshBasicMaterial({ color: 0x0d1120 }));
+  blankBgTex = makeBlankTex();
+  portraitBg = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), new THREE.MeshBasicMaterial({ color: 0x0d1120, map: blankBgTex }));   // 最初からmap付き＝背景差し替えで再コンパイルさせない
   portraitBg.layers.set(PORTRAIT_LAYER);   // 専用レイヤ＝本編カメラには映らない背景板
   portraitBg.frustumCulled = false;
   scene.add(portraitBg);
@@ -1108,8 +1216,13 @@ function updatePortrait(dt) {
     const back = portraitStage ? 2.2 : 0.9;
     portraitBg.position.copy(_ptEye).addScaledVector(fwd, -back);
     portraitBg.lookAt(portraitCam.position);
-    const halfH = Math.tan(fov * Math.PI / 360) * (dist + back) * 2.2;
-    portraitBg.scale.setScalar(Math.max(1, halfH * Math.max(1, asp)));
+    if (stageBg && stageBg.tex) {   // 背景画像/GIFあり: 画面アスペクトぴったりに貼る
+      const H = 2 * Math.tan(fov * Math.PI / 360) * (dist + back) * 1.08;
+      portraitBg.scale.set(Math.max(0.1, H * asp / 1.6), Math.max(0.1, H / 1.6), 1);
+    } else {
+      const halfH = Math.tan(fov * Math.PI / 360) * (dist + back) * 2.2;
+      portraitBg.scale.setScalar(Math.max(1, halfH * Math.max(1, asp)));
+    }
   }
 }
 const HUD_IDS = ['status', 'crosshair', 'hint', 'attrib'];   // シナリオ中に隠すゲームHUD
@@ -1241,7 +1354,11 @@ function showTalkLine(ln) {
   talkEls.fb.style.background = actor.color || '#445';
   talkEls.img.style.display = 'none';
   const live = beginPortraitFor(ln.who, ln.face, ln.text, false);   // 会話ウィンドウ＝顔枠モード
-  if (!live && actor && (actor.npc || actor.vrm)) {   // 読込中だった場合、完了したら立体表示へ差し替え
+  // 読込中だった場合だけ、完了したら立体表示へ差し替え。
+  // 注意: 「読込済みなのに live=false」（プレイヤー死亡中のnei等）で再試行すると
+  // キャッシュ済みPromiseの.thenが同フレームで再帰し無限マイクロタスクループになる（実際に凍結した）
+  const gLoaded = portraitGuests.get(ln.who) && portraitGuests.get(ln.who).vrm;
+  if (!live && ln.who !== PORTRAIT_ACTOR && actor && (actor.npc || actor.vrm) && !gLoaded) {
     ensureGuestVrm(ln.who, actor.npc || actor.vrm).then((v) => { if (v && talkCur === ln) showTalkLine(ln); });
   }
   talkEls.face.style.background = live ? 'transparent' : '#223';   // 立体表示中はキャンバスを透かす
@@ -1362,9 +1479,8 @@ function updatePlayerDeath(dt) {
     player.vrm.scene.position.copy(player.pos);
     player.vrm.update(dt);
   }
-  if (gameMode === 'play') {   // 本編: 死亡＝ゲームオーバー→タイトルへ（リロードで全リセット）
+  if (gameMode === 'play') {   // 本編: 死亡＝ゲームオーバー（リトライ=その場復帰 or タイトルへ）
     if (playerDeathT >= dieDur + 1.5) showGameOver();
-    if (playerDeathT >= dieDur + 5) location.reload();
     return;
   }
   if (playerDeathT >= dieDur + 5) {   // 5秒後にリセット（トレーニング）
@@ -3080,7 +3196,7 @@ const FOREST_CELL = 7;           // 配置格子(m)。ジッタを加えて自�
 const FOREST_CHUNK = 400;        // 描画チャンク(m)
 const FOREST_ROAD_MARGIN = 13;   // 道路中心からの立入禁止距離(m)（街路樹と重ならない）
 async function buildForest() {
-  if (!mapTerrain) return;
+  if (!mapTerrain || NO_FOREST) return;
   // 木モデル: map-editorの植生設定で models/ から選択可（未指定は街路樹と同じ tree-large/small）
   let custom = null;
   if (mapForest && mapForest.model) {
@@ -6377,8 +6493,8 @@ function updateCarLights() {
   for (let i = 0; i < cars.length; i++) {
     const car = cars[i];
     const away = Math.hypot(car.mesh.position.x - player.pos.x, car.mesh.position.z - player.pos.z);
-    // 夜は遠距離の車体を隠してライトだけ（「光の川」＝描画節約）
-    if (!car.dead && !car.grabbed && !car.tornado) car.mesh.visible = !(night && away > CAR_HIDE_DIST);
+    // 夜は遠距離の車体を隠してライトだけ（「光の川」＝描画節約）。昼も1.2km超は非表示（数px＝見えないのに描いていた）
+    if (!car.dead && !car.grabbed && !car.tornado) car.mesh.visible = !(night && away > CAR_HIDE_DIST) && away <= 1200;
     if (car.dead || !night) {
       _clM.makeTranslation(0, -9999, 0);
       carHeadMesh.setMatrixAt(i * 2, _clM); carHeadMesh.setMatrixAt(i * 2 + 1, _clM);
@@ -7893,6 +8009,8 @@ function tick() {
   updateWater(dt);        // 水面: 法線スクロール＋距離LOD（マップモードのみ）
   updateTrains(dt);       // 鉄道: 列車の定期運行（railsのあるマップのみ）
   updatePort(dt);         // 埠頭: 客船の再入港
+  updateStageBg(dt);      // シナリオ背景GIFのコマ送り
+  updateGameBgm();        // 本編BGM（play中のみループ）
   updateDebris(dt);       // 破片（がれき/岩）
   updatePropFly(dt);      // 吹っ飛んだ信号/街灯/街路樹の飛翔
   if (mp) mpUpdate(dt);   // マルチプレイ: 状態送信＋リモート補間
