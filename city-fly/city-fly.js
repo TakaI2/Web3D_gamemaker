@@ -236,6 +236,8 @@ const SHOW_FPS = _qs.get('fps') === '1' || NO_CAPE || NO_CITY || NO_NPC || DIAG 
 let mapTerrain = null;   // createTerrainMesh の戻り値（heightAt含む）
 let mapRoads = [];       // .map.json のスプライン道路（あればOSMの代わりに使う）
 let mapBridges = [];     // .map.json の橋 {x,z,dx,dz,len,w,kind:'flat'|'arch',deckY,wl,bedY}（道路ノードをデッキ高へ持ち上げ＋簡易モデル描画）
+let mapRails = [];       // .map.json の鉄道 [{points:[[x,z,y]..], gauge, stations:[{x,z,name}]}]（複線＋高架＋駅＋列車運行）
+let mapBldParams = null; // .map.json buildings.params（自動配置のオプション上書き。例: spacing）
 let mapBuildings = null; // .map.json の建物差分 {removed[], moved{}, added[]}
 let mapWater = [];       // .map.json の水面矩形 {x,z,w,d,level}
 let mapForest = null;    // .map.json の植生ペイント {cell,res,data:Uint8Array 密度0-255}（map-editorで描く）
@@ -305,6 +307,8 @@ async function buildMapGround() {
   mapBuildings = (j.buildings && ((j.buildings.removed || []).length || (j.buildings.added || []).length || Object.keys(j.buildings.moved || {}).length)) ? j.buildings : null;
   mapWater = Array.isArray(j.water) ? j.water : [];
   mapBridges = Array.isArray(j.bridges) ? j.bridges : [];
+  mapRails = Array.isArray(j.rails) ? j.rails : [];
+  mapBldParams = (j.buildings && j.buildings.params) || null;
   mapForest = (j.forest && j.forest.data) ? { cell: j.forest.cell || 16, res: j.forest.res, yOff: j.forest.yOff ?? 0, model: j.forest.model || null, treeH: j.forest.treeH || 7, data: unb64(j.forest.data) } : null;
   mapParks = Array.isArray(j.parks) ? j.parks.filter((pk) => pk.points && pk.points.length >= 3) : [];
   mapParkCfg = j.parkCfg || {};
@@ -1534,7 +1538,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; } };
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; } };
 // ── キャラ選択パネル（👤ボタン）──
 function setupCharUI() {
   const btn = document.createElement('button');
@@ -1992,6 +1996,7 @@ async function finishRoads() {
   buildRoadSurfIndex();
   await buildRoadMeshes().catch((e) => { console.warn('道路メッシュ生成失敗（デバッグ線で代替）:', e); drawRoadLines(); });
   try { buildMapBridges(); } catch (e) { console.warn('橋の生成失敗:', e); }
+  try { await buildMapRails(); } catch (e) { console.warn('鉄道の生成失敗:', e); }
   if (!NO_NPC) await spawnCars();   // 性能切り分け: ?nonpc=1 で車を出さない
   try { buildCarLights(); } catch (e) { console.warn('車ライト生成失敗', e); }
   console.log('roads center nodes', roadNodes.size, 'edges', activeEdges.length, 'cars', cars.length);
@@ -2047,6 +2052,182 @@ function buildMapBridges() {
   }
   scene.add(grpAll);
   console.log('bridges:', mapBridges.length);
+}
+// ── 鉄道: 複線レール＋高架（デッキ+円柱橋脚）＋駅ホーム＋列車の定期運行（.map.json rails）──
+let railPath = null;     // {pts,cum,total,gauge,stations:[{name,arc,y}]}
+const trains = [];       // {cars:[{mesh,len}], track(-1/1), dir(1/-1), arc, speed, stopT}
+const _tp = new THREE.Vector3(), _tt = new THREE.Vector3(), _tpr = new THREE.Vector3(), _ttN = new THREE.Vector3();
+const _trm = new THREE.Matrix4(), _upT = new THREE.Vector3(0, 1, 0), _zeroT = new THREE.Vector3();
+async function buildMapRails() {
+  if (!mapRails.length || !mapRails[0].points || mapRails[0].points.length < 2) return;
+  const line = mapRails[0];
+  const pts = line.points.map((p) => new THREE.Vector3(p[0], p[2], p[1]));   // 保存形式は [x,z,y]
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]));
+  railPath = { pts, cum, total: cum[cum.length - 1], gauge: line.gauge || 5.2, stations: [] };
+  for (const st of (line.stations || [])) {
+    let bi = 0, bd = 1e9;
+    for (let i = 0; i < pts.length; i++) { const d = Math.hypot(pts[i].x - st.x, pts[i].z - st.z); if (d < bd) { bd = d; bi = i; } }
+    railPath.stations.push({ name: st.name, x: pts[bi].x, z: pts[bi].z, arc: cum[bi], y: pts[bi].y });
+  }
+  const grp = new THREE.Group();
+  const loader = new GLTFLoader();
+  const loadTrainGlb = async (name) => bakeModel((await loader.loadAsync(new URL('../models/train_GLB%20format/' + name + '.glb', location.href).href)).scene);
+  // レールタイル正規化: 長軸→Z・XZ中心・底面0
+  const railAsset = await loadTrainGlb('railroad-straight');
+  const g0 = railAsset.geometry.clone();
+  g0.computeBoundingBox();
+  let bb = g0.boundingBox;
+  if ((bb.max.x - bb.min.x) > (bb.max.z - bb.min.z)) g0.rotateY(Math.PI / 2);
+  g0.computeBoundingBox(); bb = g0.boundingBox;
+  g0.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+  const tileW = Math.max(0.01, bb.max.x - bb.min.x), tileL = Math.max(0.01, bb.max.z - bb.min.z);
+  const TRACK_W = 4.2, half = railPath.gauge / 2;
+  const segs = pts.length - 1;
+  const railIM = new THREE.InstancedMesh(g0, railAsset.material, segs * 2);
+  railIM.frustumCulled = false;
+  const _m2 = new THREE.Matrix4(), _q2 = new THREE.Quaternion(), _p2 = new THREE.Vector3(), _s2 = new THREE.Vector3(), _d2 = new THREE.Vector3(), _rm2 = new THREE.Matrix4();
+  const elev = [];
+  let n = 0;
+  for (let i = 0; i < segs; i++) {
+    const a = pts[i], b = pts[i + 1];
+    _d2.copy(b).sub(a);
+    const len = _d2.length() || 1;
+    _d2.normalize();
+    _rm2.lookAt(_zeroT, _d2, _upT);
+    _q2.setFromRotationMatrix(_rm2);
+    _tpr.set(-_d2.z, 0, _d2.x).normalize();   // 水平垂直（複線オフセット）
+    for (const side of [-1, 1]) {
+      _p2.copy(a).addScaledVector(_d2, len / 2).addScaledVector(_tpr, half * side);
+      _s2.set(TRACK_W / tileW, TRACK_W / tileW, len / tileL * 1.002);
+      _m2.compose(_p2, _q2, _s2);
+      railIM.setMatrixAt(n++, _m2);
+    }
+    const midY = (a.y + b.y) / 2, ter = mapTerrain ? mapTerrain.heightAt((a.x + b.x) / 2, (a.z + b.z) / 2) : 0;
+    if (midY - ter > 2.5) elev.push({ a, b, len, q: _q2.clone(), midY });
+  }
+  grp.add(railIM);
+  if (elev.length) {   // 高架: デッキ＋40m毎の円柱橋脚
+    const concM = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.85 });
+    const deckIM = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), concM, elev.length);
+    deckIM.frustumCulled = false;
+    let k = 0;
+    for (const e of elev) {
+      _p2.copy(e.a).lerp(e.b, 0.5); _p2.y -= 0.55;
+      _s2.set(railPath.gauge + 4.6, 1.0, e.len + 0.4);
+      _m2.compose(_p2, e.q, _s2);
+      deckIM.setMatrixAt(k++, _m2);
+    }
+    grp.add(deckIM);
+    const piers = elev.filter((_, i2) => i2 % 4 === 0);
+    const pierIM = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1.12, 1, 10), concM, piers.length);
+    pierIM.frustumCulled = false;
+    k = 0;
+    _q2.identity();
+    for (const e of piers) {
+      const mx = (e.a.x + e.b.x) / 2, mz = (e.a.z + e.b.z) / 2;
+      const gy = (mapTerrain ? mapTerrain.heightAt(mx, mz) : 0) - 1.5;
+      const h = Math.max(1, e.midY - 1.0 - gy);
+      _p2.set(mx, gy + h / 2, mz);
+      _s2.set(1.5, h, 1.5);
+      _m2.compose(_p2, _q2, _s2);
+      pierIM.setMatrixAt(k++, _m2);
+    }
+    grp.add(pierIM);
+  }
+  // 駅: 相対式ホーム2面＋屋根（高架駅は自動で高架上）
+  const platM = new THREE.MeshStandardMaterial({ color: 0xb9bcc2, roughness: 0.9 });
+  const roofM = new THREE.MeshStandardMaterial({ color: 0x4a6b8a, roughness: 0.6 });
+  for (const st of railPath.stations) {
+    let bi = 0, bd = 1e9;
+    for (let i = 0; i < segs; i++) { const d = Math.hypot((pts[i].x + pts[i + 1].x) / 2 - st.x, (pts[i].z + pts[i + 1].z) / 2 - st.z); if (d < bd) { bd = d; bi = i; } }
+    _d2.copy(pts[bi + 1]).sub(pts[bi]).normalize();
+    _rm2.lookAt(_zeroT, _d2, _upT);
+    const sg = new THREE.Group();
+    sg.position.set(st.x, st.y, st.z);
+    sg.quaternion.setFromRotationMatrix(_rm2);
+    const off = half + TRACK_W / 2 + 1.5;
+    for (const side of [-1, 1]) {
+      const px2 = off * side;
+      const plat = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.1, 62), platM);
+      plat.position.set(px2, -0.15, 0); sg.add(plat);
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.22, 58), roofM);
+      roof.position.set(px2, 3.7, 0); sg.add(roof);
+      for (const zz of [-24, 0, 24]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 3.3, 8), platM);
+        post.position.set(px2, 2.0, zz); sg.add(post);
+      }
+    }
+    grp.add(sg);
+  }
+  // 列車: train-electric-city（a=先頭/末尾・b/c=客車）×2編成（上り/下り）
+  const CAR_LEN = 14;
+  const carGeo = {};
+  for (const nm of ['a', 'b', 'c']) {
+    const asset = await loadTrainGlb('train-electric-city-' + nm);
+    const g = asset.geometry.clone();
+    g.computeBoundingBox(); let b2 = g.boundingBox;
+    if ((b2.max.x - b2.min.x) > (b2.max.z - b2.min.z)) g.rotateY(Math.PI / 2);
+    g.computeBoundingBox(); b2 = g.boundingBox;
+    g.translate(-(b2.min.x + b2.max.x) / 2, -b2.min.y, -(b2.min.z + b2.max.z) / 2);
+    const s = CAR_LEN / Math.max(0.01, b2.max.z - b2.min.z);
+    g.scale(s, s, s);
+    carGeo[nm] = { g, mat: asset.material };
+  }
+  for (const [track, dir] of [[-1, 1], [1, -1]]) {
+    const cars = [];
+    for (const [nm, flip] of [['a', false], ['b', false], ['c', false], ['a', true]]) {
+      const g = carGeo[nm].g.clone();
+      if (flip) { g.rotateY(Math.PI); g.computeBoundingBox(); }
+      const mesh = new THREE.Mesh(g, carGeo[nm].mat);
+      mesh.frustumCulled = false;
+      grp.add(mesh);
+      cars.push({ mesh, len: CAR_LEN });
+    }
+    trains.push({ cars, track, dir, arc: railPath.total * (dir > 0 ? 0.35 : 0.65), speed: 0, stopT: 0 });
+  }
+  scene.add(grp);
+  console.log('rails:', pts.length, 'pts /', Math.round(railPath.total) + 'm / 高架', elev.length, 'seg / 駅', railPath.stations.length, '/ 列車', trains.length, '編成');
+}
+function railPosAt(arc, out, tan) {
+  const { pts, cum, total } = railPath;
+  arc = Math.max(0, Math.min(total, arc));
+  let lo = 0, hi = cum.length - 1;
+  while (lo < hi - 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= arc) lo = mid; else hi = mid; }
+  const t = (arc - cum[lo]) / Math.max(0.001, cum[lo + 1] - cum[lo]);
+  out.copy(pts[lo]).lerp(pts[lo + 1], t);
+  if (tan) tan.copy(pts[lo + 1]).sub(pts[lo]).normalize();
+  return out;
+}
+function updateTrains(dt) {
+  if (!railPath || !trains.length) return;
+  const VMAX = 18, ACC = 4;
+  for (const tr of trains) {
+    if (tr.stopT > 0) { tr.stopT -= dt; tr.speed = 0; }
+    else {
+      let nextSta = null, bestD = 1e9;   // 進行方向の次の停車目標
+      for (const st of railPath.stations) {
+        const d = (st.arc - tr.arc) * tr.dir;
+        if (d > 0.5 && d < bestD) { bestD = d; nextSta = st; }
+      }
+      const endD = tr.dir > 0 ? railPath.total - tr.arc : tr.arc;
+      const stopD = Math.min(nextSta ? bestD : 1e9, endD);
+      const vMax = Math.min(VMAX, Math.sqrt(Math.max(0.25, 2 * ACC * Math.max(0, stopD - 0.3))));
+      tr.speed = Math.min(vMax, tr.speed + ACC * dt);
+      tr.arc += tr.speed * tr.dir * dt;
+      if (nextSta && (nextSta.arc - tr.arc) * tr.dir <= 0.4) { tr.arc = nextSta.arc; tr.stopT = 7; }
+      else if (endD <= 0.5) { tr.dir *= -1; tr.stopT = 9; }   // 終端で折返し
+    }
+    for (let i = 0; i < tr.cars.length; i++) {   // 先頭=arc、後続は車長+連結間隔で追従
+      const c = tr.cars[i];
+      railPosAt(tr.arc - tr.dir * i * (c.len + 0.7), _tp, _tt);
+      _tpr.set(-_tt.z, 0, _tt.x).normalize();
+      c.mesh.position.copy(_tp).addScaledVector(_tpr, railPath.gauge / 2 * tr.track);
+      c.mesh.position.y += 0.3;
+      _trm.lookAt(_zeroT, tr.dir > 0 ? _tt : _ttN.copy(_tt).negate(), _upT);
+      c.mesh.quaternion.setFromRotationMatrix(_trm);
+    }
+  }
 }
 // 橋の上の道路ノードはデッキ高へ持ち上げる（アーチ橋は緩いキャンバー付き）
 function bridgeY(x, z, ty) {
@@ -3286,7 +3467,7 @@ async function buildKenneyCity() {
   if (!activeEdges.length) { console.warn('city: no road edges'); return; }
   // 活性エッジ(world XZ＋DEM Y)→ジェネレータ
   const edges = activeEdges.map((e) => [e.a.x, e.a.y, e.a.z, e.b.x, e.b.y, e.b.z]);
-  const gen = generateBuildings(edges, { seed: 20260706 });
+  const gen = generateBuildings(edges, { seed: 20260706, ...(mapBldParams || {}) });
   if (mapBuildings) applyMapBuildings(gen);   // map-editorの差分（削除/移動/追加）
   cityInfo = { count: gen.instances.length, zones: gen.zones };
   console.log('city buildings', gen.instances.length, gen.zones);
@@ -7361,6 +7542,7 @@ function tick() {
   updateSignals(dt);      // 信号の三色サイクル（実時間・昼夜問わず点灯）
   updateNeonBlink(dt);    // 光点の点滅（entry-editorのblink指定）
   updateWater(dt);        // 水面: 法線スクロール＋距離LOD（マップモードのみ）
+  updateTrains(dt);       // 鉄道: 列車の定期運行（railsのあるマップのみ）
   updateDebris(dt);       // 破片（がれき/岩）
   updatePropFly(dt);      // 吹っ飛んだ信号/街灯/街路樹の飛翔
   if (mp) mpUpdate(dt);   // マルチプレイ: 状態送信＋リモート補間
