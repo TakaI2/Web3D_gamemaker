@@ -2176,7 +2176,7 @@ async function buildMapRails() {
   }
   for (const [track, dir] of [[-1, 1], [1, -1]]) {
     const cars = [];
-    for (const [nm, flip] of [['a', false], ['b', false], ['c', false], ['a', true]]) {
+    for (const [nm, flip] of [['a', true], ['b', true], ['c', true], ['b', true], ['a', false]]) {   // 先頭a+客車3両+末尾a（基準向きは実物合わせで反転済み）
       const g = carGeo[nm].g.clone();
       if (flip) { g.rotateY(Math.PI); g.computeBoundingBox(); }
       const mesh = new THREE.Mesh(g, carGeo[nm].mat);
@@ -2249,9 +2249,9 @@ function buildMapRoads() {
     roadNodes.set(id, { local: new THREE.Vector3(n.x, bridgeY(n.x, n.z, ty), n.z), adj: n.adj });
   }
   activeEdges = [];
-  for (const [aId, bId] of g.edges) {
+  for (const [aId, bId, kind] of g.edges) {
     const a = roadNodes.get(aId).local, b = roadNodes.get(bId).local;
-    activeEdges.push({ aId, bId, a, b, len: a.distanceTo(b) });
+    activeEdges.push({ aId, bId, a, b, len: a.distanceTo(b), kind });
   }
   console.log('map roads:', mapRoads.length, 'splines →', roadNodes.size, 'nodes /', activeEdges.length, 'edges');
 }
@@ -2323,10 +2323,17 @@ async function buildRoadMeshes() {
   const lamp = await loadKit('light-curved');
   // 交差点/カーブ/横断歩道/バリア道路のタイル（無ければ従来動作にフォールバック）
   const optKit = (name) => loadKit(name).catch(() => null);
-  const [tCross, tTee, tBendRaw, tXing, roadBar, sigLamp] = await Promise.all([
+  const [tCross, tTee, tBendRaw, tXing, roadBar, sigLamp, tSplit, signHw] = await Promise.all([
     optKit('road-crossroad-path'), optKit('road-intersection-path'), optKit('road-bend-sidewalk'),
     optKit('road-crossing'), optKit('road-straight-barrier'), optKit('light-square'),
+    optKit('road-split'), optKit('sign-highway-detailed'),
   ]);
+  // 大通り(kind='avenue')は上下線を並列化した幹線道路として描く
+  const DUAL_OFF = ROAD_WIDTH / 2 + 0.8;                              // 各車線の中心オフセット（中央帯1.6m）
+  const AVE_JUNC_SCALE = (DUAL_OFF * 2 + ROAD_WIDTH) / ROAD_WIDTH;    // 幹線が絡む交差点タイルの拡大率
+  const SPLIT_BASE = 0;                                               // road-split の向き補正（目視調整ポイント）
+  const aveNodes = new Set();
+  for (const e of activeEdges) if (e.kind === 'avenue') { aveNodes.add(e.aId); aveNodes.add(e.bId); }
   const tBend = USE_BENDS ? tBendRaw : null;
   // タイル正規化: laneRotate=正方形タイルのレーンX向きをZへ90°回す → XZ中心・底面0
   const normTile = (asset, laneRotate) => {
@@ -2341,7 +2348,7 @@ async function buildRoadMeshes() {
   const roadThick = R.h;
   roadTopOff = ROAD_LIFT + roadThick;   // 路面高さ問い合わせ(roadTopAt)用に実測を反映
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
-  const _dir = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _rotM = new THREE.Matrix4(), _zero = new THREE.Vector3();
+  const _dir = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _rotM = new THREE.Matrix4(), _zero = new THREE.Vector3(), _lat = new THREE.Vector3();
 
   // ── ノード分類: 出射方向の組から 十字(4方向直交)/T字(本線+直交枝)/カーブ(2方向~90°) を判定 ──
   const nodeDirs = new Map();
@@ -2349,19 +2356,27 @@ async function buildRoadMeshes() {
     const dx = e.b.x - e.a.x, dz = e.b.z - e.a.z, l = Math.hypot(dx, dz) || 1;
     if (!nodeDirs.has(e.aId)) nodeDirs.set(e.aId, []);
     if (!nodeDirs.has(e.bId)) nodeDirs.set(e.bId, []);
-    nodeDirs.get(e.aId).push({ x: dx / l, z: dz / l });
-    nodeDirs.get(e.bId).push({ x: -dx / l, z: -dz / l });
+    nodeDirs.get(e.aId).push({ x: dx / l, z: dz / l, kind: e.kind });
+    nodeDirs.get(e.bId).push({ x: -dx / l, z: -dz / l, kind: e.kind });
   }
   const JTOL = Math.PI / 180 * 25;   // 直交とみなす許容角
   const yawOf = (d) => Math.atan2(d.x, d.z);
   const wrapA = (a) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
-  const junc = { cross: [], tee: [], bend: [], any: [] };   // any=直交判定に漏れた3叉以上（信号だけ立てる）
+  const junc = { cross: [], tee: [], bend: [], any: [], split: [] };   // any=直交判定に漏れた3叉以上（信号だけ立てる）/ split=幹線→単線の遷移
   const tiledNodes = new Set();
   for (const [id, nd] of roadNodes) {
     const dirs = nodeDirs.get(id);
     if (!dirs) continue;
     let put = null;
-    if (dirs.length === 2 && tBend) {
+    if (dirs.length === 2 && tSplit && dirs[0].kind !== dirs[1].kind && (dirs[0].kind === 'avenue' || dirs[1].kind === 'avenue')) {
+      // 幹線(並列2車線)と通常道路の継ぎ目 → road-split で車線を合流/分岐させる
+      const dot = dirs[0].x * dirs[1].x + dirs[0].z * dirs[1].z;
+      if (dot < -Math.cos(JTOL * 1.4)) {
+        const ai = dirs[0].kind === 'avenue' ? 0 : 1;
+        put = { arr: junc.split, ry: yawOf(dirs[ai]) + SPLIT_BASE };
+      }
+    }
+    if (!put && dirs.length === 2 && tBend) {
       const d = wrapA(yawOf(dirs[1]) - yawOf(dirs[0]));
       if (Math.abs(Math.abs(d) - Math.PI / 2) < JTOL) put = { arr: junc.bend, ry: (d > 0 ? yawOf(dirs[0]) : yawOf(dirs[1])) + BEND_BASE };
     } else if (dirs.length === 3 && tTee) {
@@ -2388,8 +2403,8 @@ async function buildRoadMeshes() {
       }
       if (ok && axes.length === 2 && Math.abs(axes[0].x * axes[1].x + axes[0].z * axes[1].z) < Math.sin(JTOL * 1.4)) put = { arr: junc.cross, ry: yawOf(axes[0]) };
     }
-    if (put) { put.arr.push({ x: nd.local.x, y: nd.local.y, z: nd.local.z, ry: put.ry }); tiledNodes.add(id); }
-    else if (dirs.length >= 3) junc.any.push({ x: nd.local.x, y: nd.local.y, z: nd.local.z, ry: yawOf(dirs[0]) });
+    if (put) { put.arr.push({ x: nd.local.x, y: nd.local.y, z: nd.local.z, ry: put.ry, ave: aveNodes.has(id) }); tiledNodes.add(id); }
+    else if (dirs.length >= 3) junc.any.push({ x: nd.local.x, y: nd.local.y, z: nd.local.z, ry: yawOf(dirs[0]), ave: aveNodes.has(id) });
   }
 
   // ── 継ぎ目の方針をノード別に決定（円パッチだらけの見た目を廃止）──
@@ -2438,20 +2453,25 @@ async function buildRoadMeshes() {
       const J = list[i];
       _p.set(J.x, J.y + ROAD_LIFT + 0.02, J.z);   // 短縮した道路端との重なり帯だけ僅かに上＝共平面回避
       _q.setFromAxisAngle(_up, J.ry);
-      _s.set(s, 1, s);
+      const s2 = s * (J.ave ? AVE_JUNC_SCALE : 1);   // 幹線が絡む交差点はタイルを拡大して並列車線を受ける
+      _s.set(s2, 1, s2);
       _m.compose(_p, _q, _s);
       mesh.setMatrixAt(i, _m);
     }
     roadGroup.add(mesh);
     return list.length;
   };
-  const nJunc = addJunc(tCross, junc.cross) + addJunc(tTee, junc.tee) + addJunc(tBend, junc.bend);
+  const nJunc = addJunc(tCross, junc.cross) + addJunc(tTee, junc.tee) + addJunc(tBend, junc.bend) + addJunc(tSplit, junc.split);
   if (sigLamp) try { buildSignals(sigLamp, junc); } catch (e) { console.warn('信号生成失敗', e); }
 
-  // ── 道路セグメント: 長いエッジは barrier 付きタイル（＝ガードレール）で描く ──
-  const stdIdx = [], barIdx = [];
-  for (let i = 0; i < activeEdges.length; i++) ((roadBar && activeEdges[i].len >= BARRIER_MIN_EDGE) ? barIdx : stdIdx).push(i);
-  const fillRoad = (tile, idxList) => {
+  // ── 道路セグメント: 幹線(avenue)=並列2車線 / 長いエッジは barrier 付きタイル（＝ガードレール）──
+  const stdIdx = [], barIdx = [], aveIdx = [];
+  for (let i = 0; i < activeEdges.length; i++) {
+    const e = activeEdges[i];
+    if (e.kind === 'avenue') { aveIdx.push(i); continue; }
+    ((roadBar && e.len >= BARRIER_MIN_EDGE) ? barIdx : stdIdx).push(i);
+  }
+  const fillRoad = (tile, idxList, lateral = 0) => {
     if (!idxList.length) return;
     // 道路を破壊可能に: カーブ材質（ワールド座標球）＝着弾点に穴＋焦げ縁。夜は暗くなるよう昼夜係数を掛ける
     let mat = tile.mat;
@@ -2478,6 +2498,7 @@ async function buildRoadMeshes() {
       const segLen = Math.max(0.4, len - pa - pb);
       _p.copy(e.a).addScaledVector(_dir, pa + segLen / 2);
       _p.y += ROAD_LIFT;
+      if (lateral) { _lat.set(-_dir.z, 0, _dir.x).normalize(); _p.addScaledVector(_lat, lateral); }   // 並列車線の横オフセット
       _s.set(ws, 1, segLen / tile.l);   // 厚みは等倍
       _m.compose(_p, _q, _s);
       mesh.setMatrixAt(k, _m);
@@ -2486,6 +2507,71 @@ async function buildRoadMeshes() {
   };
   fillRoad(R, stdIdx);
   if (roadBar) fillRoad(normTile(roadBar, true), barIdx);
+  if (signHw && aveIdx.length) {   // 幹線の案内標識: sign-highway-detailed をところどころ（約240m毎・左右交互）
+    const sgeo = signHw.geometry.clone();
+    sgeo.computeBoundingBox();
+    const sb = sgeo.boundingBox;
+    sgeo.translate(-(sb.min.x + sb.max.x) / 2, -sb.min.y, -(sb.min.z + sb.max.z) / 2);
+    const sScale = 4.6 / Math.max(0.01, sb.max.y - sb.min.y);
+    const signPts = [];
+    let sSide = 1, signAcc = 130;   // 連続する幹線エッジに沿って約240m毎（エッジ単体は~20mなので距離を累積）
+    for (const i of aveIdx) {
+      const e = activeEdges[i];
+      _dir.copy(e.b).sub(e.a).normalize();
+      const px = -_dir.z, pz = _dir.x;
+      let dAcc = signAcc;
+      while (dAcc < e.len && signPts.length < 400) {
+        const t = dAcc / e.len;
+        sSide = -sSide;
+        const off = DUAL_OFF + ROAD_WIDTH / 2 + 1.5;
+        signPts.push({
+          x: e.a.x + (e.b.x - e.a.x) * t + px * sSide * off,
+          y: e.a.y + (e.b.y - e.a.y) * t + ROAD_LIFT,
+          z: e.a.z + (e.b.z - e.a.z) * t + pz * sSide * off,
+          ry: Math.atan2(_dir.x, _dir.z) + (sSide > 0 ? Math.PI : 0),   // 手前側車線の進行方向へ正対
+        });
+        dAcc += 240;
+      }
+      signAcc = Math.max(0, dAcc - e.len);
+    }
+    if (signPts.length) {
+      const signIM = new THREE.InstancedMesh(sgeo, signHw.material, signPts.length);
+      signIM.frustumCulled = false;
+      for (let i = 0; i < signPts.length; i++) {
+        const S = signPts[i];
+        _p.set(S.x, S.y, S.z);
+        _q.setFromAxisAngle(_up, S.ry);
+        _s.set(sScale, sScale, sScale);
+        _m.compose(_p, _q, _s);
+        signIM.setMatrixAt(i, _m);
+      }
+      roadGroup.add(signIM);
+    }
+  }
+  if (aveIdx.length) {   // 幹線: 上下線を左右にオフセットして並列化＋中央帯
+    fillRoad(R, aveIdx, DUAL_OFF);
+    fillRoad(R, aveIdx, -DUAL_OFF);
+    const medIM = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0x39404a, roughness: 0.95 }), aveIdx.length);
+    medIM.frustumCulled = false;
+    for (let k = 0; k < aveIdx.length; k++) {
+      const e = activeEdges[aveIdx[k]];
+      _dir.copy(e.b).sub(e.a);
+      const len = _dir.length() || 1;
+      _dir.normalize();
+      _rotM.lookAt(_zero, _dir, _up);
+      _q.setFromRotationMatrix(_rotM);
+      const pa = Math.min(nodePull.get(e.aId) ?? PULL, len * 0.3) + 2.5;
+      const pb = Math.min(nodePull.get(e.bId) ?? PULL, len * 0.3) + 2.5;
+      const segLen = Math.max(0.4, len - pa - pb);
+      _p.copy(e.a).addScaledVector(_dir, pa + segLen / 2);
+      _p.y += ROAD_LIFT * 0.7;
+      _s.set(DUAL_OFF * 2 - ROAD_WIDTH + 0.4, 0.34, segLen);
+      _m.compose(_p, _q, _s);
+      medIM.setMatrixAt(k, _m);
+    }
+    roadGroup.add(medIM);
+  }
 
   // ── 横断歩道: 長めのエッジに等間隔オーバーレイ（路面より2.5cm上）──
   let nXing = 0;
@@ -2531,7 +2617,7 @@ async function buildRoadMeshes() {
     patch.setMatrixAt(i, _m);
   }
   roadGroup.add(patch);
-  console.log('junctions:', nJunc, `(cross ${junc.cross.length} / tee ${junc.tee.length} / bend ${junc.bend.length} / 変則 ${junc.any.length})`, 'crossings:', nXing, 'barrier edges:', barIdx.length, 'patches:', plainNodes.length);
+  console.log('junctions:', nJunc, `(cross ${junc.cross.length} / tee ${junc.tee.length} / bend ${junc.bend.length} / split ${junc.split.length} / 変則 ${junc.any.length})`, 'crossings:', nXing, 'barrier edges:', barIdx.length, 'patches:', plainNodes.length);
   // 街灯: 各エッジ沿いに等間隔・左右交互。腕(+Z)が道路を向くように回す
   const lg = lamp.geometry.clone();
   lg.computeBoundingBox();
@@ -2548,21 +2634,49 @@ async function buildRoadMeshes() {
     y: (lampMk.pos[1] - lb.min.y) * lScale,
     z: (lampMk.pos[2] - (lb.min.z + lb.max.z) / 2) * lScale,
   } : null;
-  let side = 1;
+  let side = 1, aveLampAcc = 20;
+  const dblMats = [];   // 幹線の中央帯: 両腕街灯 light-curved-double
+  let lampD = null, lgD = null, lScaleD = 1, armZD = 0;
+  try {
+    lampD = await loadKit('light-curved-double');
+    lgD = lampD.geometry.clone();
+    lgD.computeBoundingBox();
+    const db = lgD.boundingBox;
+    lgD.translate(-(db.min.x + db.max.x) / 2, -db.min.y, -(db.min.z + db.max.z) / 2);
+    lScaleD = LIGHT_HEIGHT / Math.max(0.01, db.max.y - db.min.y);
+    armZD = (db.max.z - db.min.z) / 2 * lScaleD;
+  } catch { /* 無ければ幹線も通常街灯で続行 */ }
   for (const e of activeEdges) {
     const len = e.a.distanceTo(e.b);
-    if (len < LIGHT_SPACING * 0.6 || lampMats.length >= MAX_LIGHTS) continue;
-    const n = Math.max(1, Math.floor(len / LIGHT_SPACING));
+    if (lampMats.length + dblMats.length >= MAX_LIGHTS) break;
     _dir.copy(e.b).sub(e.a).normalize();
     const px = -_dir.z, pz = _dir.x;   // 水平垂直
-    for (let k = 1; k <= n && lampMats.length < MAX_LIGHTS; k++) {
+    if (e.kind === 'avenue' && lgD) {   // 幹線: 中央帯に等間隔（グラフのエッジは~20mと短いので、連続エッジに沿って距離を累積。長さフィルタより先）
+      let dAcc = aveLampAcc;
+      while (dAcc < len && lampMats.length + dblMats.length < MAX_LIGHTS) {
+        const t = dAcc / len;
+        const bx = e.a.x + (e.b.x - e.a.x) * t;
+        const bz = e.a.z + (e.b.z - e.a.z) * t;
+        const by = e.a.y + (e.b.y - e.a.y) * t + ROAD_LIFT;
+        const ry = Math.atan2(px, pz);
+        dblMats.push({ x: bx, y: by, z: bz, ry, glowIdx: glowPos.length / 3 });
+        glowPos.push(bx + Math.sin(ry) * armZD * 0.8, by + LIGHT_HEIGHT * 0.92, bz + Math.cos(ry) * armZD * 0.8);
+        glowPos.push(bx - Math.sin(ry) * armZD * 0.8, by + LIGHT_HEIGHT * 0.92, bz - Math.cos(ry) * armZD * 0.8);
+        dAcc += LIGHT_SPACING;
+      }
+      aveLampAcc = Math.max(0, dAcc - len);   // 次の幹線エッジへ持ち越し
+      continue;
+    }
+    if (len < LIGHT_SPACING * 0.6) continue;
+    const n = Math.max(1, Math.floor(len / LIGHT_SPACING));
+    for (let k = 1; k <= n && lampMats.length + dblMats.length < MAX_LIGHTS; k++) {
       const t = k / (n + 1);
       side = -side;
       const bx = e.a.x + (e.b.x - e.a.x) * t + px * side * (ROAD_WIDTH / 2 + 0.6);
       const bz = e.a.z + (e.b.z - e.a.z) * t + pz * side * (ROAD_WIDTH / 2 + 0.6);
       const by = e.a.y + (e.b.y - e.a.y) * t + ROAD_LIFT;
       const ry = Math.atan2(px * side, pz * side);   // 腕が道路の中心側を向く（実物合わせで符号反転済み）
-      lampMats.push({ x: bx, y: by, z: bz, ry });
+      lampMats.push({ x: bx, y: by, z: bz, ry, glowIdx: glowPos.length / 3 });
       if (lampLocal) {   // エディタ指定の光点（ヨー回転して配置）
         const cs = Math.cos(ry), sn = Math.sin(ry);
         glowPos.push(bx + lampLocal.x * cs + lampLocal.z * sn, by + lampLocal.y, bz - lampLocal.x * sn + lampLocal.z * cs);
@@ -2590,15 +2704,37 @@ async function buildRoadMeshes() {
   }
   roadGroup.add(glow);
   streetGlowMesh = glow;
+  // 幹線の両腕街灯（中央帯）
+  let dblMesh = null;
+  if (dblMats.length && lgD) {
+    dblMesh = new THREE.InstancedMesh(lgD, lampD.material, dblMats.length);
+    dblMesh.frustumCulled = false;
+    for (let i = 0; i < dblMats.length; i++) {
+      const L = dblMats[i];
+      _p.set(L.x, L.y, L.z);
+      _q.setFromAxisAngle(_up, L.ry);
+      _s.set(lScaleD, lScaleD, lScaleD);
+      _m.compose(_p, _q, _s);
+      dblMesh.setMatrixAt(i, _m);
+    }
+    roadGroup.add(dblMesh);
+  }
   // 街灯を破壊対象として登録（吹っ飛び用に同じジオメトリ/材質のプールを用意）
   registerPropKind('lamp', lg, lamp.material);
   for (let i = 0; i < lampMats.length; i++) {
     const L = lampMats[i];
-    props.push({ kind: 'lamp', mesh: lampMesh, index: i, x: L.x, y: L.y, z: L.z, ry: L.ry, s: lScale, h: LIGHT_HEIGHT, r: 1.7, dead: false, glowIndex: i });
+    props.push({ kind: 'lamp', mesh: lampMesh, index: i, x: L.x, y: L.y, z: L.z, ry: L.ry, s: lScale, h: LIGHT_HEIGHT, r: 1.7, dead: false, glowIndex: L.glowIdx });
+  }
+  if (dblMesh) {
+    registerPropKind('lampD', lgD, lampD.material);
+    for (let i = 0; i < dblMats.length; i++) {
+      const L = dblMats[i];
+      props.push({ kind: 'lampD', mesh: dblMesh, index: i, x: L.x, y: L.y, z: L.z, ry: L.ry, s: lScaleD, h: LIGHT_HEIGHT, r: 1.7, dead: false, glowIndex: L.glowIdx });
+    }
   }
   const counts = await buildRoadsideProps(loadKit, _m, _q, _p, _s, _dir, _up);
   scene.add(roadGroup);
-  console.log('roads:', activeEdges.length, 'lights:', lampMats.length, 'trees:', counts.trees);
+  console.log('roads:', activeEdges.length, 'lights:', lampMats.length, '+ dbl', dblMats.length, 'trees:', counts.trees);
 }
 
 // ── 信号機: 十字/T字交差点に light-square を立て、腕先に三色の加算発光球（昼夜問わず点灯）──
@@ -2620,18 +2756,18 @@ function buildSignals(asset, junc) {
   // 配置は初版と同じ。向きだけ初版から180°回転（ユーザー実物合わせ）
   for (const J of junc.cross) {                 // 十字=対角2本（群0/1で交互に切替が見える）
     if (poles.length >= MAX_SIGNALS - 1) break;
-    const off = ROAD_WIDTH / 2 + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);
+    const off = (J.ave ? ROAD_WIDTH + 0.8 : ROAD_WIDTH / 2) + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);   // 幹線交差点は並列車線の外へ
     poles.push({ x: J.x + cs * off + sn * off, y: J.y, z: J.z - sn * off + cs * off, ry: J.ry, group: 0 });
     poles.push({ x: J.x - cs * off - sn * off, y: J.y, z: J.z + sn * off - cs * off, ry: J.ry - Math.PI / 2, group: 1 });
   }
   for (const J of junc.tee) {                   // T字=枝の脇に1本
     if (poles.length >= MAX_SIGNALS) break;
-    const off = ROAD_WIDTH / 2 + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);
+    const off = (J.ave ? ROAD_WIDTH + 0.8 : ROAD_WIDTH / 2) + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);   // 幹線交差点は並列車線の外へ
     poles.push({ x: J.x + cs * off, y: J.y, z: J.z - sn * off, ry: J.ry, group: 0 });
   }
   for (const J of junc.any) {                   // 変則角度の交差点にも1本（自作マップ対策）
     if (poles.length >= MAX_SIGNALS) break;
-    const off = ROAD_WIDTH / 2 + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);
+    const off = (J.ave ? ROAD_WIDTH + 0.8 : ROAD_WIDTH / 2) + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);   // 幹線交差点は並列車線の外へ
     poles.push({ x: J.x + cs * off, y: J.y, z: J.z - sn * off, ry: J.ry, group: poles.length % 2 });
   }
   if (!poles.length) return;

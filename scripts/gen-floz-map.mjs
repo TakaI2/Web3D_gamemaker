@@ -313,6 +313,20 @@ for (const sg of segs) {
     i = j2;
   }
 }
+// 大通りの端は150mだけ通常の街路へ落とす（ランタイムが road-split で車線を合流させる遷移点になる）
+const pieces1 = [];
+for (const p of pieces) {
+  const len = Math.hypot(p.x2 - p.x1, p.z2 - p.z1);
+  if (p.kind !== 'avenue' || len < 520) { pieces1.push(p); continue; }
+  const ux = (p.x2 - p.x1) / len, uz = (p.z2 - p.z1) / len, TAPER = 150;
+  const ax = Math.round(p.x1 + ux * TAPER), az = Math.round(p.z1 + uz * TAPER);
+  const bx = Math.round(p.x2 - ux * TAPER), bz = Math.round(p.z2 - uz * TAPER);
+  pieces1.push({ x1: p.x1, z1: p.z1, x2: ax, z2: az, kind: 'street' });
+  pieces1.push({ x1: ax, z1: az, x2: bx, z2: bz, kind: 'avenue' });
+  pieces1.push({ x1: bx, z1: bz, x2: p.x2, z2: p.z2, kind: 'street' });
+}
+pieces.length = 0;
+pieces.push(...pieces1);
 // ピース同士の交点/接点を制御点にして折れ線化
 const EPS = 0.01;
 const roads = [];
