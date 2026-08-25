@@ -437,6 +437,52 @@ const g = buildRoadGraph(roads);
 const genEdges = g.edges.map(([aId, bId]) => { const A = g.nodes.get(aId), B = g.nodes.get(bId); return [A.x, 0, A.z, B.x, 0, B.z]; });
 const BLD_PARAMS = { spacing: 12 };   // 道路沿いの建物間隔を詰める（ランタイムにも params で渡す）
 const gen = generateBuildings(genEdges, { seed: 20260706, ...BLD_PARAMS });
+
+// ── 5.4) 公園（郊外の家々の大きな隙間を検出→生垣公園に。ランタナ buildParks が生垣/ゲート/噴水/ランタンを配置）──
+const parks = [];
+const parkRects = [];   // 建物除外用の [x0,x1,z0,z1]
+{
+  const RPC = 32, RP = new Map();   // 道路サンプルの位置ハッシュ（最近傍距離用）
+  for (const e2 of genEdges) {
+    const L = Math.hypot(e2[3] - e2[0], e2[5] - e2[2]), n = Math.max(1, Math.round(L / 10));
+    for (let i = 0; i <= n; i++) {
+      const x = e2[0] + (e2[3] - e2[0]) * i / n, z = e2[2] + (e2[5] - e2[2]) * i / n;
+      const k = Math.floor(x / RPC) + '_' + Math.floor(z / RPC);
+      if (!RP.has(k)) RP.set(k, []);
+      RP.get(k).push([x, z]);
+    }
+  }
+  const roadDist = (x, z) => {
+    let bd = 1e9;
+    const cx = Math.floor(x / RPC), cz = Math.floor(z / RPC);
+    for (let j = -3; j <= 3; j++) for (let i = -3; i <= 3; i++) {
+      const a = RP.get((cx + i) + '_' + (cz + j));
+      if (!a) continue;
+      for (const p of a) { const d = Math.hypot(x - p[0], z - p[1]); if (d < bd) bd = d; }
+    }
+    return bd;
+  };
+  const rngP = mulberry(SEED + 55);
+  for (let gz = -1500; gz <= 1250 && parks.length < 90; gz += 60) {
+    for (let gx = -2050; gx <= 2050 && parks.length < 90; gx += 60) {
+      const x = gx + Math.round((rngP() - 0.5) * 30), z = gz + Math.round((rngP() - 0.5) * 30);
+      if (Math.hypot(x, z) < 1000) continue;                       // 郊外のみ（中心街は高密度のまま）
+      if (!cityOk(x, z) || riverAt(x, z).d < 30 || z > coastZ(x) - 150) continue;
+      let near = false;
+      for (const s of railSamples) if (Math.hypot(x - s.x, z - s.z) < 42) { near = true; break; }
+      if (near) continue;
+      const rd = roadDist(x, z);
+      if (rd < 24 || rd > 70) continue;                            // 区画内側の「大きな隙間」だけ
+      const half = Math.round(Math.min(rd - 15, 28));
+      if (half < 14) continue;
+      for (const p of parks) if (Math.hypot(x - p._cx, z - p._cz) < 190) { near = true; break; }
+      if (near) continue;
+      parks.push({ _cx: x, _cz: z, points: [[x - half, z - half], [x + half, z - half], [x + half, z + half], [x - half, z + half]], fountain: rngP() < 0.55 ? 'round' : 'square' });
+      parkRects.push([x - half - 3, x + half + 3, z - half - 3, z + half + 3]);
+    }
+  }
+  for (const p of parks) { delete p._cx; delete p._cz; }
+}
 const removed = [];
 for (const it of gen.instances) {
   const rv = riverAt(it.x, it.z);
@@ -448,6 +494,7 @@ for (const it of gen.instances) {
   }
   if (!bad) for (const s of railSamples) if (Math.hypot(it.x - s.x, it.z - s.z) < 14) { bad = true; break; }   // 線路敷
   if (!bad) for (const st2 of stations) if (Math.hypot(it.x - st2.x, it.z - st2.z) < 44) { bad = true; break; } // 駅前広場
+  if (!bad) for (const r2 of parkRects) if (it.x > r2[0] && it.x < r2[1] && it.z > r2[2] && it.z < r2[3]) { bad = true; break; }   // 公園内
   if (bad) removed.push(instanceId(it));
 }
 
@@ -473,6 +520,7 @@ const out = {
   roads, osmRoads: false,
   bridges,
   rails,
+  parks,
   buildings: { seed: 20260706, removed, moved: {}, added, params: BLD_PARAMS },
   water,
   forest: { cell: FCELL, res: FRES, yOff: 0, model: 'fantasy_GLB format/tree-high-round.glb', treeH: 20, data: b64(forest) },
@@ -488,4 +536,4 @@ console.log('terrain h:', hMin.toFixed(1), '..', hMax.toFixed(1));
 console.log('roads:', roads.length, 'splines /', roadKm.toFixed(1) + 'km →', g.nodes.size, 'nodes /', g.edges.length, 'edges');
 console.log('buildings:', gen.instances.length, 'auto (removed', removed.length, ') + added', added.length, '/ zones', JSON.stringify(gen.zones));
 console.log('bridges:', bridges.length, bridges.map((b2) => b2.kind + '@' + b2.x + ',' + b2.z + ' L' + b2.len).join(' / '));
-console.log('water rects:', water.length, '/ forest cells:', fCells);
+console.log('water rects:', water.length, '/ forest cells:', fCells, '/ parks:', parks.length);

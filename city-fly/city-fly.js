@@ -1538,7 +1538,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; } };
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, breakCar };
 // ── キャラ選択パネル（👤ボタン）──
 function setupCharUI() {
   const btn = document.createElement('button');
@@ -4559,6 +4559,15 @@ function updateThrown(dt) {
 
 function breakCar(car, point) {
   spawnBreakFx(point);
+  if (car.policeCar) {   // パトカー破壊＝重犯罪（手配度が残っていれば updateWanted が補充する）
+    addWanted(1.0, point);
+    spawnImpactFx(point, 1.3);
+    spawnFirePillar(point, 0.8);
+    car.dead = true; car.thrown = false; car.vel = null;
+    const i = police.indexOf(car.pRef);
+    if (i >= 0) { police.splice(i, 1); scene.remove(car.pRef.mesh); }
+    return;
+  }
   if (car.jet) {   // 戦闘機: 犯罪ではない。爆発火柱→しばらくして空中へ再出撃
     if (!car.shotDown) addKill();   // 掴み投げ等での直接破壊（撃墜済みは二重カウントしない）
     spawnImpactFx(point, 1.6);
@@ -6264,11 +6273,14 @@ async function spawnPolice() {
     return s;
   };
   const p = { mesh, node: e.aId, path: null, seg: 0, segT: 0, repathT: 0, lightR: mkLight(0xff2020, 0.35), lightB: mkLight(0x2040ff, -0.35), flashT: 0 };
+  p.proxy = { mesh, hitR: 2.8, policeCar: true, pRef: p };   // 攻撃/掴み対象にする cars 互換の最小プロキシ
   scene.add(mesh);
   police.push(p);
 }
 function removePolice() {
-  const p = police.pop();
+  const idx = police.findIndex((p) => !(p.proxy && (p.proxy.grabbed || p.proxy.thrown)));   // 掴まれ/投擲中は撤収させない
+  if (idx < 0) return;
+  const p = police.splice(idx, 1)[0];
   if (p) scene.remove(p.mesh);
 }
 
@@ -6305,6 +6317,7 @@ function updateWanted(dt) {
   while (police.length > lvl) removePolice();
   let nearest = Infinity;
   for (const p of police) {
+    if (p.proxy && (p.proxy.grabbed || p.proxy.thrown || p.proxy.dead)) continue;   // 掴まれ/投擲中は走行AIを止める
     // 追跡: プレイヤー最寄りノードへ定期リパス。
     // 走行中の再計算は「今向かっている前方ノード」起点で予約し、到達時に切替（後方スナップで消えたように見える問題の修正）
     p.repathT -= dt;
@@ -6592,7 +6605,11 @@ const JET = { n: 6, spMin: 30, spMax: 52, sep: 18, orbitR: 130, resp: 12, hitR: 
 const jets = [], jetRespawn = [];
 let jetAnchorA = 0;
 const _jV1 = new THREE.Vector3(), _jV2 = new THREE.Vector3(), _jV3 = new THREE.Vector3(), _jV4b = new THREE.Vector3();
-function carsAndJets() { return jets.length ? cars.concat(jets) : cars; }
+function carsAndJets() {
+  let l = jets.length ? cars.concat(jets) : cars;
+  if (police.length) l = l.concat(police.map((p) => p.proxy));   // パトカーもビーム/掴み/投擲の対象
+  return l;
+}
 const jetBombs = [];
 function jetFireShot(jet) {   // 正面ショット: 筒形ポリゴンのビーム（spawnBeam thick）
   const from = _jV2.copy(jet.mesh.position).addScaledVector(_jV3.copy(jet.flyVel).normalize(), 7);
