@@ -794,7 +794,14 @@ function setupTitle() {
 function startMode(mode) {
   gameMode = mode;
   if (titleEl) titleEl.style.display = 'none';
+  warmDamageParts(3);   // 部位溶解のONパイプラインを実描画で温め直す
+  // （起動時の5秒ウォームはタイトル読込中に空費され、プレイヤーが描かれる前に終わっていた
+  //   →初回の被弾しきい値で650ms級のコンパイルストールが出ていた。ゲーム開始時に再ウォーム）
   if (mode === 'play') startFlow();   // start→story(OP)→battle の順にフローが進行
+}
+function warmDamageParts(sec = 3) {
+  dmgWarmT = Math.max(dmgWarmT, sec);
+  for (const dp of dmgParts) { try { if (dp.dis.setActive) dp.dis.setActive(true); } catch { /* noop */ } }
 }
 function showGameOver() {
   if (goEl) return;
@@ -1658,7 +1665,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, breakCar };
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, takeContainer, destroyContainer, breakCar };
 // ── キャラ選択パネル（👤ボタン）──
 function setupCharUI() {
   const btn = document.createElement('button');
@@ -2124,7 +2131,58 @@ async function finishRoads() {
   console.log('roads center nodes', roadNodes.size, 'edges', activeEdges.length, 'cars', cars.length);
 }
 // ── 埠頭（.map.json port）: 岸壁＋コンテナ置き場＋接岸した客船（船は掴み/破壊対象）──
-let portShip = null;   // {mesh, proxy, home:{x,y,z,ry}, respawnT}
+let portShip = null;   // {mesh, proxy, home, hp, carve, carveIdx, dying, respawnT}
+let portCont = null;   // コンテナ {im, g, mat, s, spots:[{x,y,z,gone}]}（ビームで破壊可・掴んで投げられる）
+const SHIP_HP = 9;     // towerと同じ強度
+const _contV = new THREE.Vector3();
+function shipHit(point, dmg = 1) {   // 客船へのダメージ＝建物と同じ表現（球状欠損＋がれき、HP0で沈降溶解）
+  const st = portShip;
+  if (!st || st.dying || st.proxy.dead) return;
+  spawnDebrisBurst(point, 'bld', 1.1);
+  addWanted(0.3, point);
+  if (st.carve) {
+    const i = st.carveIdx++ % 6;
+    st.carve.uCenters[i].value.copy(point);
+    st.carve.uRadii[i].value = 3.4 + Math.random() * 1.5;
+  }
+  st.hp -= dmg;
+  if (st.hp <= 0) {
+    st.dying = 0.0001;
+    if (st.carve) st.carve.uKillOn.value = 1;
+    spawnImpactFx(point, 2.2);
+    spawnFirePillar(point, 1.2);
+    addWanted(1.0, point);
+  }
+}
+function hideContInstance(i) {
+  _m4tmp.makeScale(0, 0, 0);
+  _m4tmp.setPosition(0, -9999, 0);
+  portCont.im.setMatrixAt(i, _m4tmp);
+  portCont.im.instanceMatrix.needsUpdate = true;
+}
+const _m4tmp = new THREE.Matrix4();
+function takeContainer(i) {   // インスタンス→単体メッシュ化（掴み/投擲対象）
+  const sp = portCont && portCont.spots[i];
+  if (!sp || sp.gone) return null;
+  sp.gone = true;
+  hideContInstance(i);
+  const mesh = new THREE.Mesh(portCont.g, portCont.mat);
+  mesh.scale.setScalar(portCont.s);
+  mesh.position.set(sp.x, sp.y + 1.3, sp.z);
+  scene.add(mesh);
+  const proxy = { mesh, hitR: 4.2, container: true };
+  mesh.userData.car = proxy;
+  return proxy;
+}
+function destroyContainer(i, point) {
+  const sp = portCont && portCont.spots[i];
+  if (!sp || sp.gone) return;
+  sp.gone = true;
+  hideContInstance(i);
+  spawnBreakFx(point);
+  spawnDebrisBurst(point, 'bld', 0.8);
+  addWanted(0.2, point);
+}
 async function buildMapPort() {
   if (!mapPort || !mapTerrain) return;
   const [px0, pz0, px1, pz1] = mapPort.rect;
@@ -2165,6 +2223,7 @@ async function buildMapPort() {
     const _cm = new THREE.Matrix4(), _cq = new THREE.Quaternion(), _cs2 = new THREE.Vector3(cs, cs, cs), _cp = new THREE.Vector3();
     for (let i = 0; i < spots.length; i++) { _cp.set(spots[i][0], spots[i][1], spots[i][2]); _cm.compose(_cp, _cq, _cs2); im.setMatrixAt(i, _cm); }
     grp.add(im);
+    portCont = { im, g: cont.g, mat: cont.mat, s: cs, spots: spots.map((p) => ({ x: p[0], y: p[1], z: p[2], gone: false })) };
     console.log('port: containers', spots.length);
   } catch (e) { console.warn('コンテナ生成失敗:', e); }
   // 客船（接岸・掴み/破壊対象）
@@ -2177,21 +2236,44 @@ async function buildMapPort() {
     mesh.position.set((mapPort.ship && mapPort.ship.x) || (px0 + px1) / 2, -ship.size.y * ss * 0.10, pz1 + beam / 2 + 4);
     mesh.frustumCulled = false;
     grp.add(mesh);
-    portShip = { mesh, proxy: { mesh, hitR: Math.max(20, beam * 0.8), ship: true }, home: { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z }, respawnT: 0 };
+    const cm2 = makeCarveMaterial(ship.mat, mesh.position.y, ship.size.y * ss);   // 建物と同じ破壊表現（球状欠損＋崩壊溶解）
+    mesh.material = cm2.mat;
+    portShip = { mesh, proxy: { mesh, hitR: Math.max(20, beam * 0.8), ship: true }, home: { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z }, respawnT: 0, hp: SHIP_HP, carve: cm2, carveIdx: 0, dying: 0 };
     mesh.userData.car = portShip.proxy;
     console.log('port: ship len', Math.round(ship.size.x * ss), 'beam', Math.round(beam));
   } catch (e) { console.warn('客船生成失敗:', e); }
   scene.add(grp);
 }
 function updatePort(dt) {
-  if (!portShip || !portShip.proxy.dead) return;
-  portShip.respawnT -= dt;
-  if (portShip.respawnT <= 0) {   // しばらくして再入港
-    const p = portShip.proxy;
+  const st = portShip;
+  if (!st) return;
+  if (st.dying) {   // HP0: 沈降＋上から溶解（建物の崩壊と同じ）
+    st.dying += dt;
+    const k = Math.min(1, st.dying / 2.2);
+    st.mesh.position.y -= dt * 6;
+    if (st.carve) { st.carve.uKill.value = k; st.carve.uBaseY.value = st.mesh.position.y; }
+    if (k >= 1) {
+      st.dying = 0;
+      st.proxy.dead = true;
+      st.mesh.visible = false;
+      st.respawnT = 45;
+    }
+    return;
+  }
+  if (!st.proxy.dead) return;
+  st.respawnT -= dt;
+  if (st.respawnT <= 0) {   // しばらくして再入港（HP・欠損もリセット）
+    const p = st.proxy;
     p.dead = false; p.thrown = false; p.grabbed = false; p.vel = null;
-    portShip.mesh.visible = true;
-    portShip.mesh.position.set(portShip.home.x, portShip.home.y, portShip.home.z);
-    portShip.mesh.rotation.set(0, 0, 0);
+    st.hp = SHIP_HP; st.carveIdx = 0;
+    if (st.carve) {
+      st.carve.uKillOn.value = 0; st.carve.uKill.value = 0; st.carve.uBaseY.value = st.home.y;
+      for (const r of st.carve.uRadii) r.value = 0;
+      for (const c of st.carve.uCenters) c.value.set(1e6, 1e6, 1e6);
+    }
+    st.mesh.visible = true;
+    st.mesh.position.set(st.home.x, st.home.y, st.home.z);
+    st.mesh.rotation.set(0, 0, 0);
   }
 }
 // 橋の簡易モデル（mapplan: 平橋=床版+欄干+橋脚 / アーチ橋=単純ポリゴンの上路アーチ+川中の支柱）
@@ -4437,7 +4519,14 @@ function fireBeam(bldDmg, kenDmg, colorHex, thick) {
     const t4 = rayHitSphere(_muzzle, _camDir, ms.mesh.position, 2.8, SHOOT_RANGE);
     if (t4 < mslT2) { mslT2 = t4; mslBest = ms; }
   }
-  const minT = Math.min(bldT, carT, kenT, gndT, propT, mpT, wkT, spT, mslT2);
+  let contT = Infinity, contBest = -1;   // 埠頭のコンテナ
+  if (portCont) for (let i = 0; i < portCont.spots.length; i++) {
+    const sp = portCont.spots[i];
+    if (sp.gone) continue;
+    const t5 = rayHitSphere(_muzzle, _camDir, _contV.set(sp.x, sp.y + 1.3, sp.z), 4.0, SHOOT_RANGE);
+    if (t5 < contT) { contT = t5; contBest = i; }
+  }
+  const minT = Math.min(bldT, carT, kenT, gndT, propT, mpT, wkT, spT, mslT2, contT);
   const end = _muzzle.clone().addScaledVector(_camDir, minT === Infinity ? SHOOT_RANGE : minT);
   attackAim.copy(end); attackAimActive = true;   // FXビームの到達点＝この実着弾点
   spawnBeam(_vk.set(player.pos.x, player.pos.y + 1.2, player.pos.z), end, minT !== Infinity, colorHex, thick);
@@ -4449,7 +4538,8 @@ function fireBeam(bldDmg, kenDmg, colorHex, thick) {
   if (minT === mpT) { mp.sendHit(mpBest.id, MP_DMG.beam, 'beam'); spawnImpactFx(end, 1); }
   else if (minT === propT) { smashProp(pr.prop, _camDir.x, _camDir.z, bldDmg); spawnImpactFx(end, 1); }
   else if (minT === bldT) applyHitToBuilding(hits[0], bldDmg, 1, 'player');
-  else if (minT === carT) hitCarBeam(carBest);
+  else if (minT === contT) destroyContainer(contBest, end);
+  else if (minT === carT) { if (carBest.ship) shipHit(end, 1); else hitCarBeam(carBest); }
   else if (minT === kenT) hitKenBeam(kenBest, kenDmg);
   else if (minT === gndT) {   // 地形着弾: 岩の吹き上げ＋火柱＋焦げ跡。道路上なら穴＋アスファルト片
     const onRoad = roadTopAt(end.x, end.z) != null;
@@ -4838,13 +4928,23 @@ function grabTarget() {
   if (!carsAndJets().length) return;
   _grabRay.set(_muzzle, _camDir); _grabRay.far = GRAB_RANGE;
   const meshes = carsAndJets().filter((c) => !c.grabbed && !c.thrown && !c.dead && !c.tornado).map((c) => c.mesh);
+  if (portCont) meshes.push(portCont.im);   // コンテナも掴める（インスタンス→命中時に単体化）
   const hit = _grabRay.intersectObjects(meshes, true)[0];
   let car = null;
-  if (hit) { let o = hit.object; while (o && !o.userData.car) o = o.parent; if (o) car = o.userData.car; }
+  if (hit && portCont && hit.object === portCont.im) {
+    if (hit.instanceId != null) car = takeContainer(hit.instanceId);
+  } else if (hit) { let o = hit.object; while (o && !o.userData.car) o = o.parent; if (o) car = o.userData.car; }
   if (!car) {
     _tmpV.copy(_muzzle).addScaledVector(_camDir, HOLD_DIST + 8);
-    let best = GRAB_RANGE;
+    let best = GRAB_RANGE, contPick = -1;
     for (const c of carsAndJets()) { if (c.grabbed || c.thrown || c.dead || c.tornado) continue; const d = c.mesh.position.distanceTo(_tmpV); if (d < best) { best = d; car = c; } }
+    if (portCont) for (let i = 0; i < portCont.spots.length; i++) {
+      const sp = portCont.spots[i];
+      if (sp.gone) continue;
+      const d = Math.hypot(sp.x - _tmpV.x, sp.y + 1.3 - _tmpV.y, sp.z - _tmpV.z);
+      if (d < best) { best = d; car = null; contPick = i; }
+    }
+    if (contPick >= 0) car = takeContainer(contPick);
   }
   if (car) {
     car.grabbed = true; grabbedCar = car; car.holdVel = car.holdVel || new THREE.Vector3(); car.holdVel.set(0, 0, 0);
@@ -4928,14 +5028,17 @@ function breakCar(car, point) {
     wreckTrain(tr);
     return;
   }
-  if (car.ship) {   // 客船: 大爆発→しばらくして再入港
-    addWanted(1.5, point);
-    spawnImpactFx(point, 3.0);
-    spawnFirePillar(point, 1.6);
-    spawnDebrisBurst(point, 'bld', 1.6);
+  if (car.ship) {   // 客船: 建物と同じ強度（カーブ欠損＋HP）。投擲の衝突は大ダメージ
+    shipHit(point, car.thrown ? 4 : 2);
+    car.thrown = false; car.vel = null;
+    return;
+  }
+  if (car.container) {   // コンテナ（単体化済み）: 破壊
+    addWanted(0.2, point);
+    spawnDebrisBurst(point, 'bld', 0.8);
     car.dead = true; car.thrown = false; car.vel = null;
     car.mesh.visible = false;
-    if (portShip) portShip.respawnT = 45;
+    scene.remove(car.mesh);
     return;
   }
   if (car.policeCar) {   // パトカー破壊＝重犯罪（手配度が残っていれば updateWanted が補充する）
