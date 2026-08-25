@@ -1538,7 +1538,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; } };
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; } };
 // ── キャラ選択パネル（👤ボタン）──
 function setupCharUI() {
   const btn = document.createElement('button');
@@ -2249,9 +2249,11 @@ function buildMapRoads() {
     roadNodes.set(id, { local: new THREE.Vector3(n.x, bridgeY(n.x, n.z, ty), n.z), adj: n.adj });
   }
   activeEdges = [];
+  edgeKindByPair.clear();
   for (const [aId, bId, kind] of g.edges) {
     const a = roadNodes.get(aId).local, b = roadNodes.get(bId).local;
     activeEdges.push({ aId, bId, a, b, len: a.distanceTo(b), kind });
+    if (kind) edgeKindByPair.set(aId < bId ? aId + '|' + bId : bId + '|' + aId, kind);
   }
   console.log('map roads:', mapRoads.length, 'splines →', roadNodes.size, 'nodes /', activeEdges.length, 'edges');
 }
@@ -2259,6 +2261,8 @@ function buildMapRoads() {
 // OSM実道路は任意角度なので Kenney の road-straight を「エッジ長に引き伸ばし」てインスタンス配置。
 // 交差点ノードは円パッチで繋ぎ、街灯(light-curved)を等間隔配置＋夜だけ光る発光点を Points で重ねる。
 const ROAD_WIDTH = 7.0;        // 道路幅(m)
+const AVE_DUAL_OFF = ROAD_WIDTH / 2 + 0.8;   // 幹線(avenue)の上下線オフセット＝車線中心（描画と車の走行で共用）
+const edgeKindByPair = new Map();            // 'aId|bId'(小さい方が先) -> kind。車の車線振り分け用（buildMapRoadsで構築）
 const ROAD_LIFT = 0.12;        // 地形からの浮かせ量（z-fighting回避）
 const USE_BENDS = false;       // カーブタイル: 任意角度だと向きが合わず不評→無効化（trueで復活）
 const BEND_BASE = 0;           // road-bend-sidewalk の基準向き（ズレたら±90°単位で調整）
@@ -2329,7 +2333,7 @@ async function buildRoadMeshes() {
     optKit('road-split'), optKit('sign-highway-detailed'),
   ]);
   // 大通り(kind='avenue')は上下線を並列化した幹線道路として描く
-  const DUAL_OFF = ROAD_WIDTH / 2 + 0.8;                              // 各車線の中心オフセット（中央帯1.6m）
+  const DUAL_OFF = AVE_DUAL_OFF;                                      // 各車線の中心オフセット（車の走行オフセットと共用）
   const AVE_JUNC_SCALE = (DUAL_OFF * 2 + ROAD_WIDTH) / ROAD_WIDTH;    // 幹線が絡む交差点タイルの拡大率
   const SPLIT_BASE = 0;                                               // road-split の向き補正（目視調整ポイント）
   const aveNodes = new Set();
@@ -3413,6 +3417,14 @@ function updateCars(dt) {
     }
     car.mesh.position.lerpVectors(a.local, b.local, car.t);
     const dx = b.local.x - a.local.x, dz = b.local.z - a.local.z;
+    if (edgeKindByPair.size) {   // 幹線は進行方向の左側車線へ（左側通行）＝分離帯の上を走らせない
+      const ek = edgeKindByPair.get(car.aId < car.bId ? car.aId + '|' + car.bId : car.bId + '|' + car.aId);
+      if (ek === 'avenue') {
+        const inv = 1 / Math.sqrt(dx * dx + dz * dz || 1);
+        car.mesh.position.x += dz * inv * AVE_DUAL_OFF;
+        car.mesh.position.z += -dx * inv * AVE_DUAL_OFF;
+      }
+    }
     if (dx * dx + dz * dz > 1e-6) car.mesh.rotation.y = Math.atan2(dx, dz) + CAR_FACE;
   }
 }
