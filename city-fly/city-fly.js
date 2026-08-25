@@ -240,6 +240,7 @@ let mapRoads = [];       // .map.json のスプライン道路（あればOSMの
 let mapBridges = [];     // .map.json の橋 {x,z,dx,dz,len,w,kind:'flat'|'arch',deckY,wl,bedY}（道路ノードをデッキ高へ持ち上げ＋簡易モデル描画）
 let mapRails = [];       // .map.json の鉄道 [{points:[[x,z,y]..], gauge, stations:[{x,z,name}]}]（複線＋高架＋駅＋列車運行）
 let mapPort = null;      // .map.json の埠頭 {rect:[x0,z0,x1,z1], h, containers:[{x0,x1,z}], ship:{x,z,len}}
+let mapRotaries = [];    // .map.json の駅前ロータリー [{x,z,r}]（環道はroadsに焼き込み済み。ここでは中央島の装飾と信号抑制）
 let mapBldParams = null; // .map.json buildings.params（自動配置のオプション上書き。例: spacing）
 let mapBuildings = null; // .map.json の建物差分 {removed[], moved{}, added[]}
 let mapWater = [];       // .map.json の水面矩形 {x,z,w,d,level}
@@ -312,6 +313,7 @@ async function buildMapGround() {
   mapBridges = Array.isArray(j.bridges) ? j.bridges : [];
   mapRails = Array.isArray(j.rails) ? j.rails : [];
   mapPort = j.port || null;
+  mapRotaries = Array.isArray(j.rotaries) ? j.rotaries : [];
   mapBldParams = (j.buildings && j.buildings.params) || null;
   mapForest = (j.forest && j.forest.data) ? { cell: j.forest.cell || 16, res: j.forest.res, yOff: j.forest.yOff ?? 0, model: j.forest.model || null, treeH: j.forest.treeH || 7, data: unb64(j.forest.data) } : null;
   mapParks = Array.isArray(j.parks) ? j.parks.filter((pk) => pk.points && pk.points.length >= 3) : [];
@@ -2116,6 +2118,7 @@ async function finishRoads() {
   try { buildMapBridges(); } catch (e) { console.warn('橋の生成失敗:', e); }
   try { await buildMapRails(); } catch (e) { console.warn('鉄道の生成失敗:', e); }
   try { await buildMapPort(); } catch (e) { console.warn('埠頭の生成失敗:', e); }
+  try { await buildRotaries(); } catch (e) { console.warn('ロータリーの生成失敗:', e); }
   if (!NO_NPC) await spawnCars();   // 性能切り分け: ?nonpc=1 で車を出さない
   try { buildCarLights(); } catch (e) { console.warn('車ライト生成失敗', e); }
   console.log('roads center nodes', roadNodes.size, 'edges', activeEdges.length, 'cars', cars.length);
@@ -2242,6 +2245,42 @@ function buildMapBridges() {
   }
   scene.add(grpAll);
   console.log('bridges:', mapBridges.length);
+}
+// ── 駅前ロータリー: 中央島（縁石＋芝＋噴水）。環道はroadsに焼き込み済み＝車は普通に周回する ──
+async function buildRotaries() {
+  if (!mapRotaries.length || !mapTerrain) return;
+  const grp = new THREE.Group();
+  const curbM = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.9 });
+  const grassM = new THREE.MeshStandardMaterial({ color: 0x4f7f47, roughness: 1.0 });
+  let fount = null;
+  try {
+    const loader = new GLTFLoader();
+    const a = bakeModel((await loader.loadAsync(new URL('../models/fantasy_GLB%20format/fountain-round-detail.glb', location.href).href)).scene);
+    const g = a.geometry.clone();
+    g.computeBoundingBox();
+    const b = g.boundingBox;
+    g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+    fount = { g, mat: a.material, h: Math.max(0.01, b.max.y - b.min.y) };
+  } catch (e) { console.warn('ロータリー噴水の読込失敗:', e); }
+  for (const ro of mapRotaries) {
+    const y = mapTerrain.heightAt(ro.x, ro.z);
+    const rIn = Math.max(4, ro.r - 10);   // 環道の内側だけ島にする
+    const curb = new THREE.Mesh(new THREE.CylinderGeometry(rIn, rIn, 0.5, 28), curbM);
+    curb.position.set(ro.x, y + 0.25, ro.z);
+    grp.add(curb);
+    const grass = new THREE.Mesh(new THREE.CylinderGeometry(rIn - 0.7, rIn - 0.7, 0.62, 28), grassM);
+    grass.position.set(ro.x, y + 0.31, ro.z);
+    grp.add(grass);
+    if (fount) {
+      const m = new THREE.Mesh(fount.g, fount.mat);
+      const s = 4.2 / fount.h;
+      m.scale.setScalar(s);
+      m.position.set(ro.x, y + 0.62, ro.z);
+      grp.add(m);
+    }
+  }
+  scene.add(grp);
+  console.log('rotaries:', mapRotaries.length);
 }
 // ── 鉄道: 複線レール＋高架（デッキ+円柱橋脚）＋駅ホーム＋列車の定期運行（.map.json rails）──
 let railPath = null;     // {pts,cum,total,gauge,stations:[{name,arc,y}]}
@@ -2610,7 +2649,7 @@ async function buildRoadMeshes() {
   const SPLIT_BASE = 0;                                               // road-split の向き補正（目視調整ポイント）
   const aveNodes = new Set();
   for (const e of activeEdges) if (e.kind === 'avenue') { aveNodes.add(e.aId); aveNodes.add(e.bId); }
-  const tBend = USE_BENDS ? tBendRaw : null;
+  const tBend = (USE_BENDS || mapRoads.length) ? tBendRaw : null;   // 自作マップ=90°格子なのでコーナータイルが正しく合う（OSM任意角度では従来通り無効）
   // タイル正規化: laneRotate=正方形タイルのレーンX向きをZへ90°回す → XZ中心・底面0
   const normTile = (asset, laneRotate) => {
     const g = asset.geometry.clone();
@@ -2740,12 +2779,51 @@ async function buildRoadMeshes() {
   const nJunc = addJunc(tCross, junc.cross) + addJunc(tTee, junc.tee) + addJunc(tBend, junc.bend) + addJunc(tSplit, junc.split);
   if (sigLamp) try { buildSignals(sigLamp, junc); } catch (e) { console.warn('信号生成失敗', e); }
 
-  // ── 道路セグメント: 幹線(avenue)=並列2車線 / 長いエッジは barrier 付きタイル（＝ガードレール）──
+  // ── 道路セグメント: 幹線(avenue)=並列2車線 / barrierは「直線チェーンの合計長」で判定 ──
+  //   （グラフのエッジは~20m刻みなのでエッジ単体の長さでは一度も発動しない＝実測0本だった）
+  const chainLen = new Map();
+  {
+    const edgeAt = new Map();
+    for (let i = 0; i < activeEdges.length; i++) {
+      const e = activeEdges[i];
+      const il = 1 / (e.len || 1);
+      if (!edgeAt.has(e.aId)) edgeAt.set(e.aId, []);
+      if (!edgeAt.has(e.bId)) edgeAt.set(e.bId, []);
+      edgeAt.get(e.aId).push({ idx: i, other: e.bId, dx: (e.b.x - e.a.x) * il, dz: (e.b.z - e.a.z) * il });
+      edgeAt.get(e.bId).push({ idx: i, other: e.aId, dx: (e.a.x - e.b.x) * il, dz: (e.a.z - e.b.z) * il });
+    }
+    const COL = Math.cos(Math.PI / 180 * 12);
+    const visited = new Uint8Array(activeEdges.length);
+    for (let i = 0; i < activeEdges.length; i++) {
+      if (visited[i]) continue;
+      const chain = [i];
+      visited[i] = 1;
+      const e0 = activeEdges[i];
+      const il0 = 1 / (e0.len || 1);
+      const walk = (startNode, dx0, dz0) => {
+        let nid = startNode, dx = dx0, dz = dz0;
+        for (;;) {
+          let next = null;
+          for (const c of (edgeAt.get(nid) || [])) { if (!visited[c.idx] && c.dx * dx + c.dz * dz > COL) { next = c; break; } }
+          if (!next) return;
+          visited[next.idx] = 1;
+          chain.push(next.idx);
+          nid = next.other; dx = next.dx; dz = next.dz;
+        }
+      };
+      walk(e0.bId, (e0.b.x - e0.a.x) * il0, (e0.b.z - e0.a.z) * il0);
+      walk(e0.aId, (e0.a.x - e0.b.x) * il0, (e0.a.z - e0.b.z) * il0);
+      let total = 0;
+      for (const idx of chain) total += activeEdges[idx].len;
+      for (const idx of chain) chainLen.set(idx, total);
+    }
+  }
   const stdIdx = [], barIdx = [], aveIdx = [];
   for (let i = 0; i < activeEdges.length; i++) {
     const e = activeEdges[i];
     if (e.kind === 'avenue') { aveIdx.push(i); continue; }
-    ((roadBar && e.len >= BARRIER_MIN_EDGE) ? barIdx : stdIdx).push(i);
+    const runLen = chainLen.get(i) || e.len;
+    ((roadBar && e.kind !== 'alley' && runLen >= BARRIER_MIN_EDGE * 1.5) ? barIdx : stdIdx).push(i);   // 長い街路にガードレール
   }
   const fillRoad = (tile, idxList, lateral = 0) => {
     if (!idxList.length) return;
@@ -2781,8 +2859,9 @@ async function buildRoadMeshes() {
     }
     roadGroup.add(mesh);
   };
+  const RB = roadBar ? normTile(roadBar, true) : null;
   fillRoad(R, stdIdx);
-  if (roadBar) fillRoad(normTile(roadBar, true), barIdx);
+  if (RB) fillRoad(RB, barIdx);
   if (signHw && aveIdx.length) {   // 幹線の案内標識: sign-highway-detailed をところどころ（約240m毎・左右交互）
     const sgeo = signHw.geometry.clone();
     sgeo.computeBoundingBox();
@@ -2824,9 +2903,9 @@ async function buildRoadMeshes() {
       roadGroup.add(signIM);
     }
   }
-  if (aveIdx.length) {   // 幹線: 上下線を左右にオフセットして並列化＋中央帯
-    fillRoad(R, aveIdx, DUAL_OFF);
-    fillRoad(R, aveIdx, -DUAL_OFF);
+  if (aveIdx.length) {   // 幹線: 上下線を左右にオフセットして並列化（barrier付きタイル=mapplan準拠）＋中央帯
+    fillRoad(RB || R, aveIdx, DUAL_OFF);
+    fillRoad(RB || R, aveIdx, -DUAL_OFF);
     const medIM = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshStandardMaterial({ color: 0x39404a, roughness: 0.95 }), aveIdx.length);
     medIM.frustumCulled = false;
@@ -3029,19 +3108,23 @@ function buildSignals(asset, junc) {
   const armZ = t.l / 2 * sc;                    // 腕の張り出し（+Z想定・light-curvedと同じ）
   const headY = t.h * sc * 0.93;
   const poles = [];   // {x,y,z,ry,group}
+  const inRotary = (J) => mapRotaries.some((ro) => Math.hypot(J.x - ro.x, J.z - ro.z) < ro.r + 12);   // ロータリーは信号レス
   // 配置は初版と同じ。向きだけ初版から180°回転（ユーザー実物合わせ）
   for (const J of junc.cross) {                 // 十字=対角2本（群0/1で交互に切替が見える）
+    if (inRotary(J)) continue;
     if (poles.length >= MAX_SIGNALS - 1) break;
     const off = (J.ave ? ROAD_WIDTH + 0.8 : ROAD_WIDTH / 2) + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);   // 幹線交差点は並列車線の外へ
     poles.push({ x: J.x + cs * off + sn * off, y: J.y, z: J.z - sn * off + cs * off, ry: J.ry, group: 0 });
     poles.push({ x: J.x - cs * off - sn * off, y: J.y, z: J.z + sn * off - cs * off, ry: J.ry - Math.PI / 2, group: 1 });
   }
   for (const J of junc.tee) {                   // T字=枝の脇に1本
+    if (inRotary(J)) continue;
     if (poles.length >= MAX_SIGNALS) break;
     const off = (J.ave ? ROAD_WIDTH + 0.8 : ROAD_WIDTH / 2) + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);   // 幹線交差点は並列車線の外へ
     poles.push({ x: J.x + cs * off, y: J.y, z: J.z - sn * off, ry: J.ry, group: 0 });
   }
   for (const J of junc.any) {                   // 変則角度の交差点にも1本（自作マップ対策）
+    if (inRotary(J)) continue;
     if (poles.length >= MAX_SIGNALS) break;
     const off = (J.ave ? ROAD_WIDTH + 0.8 : ROAD_WIDTH / 2) + 1.0, cs = Math.cos(J.ry), sn = Math.sin(J.ry);   // 幹線交差点は並列車線の外へ
     poles.push({ x: J.x + cs * off, y: J.y, z: J.z - sn * off, ry: J.ry, group: poles.length % 2 });

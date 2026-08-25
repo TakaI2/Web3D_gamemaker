@@ -349,6 +349,44 @@ for (const p of pieces) {
 }
 pieces.length = 0;
 pieces.push(...pieces1);
+// ── 3.2) 駅前ロータリー: 八角形の環道＋既存街路への接続腕（腕は交点パスに入れて格子と接続）──
+const rotaries = [];
+{
+  const R_ROT = 24;
+  for (const [sx, sz] of [[-1450, 45], [0, -145], [1700, -160]]) {   // 駅前広場（西/中央/東）
+    const findV = (dir) => {   // 最寄りの縦ピース（東西の腕の接続先）
+      let best = null;
+      for (const p of pieces) {
+        if (Math.abs(p.x1 - p.x2) > 0.01) continue;
+        const x = p.x1;
+        if ((x - sx) * dir <= R_ROT + 6 || (x - sx) * dir > 170) continue;
+        const z0 = Math.min(p.z1, p.z2), z1 = Math.max(p.z1, p.z2);
+        if (sz < z0 + 5 || sz > z1 - 5) continue;
+        if (best == null || Math.abs(x - sx) < Math.abs(best - sx)) best = x;
+      }
+      return best;
+    };
+    const findH = (dir) => {   // 最寄りの横ピース（南北の腕の接続先）
+      let best = null;
+      for (const p of pieces) {
+        if (Math.abs(p.z1 - p.z2) > 0.01) continue;
+        const z = p.z1;
+        if ((z - sz) * dir <= R_ROT + 6 || (z - sz) * dir > 170) continue;
+        const x0 = Math.min(p.x1, p.x2), x1 = Math.max(p.x1, p.x2);
+        if (sx < x0 + 5 || sx > x1 - 5) continue;
+        if (best == null || Math.abs(z - sz) < Math.abs(best - sz)) best = z;
+      }
+      return best;
+    };
+    const east = findV(1), west = findV(-1), north = findH(-1), south = findH(1);
+    if ((east ? 1 : 0) + (west ? 1 : 0) + (north ? 1 : 0) + (south ? 1 : 0) < 2) continue;   // 2方向以上つながる時だけ
+    if (east) pieces.push({ x1: sx + R_ROT, z1: sz, x2: east, z2: sz, kind: 'street' });
+    if (west) pieces.push({ x1: west, z1: sz, x2: sx - R_ROT, z2: sz, kind: 'street' });
+    if (north) pieces.push({ x1: sx, z1: north, x2: sx, z2: sz - R_ROT, kind: 'street' });
+    if (south) pieces.push({ x1: sx, z1: sz + R_ROT, x2: sx, z2: south, kind: 'street' });
+    rotaries.push({ x: sx, z: sz, r: R_ROT });
+  }
+}
 // ピース同士の交点/接点を制御点にして折れ線化
 const EPS = 0.01;
 const roads = [];
@@ -371,6 +409,11 @@ for (const a of pieces) {
   }
   const sorted = [...ts].sort((p, q) => p - q);
   roads.push({ kind: a.kind, points: sorted.map((t) => (vert ? [a.x1, t] : [t, a.z1])) });
+}
+for (const ro of rotaries) {   // 環道（八角形・閉路）。頂点は東西南北＝接続腕の端点と完全一致してノード共有
+  const pts = [];
+  for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; pts.push([Math.round(ro.x + Math.cos(a) * ro.r), Math.round(ro.z + Math.sin(a) * ro.r)]); }
+  roads.push({ kind: 'street', closed: true, points: pts });
 }
 
 // ── 3.5) 鉄道（東西複線・郊外=地上/シティセントラル=高架・駅3つ。高さは10mサンプルで焼き込み）──
@@ -525,6 +568,8 @@ for (const it of gen.instances) {
   if (!bad) for (const s of railSamples) if (Math.hypot(it.x - s.x, it.z - s.z) < 14) { bad = true; break; }   // 線路敷
   if (!bad) for (const st2 of stations) if (Math.hypot(it.x - st2.x, it.z - st2.z) < 44) { bad = true; break; } // 駅前広場
   if (!bad) for (const r2 of parkRects) if (it.x > r2[0] && it.x < r2[1] && it.z > r2[2] && it.z < r2[3]) { bad = true; break; }   // 公園内
+  if (!bad) for (const ro of rotaries) if (Math.hypot(it.x - ro.x, it.z - ro.z) < ro.r + 14) { bad = true; break; }   // ロータリー
+
   if (bad) removed.push(instanceId(it));
 }
 
@@ -553,6 +598,7 @@ const out = {
   bridges,
   rails,
   parks,
+  rotaries,
   port: {
     rect: [WHARF.x0, WHARF.z0, WHARF.x1, WHARF.z1], h: WHARF.h,
     containers: [{ x0: 560, x1: 830, z: 1697 }, { x0: 960, x1: 1300, z: 1697 }],
@@ -572,5 +618,5 @@ console.log('wrote:', dest, (fs.statSync(dest).size / 1024).toFixed(0) + 'KB');
 console.log('terrain h:', hMin.toFixed(1), '..', hMax.toFixed(1));
 console.log('roads:', roads.length, 'splines /', roadKm.toFixed(1) + 'km →', g.nodes.size, 'nodes /', g.edges.length, 'edges');
 console.log('buildings:', gen.instances.length, 'auto (removed', removed.length, ') + added', added.length, '/ zones', JSON.stringify(gen.zones));
-console.log('bridges:', bridges.length, bridges.map((b2) => b2.kind + '@' + b2.x + ',' + b2.z + ' L' + b2.len).join(' / '));
+console.log('rotaries:', rotaries.length, '/ bridges:', bridges.length, bridges.map((b2) => b2.kind + '@' + b2.x + ',' + b2.z + ' L' + b2.len).join(' / '));
 console.log('water rects:', water.length, '/ forest cells:', fCells, '/ parks:', parks.length);
