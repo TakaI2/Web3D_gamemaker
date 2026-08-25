@@ -211,7 +211,8 @@
    "noiseAmt": 0.6,
    "edge": 0.1,
    "rimColor": "#ff6a3a",
-   "rimIntensity": 2.4
+   "rimIntensity": 2.4,
+   "maxProg": 75
   },
   {
    "id": "mesh:Body_(merged)_6",
@@ -226,7 +227,8 @@
    "noiseAmt": 0.6,
    "edge": 0.1,
    "rimColor": "#ff0000",
-   "rimIntensity": 1.7
+   "rimIntensity": 1.7,
+   "maxProg": 75
   },
   {
    "id": "mesh:Body_(merged)_7",
@@ -316,7 +318,8 @@
    "noiseAmt": 0.4,
    "edge": 0.05,
    "rimColor": "#e52424",
-   "rimIntensity": 2.2
+   "rimIntensity": 2.2,
+   "maxProg": 90
   }
  ],
  "expressions": [

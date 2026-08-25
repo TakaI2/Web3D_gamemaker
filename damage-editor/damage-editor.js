@@ -27,8 +27,8 @@ let damage = 0;              // 0..100
 const clock = new THREE.Clock();
 
 const DEF_CFG = {
-  mesh: { enabled: false, mode: 'scatter', range: [20, 100], noiseScale: 8, noiseAmt: 0.6, edge: 0.1, rimColor: '#ff6a3a', rimIntensity: 2.4 },
-  cloth: { enabled: true, mode: 'bottom', range: [5, 90], noiseScale: 6, noiseAmt: 0.6, edge: 0.12, rimColor: '#ff6a3a', rimIntensity: 2.6 },
+  mesh: { enabled: false, mode: 'scatter', range: [20, 100], maxProg: 100, noiseScale: 8, noiseAmt: 0.6, edge: 0.1, rimColor: '#ff6a3a', rimIntensity: 2.4 },
+  cloth: { enabled: true, mode: 'bottom', range: [5, 90], maxProg: 100, noiseScale: 6, noiseAmt: 0.6, edge: 0.12, rimColor: '#ff6a3a', rimIntensity: 2.6 },
 };
 
 function dataURIToBlob(uri) {
@@ -201,25 +201,117 @@ function populateExprSelect() {
   if (!sel) return;
   sel.innerHTML = exprNames().map((n) => `<option value="${n}">${n}</option>`).join('');
 }
-function renderExprList() {
+// ── 表情タイムライン: 表情ごとに0-100%の帯を描き、キー=ドット・カーブ・現在ダメージ=赤線 ──
+//   クリック=キー追加 / ドット ドラッグ=移動 / ダブルクリック=削除
+const exprRows = new Map();   // name -> {cv, ctx}
+function renderExprList() {   // DOM再構築（キー数や選択が変わった時）
   const box = $('expr-list');
   if (!box) return;
-  const rows = [];
-  for (const ec of exprCfg) {
-    for (const k of [...ec.keys].sort((a, b) => a.at - b.at)) {
-      rows.push(`<div class="row" style="gap:4px;"><span style="flex:1;">${ec.name} @ ${k.at}% = ${k.value.toFixed(2)}</span>`
-        + `<button data-expr="${ec.name}" data-at="${k.at}" style="padding:1px 7px;background:#5a2a2a;">✕</button></div>`);
-    }
+  box.innerHTML = '';
+  exprRows.clear();
+  const names = [...new Set([$('expr-sel').value, ...exprCfg.map((e) => e.name)])].filter(Boolean);
+  if (!names.length) { box.innerHTML = '<div style="color:#678;">（表情を選ぶとタイムラインが出ます）</div>'; return; }
+  for (const name of names) {
+    const ec = exprCfg.find((e) => e.name === name);
+    const row = document.createElement('div');
+    row.style.cssText = 'margin:6px 0 10px;';
+    const lab = document.createElement('div');
+    lab.textContent = name + (ec ? `（${ec.keys.length}キー）` : '（キーなし・帯をクリックで追加）');
+    lab.style.cssText = 'color:#9fd0ff;margin-bottom:2px;cursor:pointer;';
+    lab.onclick = () => { $('expr-sel').value = name; renderExprList(); };
+    const cv = document.createElement('canvas');
+    cv.width = 260; cv.height = 42;
+    cv.style.cssText = 'width:100%;height:42px;background:#141628;border:1px solid #33395c;border-radius:4px;cursor:crosshair;display:block;touch-action:none;';
+    row.appendChild(lab);
+    row.appendChild(cv);
+    box.appendChild(row);
+    exprRows.set(name, { cv, ctx: cv.getContext('2d') });
+    bindTimeline(cv, name);
   }
-  box.innerHTML = rows.join('') || '<div style="color:#678;">（キー無し。表情を選び値を決めて「＋キー」）</div>';
-  for (const b of box.querySelectorAll('button[data-expr]')) {
-    b.addEventListener('click', () => {
-      const ec = exprCfg.find((e) => e.name === b.dataset.expr);
-      if (!ec) return;
-      ec.keys = ec.keys.filter((k) => k.at !== +b.dataset.at);
-      if (!ec.keys.length) exprCfg = exprCfg.filter((e) => e !== ec);
+  drawExprTimelines();
+}
+function tlAt(cv, cx) { const r = cv.getBoundingClientRect(); return Math.max(0, Math.min(100, (cx - r.left) / r.width * 100)); }
+function tlVal(cv, cy) { const r = cv.getBoundingClientRect(); return Math.max(0, Math.min(1, 1 - (cy - r.top - 5) / (r.height - 12))); }
+function bindTimeline(cv, name) {
+  let dragKey = null;
+  const findKey = (e) => {
+    const ec = exprCfg.find((x) => x.name === name);
+    if (!ec) return null;
+    const r = cv.getBoundingClientRect();
+    for (const k of ec.keys) {
+      const x = r.left + k.at / 100 * r.width;
+      const y = r.top + 5 + (1 - k.value) * (r.height - 12);
+      if (Math.abs(e.clientX - x) < 8 && Math.abs(e.clientY - y) < 10) return k;
+    }
+    return null;
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    $('expr-sel').value = name;
+    let ec = exprCfg.find((x) => x.name === name);
+    let k = findKey(e);
+    if (!k) {   // 空きクリック=その位置にキー追加
+      if (!ec) { ec = { name, keys: [] }; exprCfg.push(ec); }
+      k = { at: Math.round(tlAt(cv, e.clientX)), value: +tlVal(cv, e.clientY).toFixed(2) };
+      ec.keys.push(k);
+    }
+    dragKey = k;
+    cv.setPointerCapture(e.pointerId);
+    $('expr-val').value = k.value;
+    $('expr-val-v').textContent = (+k.value).toFixed(2);
+    applyDamage();
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!dragKey) return;
+    dragKey.at = Math.round(tlAt(cv, e.clientX));
+    dragKey.value = +tlVal(cv, e.clientY).toFixed(2);
+    $('expr-val').value = dragKey.value;
+    $('expr-val-v').textContent = (+dragKey.value).toFixed(2);
+    applyDamage();
+  });
+  cv.addEventListener('pointerup', () => { if (dragKey) { dragKey = null; renderExprList(); } });
+  cv.addEventListener('dblclick', (e) => {
+    const ec = exprCfg.find((x) => x.name === name);
+    const k = findKey(e);
+    if (ec && k) {
+      ec.keys = ec.keys.filter((x) => x !== k);
+      if (!ec.keys.length) exprCfg = exprCfg.filter((x) => x !== ec);
       applyDamage();
-    });
+      renderExprList();
+    }
+  });
+}
+function drawExprTimelines() {
+  for (const [name, row] of exprRows) {
+    const { cv, ctx } = row;
+    const w = cv.width, h = cv.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = '#2a2f4d';   // 25/50/75%の目盛り
+    ctx.beginPath();
+    for (const gx of [25, 50, 75]) { ctx.moveTo(gx / 100 * w, 0); ctx.lineTo(gx / 100 * w, h); }
+    ctx.stroke();
+    const ec = exprCfg.find((x) => x.name === name);
+    if (ec && ec.keys.length) {
+      ctx.strokeStyle = '#6cf';   // 値カーブ
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let x = 0; x <= 100; x += 2) {
+        const px = x / 100 * w, py = 5 + (1 - exprValueAt(ec.keys, x)) * (h - 12);
+        x === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.fillStyle = '#ffd45e';   // キー
+      for (const k of ec.keys) {
+        ctx.beginPath();
+        ctx.arc(k.at / 100 * w, 5 + (1 - k.value) * (h - 12), 4.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.strokeStyle = '#ff5a6e';   // 現在のダメージ位置
+    ctx.beginPath();
+    ctx.moveTo(damage / 100 * w, 0);
+    ctx.lineTo(damage / 100 * w, h);
+    ctx.stroke();
   }
 }
 
@@ -266,8 +358,9 @@ function rebuildDissolve(p) {
 }
 function partProgress(p) {
   const [s, e] = p.cfg.range;
-  if (e <= s) return damage >= e ? 1 : 0;
-  return Math.max(0, Math.min(1, (damage - s) / (e - s)));
+  const cap = (p.cfg.maxProg ?? 100) / 100;   // 最大溶解%（100未満なら損耗MAXでも布が残る）
+  const t = e <= s ? (damage >= e ? 1 : 0) : Math.max(0, Math.min(1, (damage - s) / (e - s)));
+  return t * cap;
 }
 function exprValueAt(keys, dmg) {
   if (!keys.length) return 0;
@@ -288,7 +381,7 @@ function applyDamage() {
   if (em) for (const ec of exprCfg) { try { em.setValue(ec.name, exprValueAt(ec.keys, damage)); } catch { /* noop */ } }
   $('dmg-val').textContent = `${damage}%`;
   renderPartsStatus();
-  renderExprList();
+  drawExprTimelines();   // キャンバス再描画のみ（DOM再構築するとドラッグが切れる）
 }
 
 // ── UI ──
@@ -334,6 +427,7 @@ function selectPart(p) {
     $('p-mode').value = p.cfg.mode;
     $('p-start').value = p.cfg.range[0];
     $('p-end').value = p.cfg.range[1];
+    $('p-max').value = p.cfg.maxProg ?? 100;
     setR('p-noise', p.cfg.noiseScale); setR('p-namt', p.cfg.noiseAmt); setR('p-edge', p.cfg.edge); setR('p-rimi', p.cfg.rimIntensity);
     $('p-rim').value = p.cfg.rimColor;
   } else $('part-ed').style.display = 'none';
@@ -361,6 +455,7 @@ function setupUI() {
   $('p-mode').addEventListener('change', () => upd((c) => { c.mode = $('p-mode').value; }));
   $('p-start').addEventListener('change', () => upd((c) => { c.range[0] = +$('p-start').value; }));
   $('p-end').addEventListener('change', () => upd((c) => { c.range[1] = +$('p-end').value; }));
+  $('p-max').addEventListener('change', () => upd((c) => { c.maxProg = Math.max(0, Math.min(100, +$('p-max').value)); }));
   const slider = (id, key) => $(id).addEventListener('input', () => {
     $(id + '-v').textContent = $(id).value;
     upd((c) => { c[key] = +$(id).value; });
@@ -380,6 +475,7 @@ function setupUI() {
     const em = vrm?.expressionManager;   // プレビュー（キー追加前でも見える）
     if (em && $('expr-sel').value) { try { em.setValue($('expr-sel').value, +$('expr-val').value); } catch { /* noop */ } }
   });
+  $('expr-sel').addEventListener('change', renderExprList);   // 選択した表情の空タイムラインを出す
   $('expr-add').addEventListener('click', () => {
     const name = $('expr-sel').value;
     if (!name) return;
@@ -388,6 +484,7 @@ function setupUI() {
     ec.keys = ec.keys.filter((k) => k.at !== damage);
     ec.keys.push({ at: damage, value: +$('expr-val').value });
     applyDamage();
+    renderExprList();
     showToastLike(`${name} @ ${damage}% = ${$('expr-val').value}`);
   });
 }
@@ -396,7 +493,7 @@ function showToastLike(m) { setStatus(m); }
 async function save() {
   const data = {
     format: 'damage-config', version: 1, npc: npcName,
-    parts: parts.map((p) => ({ id: p.id, kind: p.kind, enabled: p.cfg.enabled, mode: p.cfg.mode, range: [...p.cfg.range],
+    parts: parts.map((p) => ({ id: p.id, kind: p.kind, enabled: p.cfg.enabled, mode: p.cfg.mode, range: [...p.cfg.range], maxProg: p.cfg.maxProg ?? 100,
       noiseScale: p.cfg.noiseScale, noiseAmt: p.cfg.noiseAmt, edge: p.cfg.edge, rimColor: p.cfg.rimColor, rimIntensity: p.cfg.rimIntensity })),
     expressions: exprCfg.map((e) => ({ name: e.name, keys: [...e.keys].sort((a, b) => a.at - b.at) })),
   };

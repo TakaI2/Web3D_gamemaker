@@ -1415,7 +1415,8 @@ function applyDamageFx() {   // ダメージ割合 → 各部位の溶解進行�
   const dmgPct = (1 - playerHp / PLAYER_HP_MAX) * 100;
   for (const dp of dmgParts) {
     const [s0, e0] = dp.range;
-    const prog = e0 > s0 ? Math.max(0, Math.min(1, (dmgPct - s0) / (e0 - s0))) : (dmgPct >= e0 ? 1 : 0);
+    const t0 = e0 > s0 ? Math.max(0, Math.min(1, (dmgPct - s0) / (e0 - s0))) : (dmgPct >= e0 ? 1 : 0);
+    const prog = t0 * (dp.maxProg ?? 1);   // 最大溶解%: 損耗MAXでも布を残せる
     dp.dis.setProgress(prog);
     if (dmgWarmT <= 0 && dp.dis.setActive) dp.dis.setActive(prog > 0);   // 無傷部位は溶解シェーダを停止
   }
@@ -1538,7 +1539,7 @@ async function setupDamageFx(bundle, vrm) {   // damage/<npc>.damage.json を読
         rimColor: pc.rimColor, rimIntensity: pc.rimIntensity, puddle: false, doubleSide: true, armed: true,
         space: pc.kind === 'cloth' ? 'attributes' : 'geometry',   // 布=dmgPos/dmgH属性・メッシュ=バインド形状（なびきで穴が動かない）
       });
-      dmgParts.push({ id: pc.id, kind: pc.kind, dis, range: pc.range || [0, 100] });
+      dmgParts.push({ id: pc.id, kind: pc.kind, dis, range: pc.range || [0, 100], maxProg: (pc.maxProg ?? 100) / 100 });
     } catch (e) { console.warn('損耗エフェクト生成失敗:', pc.id, e); }
   }
   applyDamageFx();
