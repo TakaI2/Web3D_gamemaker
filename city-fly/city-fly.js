@@ -235,6 +235,7 @@ const NO_SKY = LOW || _qs.get('nosky') === '1';
 const SHOW_FPS = _qs.get('fps') === '1' || NO_CAPE || NO_CITY || NO_NPC || DIAG || LOW;
 let mapTerrain = null;   // createTerrainMesh の戻り値（heightAt含む）
 let mapRoads = [];       // .map.json のスプライン道路（あればOSMの代わりに使う）
+let mapBridges = [];     // .map.json の橋 {x,z,dx,dz,len,w,kind:'flat'|'arch',deckY,wl,bedY}（道路ノードをデッキ高へ持ち上げ＋簡易モデル描画）
 let mapBuildings = null; // .map.json の建物差分 {removed[], moved{}, added[]}
 let mapWater = [];       // .map.json の水面矩形 {x,z,w,d,level}
 let mapForest = null;    // .map.json の植生ペイント {cell,res,data:Uint8Array 密度0-255}（map-editorで描く）
@@ -303,6 +304,7 @@ async function buildMapGround() {
   mapRoads = Array.isArray(j.roads) ? j.roads.filter((r) => r.points && r.points.length >= 2) : [];
   mapBuildings = (j.buildings && ((j.buildings.removed || []).length || (j.buildings.added || []).length || Object.keys(j.buildings.moved || {}).length)) ? j.buildings : null;
   mapWater = Array.isArray(j.water) ? j.water : [];
+  mapBridges = Array.isArray(j.bridges) ? j.bridges : [];
   mapForest = (j.forest && j.forest.data) ? { cell: j.forest.cell || 16, res: j.forest.res, yOff: j.forest.yOff ?? 0, model: j.forest.model || null, treeH: j.forest.treeH || 7, data: unb64(j.forest.data) } : null;
   mapParks = Array.isArray(j.parks) ? j.parks.filter((pk) => pk.points && pk.points.length >= 3) : [];
   mapParkCfg = j.parkCfg || {};
@@ -1989,16 +1991,81 @@ async function loadRoads() {
 async function finishRoads() {
   buildRoadSurfIndex();
   await buildRoadMeshes().catch((e) => { console.warn('道路メッシュ生成失敗（デバッグ線で代替）:', e); drawRoadLines(); });
+  try { buildMapBridges(); } catch (e) { console.warn('橋の生成失敗:', e); }
   if (!NO_NPC) await spawnCars();   // 性能切り分け: ?nonpc=1 で車を出さない
   try { buildCarLights(); } catch (e) { console.warn('車ライト生成失敗', e); }
   console.log('roads center nodes', roadNodes.size, 'edges', activeEdges.length, 'cars', cars.length);
+}
+// 橋の簡易モデル（mapplan: 平橋=床版+欄干+橋脚 / アーチ橋=単純ポリゴンの上路アーチ+川中の支柱）
+function buildMapBridges() {
+  if (!mapBridges.length) return;
+  const conc = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.85 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x8a3a34, roughness: 0.5, metalness: 0.35 });
+  const grpAll = new THREE.Group();
+  for (const br of mapBridges) {
+    const g2 = new THREE.Group();
+    g2.position.set(br.x, 0, br.z);
+    g2.rotation.y = Math.atan2(br.dx, br.dz);   // ローカル+z=橋の進行方向
+    const L = br.len + 12, W = br.w;
+    const box = (w, h, d, mat, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); g2.add(m); return m; };
+    box(W, 0.7, L, conc, 0, br.deckY - 0.35, 0);                    // 床版
+    box(0.3, 0.9, L, conc, W / 2 - 0.2, br.deckY + 0.45, 0);        // 欄干
+    box(0.3, 0.9, L, conc, -(W / 2 - 0.2), br.deckY + 0.45, 0);
+    const pier = (zAlo, r) => {                                     // 橋脚（川底まで）
+      const h = br.deckY - 0.3 - (br.bedY - 1);
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.2, h, 10), conc);
+      m.position.set(0, br.bedY - 1 + h / 2, zAlo);
+      g2.add(m);
+    };
+    if (br.kind === 'flat') {
+      if (L > 60) { pier(-L / 4, 1.0); pier(L / 4, 1.0); } else pier(0, 1.0);
+    } else {
+      pier(-L / 4, 1.6); pier(L / 4, 1.6);                          // 川の中の支柱
+      const bot = Math.max(br.bedY + 0.6, br.wl - 1.2);             // アーチ端部の最下端
+      const N = 12;
+      for (const sideX of [W / 2 - 0.6, -(W / 2 - 0.6)]) {
+        let prev = null;
+        for (let i = 0; i <= N; i++) {
+          const t = i / N, zAlo = (t - 0.5) * L;
+          const y = bot + (br.deckY - 0.7 - bot) * (1 - Math.pow(2 * t - 1, 2));   // 上路アーチ（中央で床版に接する放物線）
+          if (prev) {
+            const dz2 = zAlo - prev.z, dy2 = y - prev.y, segL = Math.hypot(dz2, dy2);
+            const m = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.55, segL + 0.12), steel);
+            m.position.set(sideX, (y + prev.y) / 2, (zAlo + prev.z) / 2);
+            m.rotation.x = -Math.atan2(dy2, dz2);
+            g2.add(m);
+          }
+          if (i % 3 === 0 && i > 0 && i < N) {                      // 鉛直材（アーチ→床版）
+            const h2 = br.deckY - 0.7 - y;
+            if (h2 > 0.5) box(0.3, h2, 0.3, steel, sideX, y + h2 / 2, zAlo);
+          }
+          prev = { z: zAlo, y };
+        }
+      }
+    }
+    grpAll.add(g2);
+  }
+  scene.add(grpAll);
+  console.log('bridges:', mapBridges.length);
+}
+// 橋の上の道路ノードはデッキ高へ持ち上げる（アーチ橋は緩いキャンバー付き）
+function bridgeY(x, z, ty) {
+  for (const br of mapBridges) {
+    const alo = (x - br.x) * br.dx + (z - br.z) * br.dz;
+    const per = -(x - br.x) * br.dz + (z - br.z) * br.dx;
+    if (Math.abs(alo) > br.len / 2 + 10 || Math.abs(per) > br.w / 2 + 4) continue;
+    const camber = br.kind === 'arch' ? Math.cos(Math.PI * alo / (br.len + 24)) * 1.1 : 0;
+    return Math.max(ty, br.deckY + camber + 0.5);
+  }
+  return ty;
 }
 // .map.json のスプライン → roadNodes/activeEdges（吸着済み制御点＝交差点ノード）
 function buildMapRoads() {
   const g = buildRoadGraph(mapRoads);
   roadNodes = new Map();
   for (const [id, n] of g.nodes) {
-    roadNodes.set(id, { local: new THREE.Vector3(n.x, mapTerrain.heightAt(n.x, n.z) + 0.5, n.z), adj: n.adj });
+    const ty = mapTerrain.heightAt(n.x, n.z) + 0.5;
+    roadNodes.set(id, { local: new THREE.Vector3(n.x, bridgeY(n.x, n.z, ty), n.z), adj: n.adj });
   }
   activeEdges = [];
   for (const [aId, bId] of g.edges) {

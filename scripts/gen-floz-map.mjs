@@ -1,12 +1,14 @@
 // gen-floz-map.mjs — 新マップ「floz」を mapplan.txt のルールから決定的に生成する。
 // 方位: 北=-Z(山) / 西=-X(山) / 東=+X(山) / 南=+Z(海)。地形257²・6400m。
-// 出力: public/maps/floz.map.json（format city-map = 既存ランタイムでそのまま読める）
-// フェーズ1: 地形(三方の山・扇状地・川の掘り下げ・海底)＋水面＋植生＋道路網＋建物差分。
-// 鉄道・橋・ロータリーはフェーズ2/3（ランタイム拡張が必要）。計画= .tmp/mapgen_floz_plan.md
+// 出力: public/maps/floz.map.json（format city-map ＋ bridges 拡張）
+// v2: 街路を階層化して高密度に（大通り格子→セル毎の街路→中心部の路地・袋小路）、
+//     川・海・山裾で自動クリップ、大通りが川を跨ぐ所は橋サイトとして bridges[] に出力。
+//     川/海に被る自動配置建物は同一シード再現で instanceId を removed へ。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeTerrainData, heightAt, autoColorize, serializeTerrain, b64, buildRoadGraph } from '../lib/terrain.js';
+import { generateBuildings, instanceId } from '../lib/kenney-buildings.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SIZE = 6400, RES = 257, HALF = SIZE / 2;
@@ -23,16 +25,17 @@ function mulberry(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+const hash2 = (a, b2) => ((a * 73856093) ^ (b2 * 19349663) ^ SEED) >>> 0;
 const P = 96, grid = new Float32Array((P + 1) * (P + 1));
 { const rng = mulberry(SEED); for (let i = 0; i < grid.length; i++) grid[i] = rng(); }
-function vnoise(u, v) {   // 値ノイズ（格子双線形＋smoothstep）
+function vnoise(u, v) {
   u = ((u % P) + P) % P; v = ((v % P) + P) % P;
   const iu = Math.floor(u), iv = Math.floor(v), fu = u - iu, fv = v - iv;
   const su = fu * fu * (3 - 2 * fu), sv = fv * fv * (3 - 2 * fv);
   const g = (a, b2) => grid[(b2 % (P + 1)) * (P + 1) + (a % (P + 1))];
   return g(iu, iv) * (1 - su) * (1 - sv) + g(iu + 1, iv) * su * (1 - sv) + g(iu, iv + 1) * (1 - su) * sv + g(iu + 1, iv + 1) * su * sv;
 }
-function fbm(x, z, freq, oct = 3) {   // 0..1
+function fbm(x, z, freq, oct = 3) {
   let h = 0, a = 1, f = freq, n = 0;
   for (let o = 0; o < oct; o++) { h += vnoise(x / SIZE * P * f + o * 17, z / SIZE * P * f + o * 31) * a; n += a; a *= 0.5; f *= 2.1; }
   return h / n;
@@ -42,21 +45,18 @@ const smooth = (t) => { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
 
 // ── 1) 地形 ──
 const T = makeTerrainData({ size: SIZE, res: RES });
-const coastZ = (x) => 1500 + (fbm(x, 777, 1.5) - 0.5) * 340;   // うねる海岸線
+const coastZ = (x) => 1500 + (fbm(x, 777, 1.5) - 0.5) * 340;
 function baseHeight(x, z) {
   const cz = coastZ(x);
-  // 扇状地: 頂点(0,-1500)h90 → 海岸h2。凹型プロファイル
   const t = clamp((z + 1500) / (cz + 1500), 0, 1);
   let h = 90 * Math.pow(1 - t, 1.35) + 2;
-  if (z > cz) h = 2 - (z - cz) * 0.027;   // 海底: 沖へ沈み込む(最深≈-45)
-  // 三方の山（smoothstepの裾＋fbmで稜線に起伏）
+  if (z > cz) h = 2 - (z - cz) * 0.027;
   const mN = Math.pow(smooth((-z - 1900) / 1000), 1.6) * (420 + 260 * fbm(x, -3000, 2.2));
-  const seaTaper = clamp((cz - z + 500) / 1000, 0.12, 1);   // 海際は岬状に弱める
+  const seaTaper = clamp((cz - z + 500) / 1000, 0.12, 1);
   const mW = Math.pow(smooth((-x - 2250) / 800), 1.6) * (380 + 240 * fbm(-3000, z, 2.2)) * seaTaper;
   const mE = Math.pow(smooth((x - 2250) / 800), 1.6) * (360 + 240 * fbm(3000, z, 2.2)) * seaTaper;
   const m = Math.max(mN, mW, mE);
   h += m;
-  // ノイズ: 平地は控えめ・山は大きく
   h += (fbm(x, z, 6) - 0.5) * (6 + m * 0.22);
   return h;
 }
@@ -68,16 +68,16 @@ for (let j = 0; j < RES; j++) {
 }
 
 // ── 2) 川（掘り下げ＋水面矩形）──
-// 各川: 制御点[x,z]と幅[始,終]。水位=元地形-2.5を下流へ単調減少
 const RIVERS = [
-  { pts: [[-750, -2500], [-950, -2050], [-1250, -1450], [-1550, -800], [-1800, -350]], w: [10, 24], endWl: null },        // 北山から
-  { pts: [[-2750, -1100], [-2450, -820], [-2100, -560], [-1800, -350]], w: [8, 20], endWl: null },                        // 西山から
-  { pts: [[-1800, -350], [-1860, 200], [-1950, 800], [-1900, 1450], [-1870, 2000]], w: [30, 72], endWl: -1.5, main: true }, // 合流後の本流→海
-  { pts: [[2650, -500], [2520, 150], [2420, 800], [2350, 1400], [2330, 1900]], w: [8, 22], endWl: -1.5 },                 // 東の小川→海
+  { pts: [[-750, -2500], [-950, -2050], [-1250, -1450], [-1550, -800], [-1800, -350]], w: [10, 24], endWl: null },
+  { pts: [[-2750, -1100], [-2450, -820], [-2100, -560], [-1800, -350]], w: [8, 20], endWl: null },
+  { pts: [[-1800, -350], [-1860, 200], [-1950, 800], [-1900, 1450], [-1870, 2000]], w: [30, 72], endWl: -1.5, main: true },
+  { pts: [[2650, -500], [2520, 150], [2420, 800], [2350, 1400], [2330, 1900]], w: [8, 22], endWl: -1.5 },
 ];
 const origHeights = T.heights.slice();
 const riverMask = new Uint8Array(RES * RES);
-function samplePath(r) {   // 12m間隔サンプル {x,z,w,wl}
+const water = [];
+function samplePath(r) {
   const segs = [];
   let total = 0;
   for (let i = 0; i < r.pts.length - 1; i++) { const d = Math.hypot(r.pts[i + 1][0] - r.pts[i][0], r.pts[i + 1][1] - r.pts[i][1]); segs.push(d); total += d; }
@@ -92,17 +92,16 @@ function samplePath(r) {   // 12m間隔サンプル {x,z,w,wl}
     acc += segs[i];
   }
   out.push({ x: r.pts.at(-1)[0], z: r.pts.at(-1)[1], w: r.w[1], tt: 1 });
-  // 水位: 元地形-2.5 → 単調減少、指定があれば終端水位へ寄せる
   let wl = Infinity;
   for (const s of out) { wl = Math.min(wl, heightAt({ size: SIZE, res: RES, heights: origHeights }, s.x, s.z) - 2.5); s.wl = wl; }
   if (r.endWl != null) { const wlEnd = r.endWl, wl0 = out[0].wl; for (const s of out) s.wl = Math.min(s.wl, wl0 + (wlEnd - wl0) * smooth(s.tt * 1.15)); }
   return out;
 }
-const riverSamples = [];   // 植生・色付け用に全サンプル保持
+const riverSamples = [];
 for (const r of RIVERS) {
   const samples = samplePath(r);
   riverSamples.push(...samples);
-  for (const s of samples) {   // 掘り下げ: 平底＋スムーズな肩
+  for (const s of samples) {
     const depth = 2.2 + s.w * 0.06, bed = s.wl - depth;
     const inner = s.w / 2 + 6, R = s.w / 2 + 30;
     const i0 = clamp(Math.floor(((s.x - R) / SIZE + 0.5) * (RES - 1)), 0, RES - 1), i1 = clamp(Math.ceil(((s.x + R) / SIZE + 0.5) * (RES - 1)), 0, RES - 1);
@@ -118,16 +117,15 @@ for (const r of RIVERS) {
       }
     }
   }
-  // 水面: 経路を80mチャンクに割った軸平行矩形。回廊の地形は水面下へクランプ（岸あふれ防止）
-  let chunk = [samples[0]];
+  let chunk = [samples[0]], cs = samples[0];
   const flushChunk = () => {
     if (chunk.length < 2) return;
     const xs = chunk.map((s) => s.x), zs = chunk.map((s) => s.z);
     const w = Math.max(...chunk.map((s) => s.w));
     const level = Math.min(...chunk.map((s) => s.wl)) - 0.1;
-    if (level < 0.15 && chunk[0].z > 1200) return;   // 海面(0)以下は海の矩形に任せる
+    if (level < 0.15 && chunk[0].z > 1200) return;
     water.push({ x: Math.round((Math.min(...xs) + Math.max(...xs)) / 2), z: Math.round((Math.min(...zs) + Math.max(...zs)) / 2), w: Math.round(Math.max(...xs) - Math.min(...xs) + w + 4), d: Math.round(Math.max(...zs) - Math.min(...zs) + w + 4), level: +level.toFixed(2) });
-    for (const s of chunk) {   // クランプ
+    for (const s of chunk) {
       const rr = s.w / 2 + 14;
       const i0 = clamp(Math.floor(((s.x - rr) / SIZE + 0.5) * (RES - 1)), 0, RES - 1), i1 = clamp(Math.ceil(((s.x + rr) / SIZE + 0.5) * (RES - 1)), 0, RES - 1);
       const j0 = clamp(Math.floor(((s.z - rr) / SIZE + 0.5) * (RES - 1)), 0, RES - 1), j1 = clamp(Math.ceil(((s.z + rr) / SIZE + 0.5) * (RES - 1)), 0, RES - 1);
@@ -137,85 +135,156 @@ for (const r of RIVERS) {
       }
     }
   };
-  var water = water || [];
-  let cs = samples[0];
   for (const s of samples.slice(1)) {
     chunk.push(s);
     if (Math.hypot(s.x - cs.x, s.z - cs.z) > 80) { flushChunk(); chunk = [s]; cs = s; }
   }
   flushChunk();
 }
-water.push({ x: 0, z: 2380, w: SIZE, d: 1640, level: 0 });   // 海
+water.push({ x: 0, z: 2380, w: SIZE, d: 1640, level: 0 });
 
-// ── 3) 配色 ──
-autoColorize(T);
-for (let j = 0; j < RES; j++) {
-  for (let i = 0; i < RES; i++) {
-    const x = (i / (RES - 1) - 0.5) * SIZE, z = (j / (RES - 1) - 0.5) * SIZE;
-    const h = T.heights[j * RES + i], o = (j * RES + i) * 3, cz = coastZ(x);
-    if (h < 0 && z > cz - 400) {   // 海底: 砂→深い青灰
-      const t = clamp(-h / 42, 0, 1);
-      T.colors[o] = 180 - 128 * t; T.colors[o + 1] = 170 - 106 * t; T.colors[o + 2] = 140 - 62 * t;
-    } else if (z > cz - 260 && h < 4.5) {   // 砂浜
-      T.colors[o] = 198; T.colors[o + 1] = 182; T.colors[o + 2] = 142;
-    } else if (riverMask[j * RES + i]) {    // 川の河原・川底
-      T.colors[o] = 118; T.colors[o + 1] = 110; T.colors[o + 2] = 88;
+// ── 共通ヘルパ（川回廊への距離・地形適性）──
+const RCELL = 64, RHASH = new Map();
+for (const s of riverSamples) {
+  const k = Math.floor(s.x / RCELL) + '_' + Math.floor(s.z / RCELL);
+  if (!RHASH.has(k)) RHASH.set(k, []);
+  RHASH.get(k).push(s);
+}
+function riverAt(x, z) {   // 回廊外周までの距離（負=川の中）と最寄りサンプル
+  let best = null, bd = 1e9;
+  const cx = Math.floor(x / RCELL), cz = Math.floor(z / RCELL);
+  for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) {
+    const a = RHASH.get((cx + i) + '_' + (cz + j));
+    if (!a) continue;
+    for (const s of a) { const d = Math.hypot(x - s.x, z - s.z) - (s.w / 2 + 16); if (d < bd) { bd = d; best = s; } }
+  }
+  return { d: bd, s: best };
+}
+const hAt = (x, z) => heightAt(T, x, z);
+const slopeAt = (x, z) => Math.max(Math.abs(hAt(x + 16, z) - hAt(x - 16, z)), Math.abs(hAt(x, z + 16) - hAt(x, z - 16))) / 32;
+function cityOk(x, z) {   // 道路・建物を置ける地形か
+  const h = hAt(x, z);
+  if (h < 1.5 || h > 95) return false;
+  if (z > coastZ(x) - 110) return false;
+  return slopeAt(x, z) < 0.42;
+}
+
+// ── 3) 道路網（大通り格子→セル毎の街路→中心部の路地。川・海・山裾でクリップ、大通りの川越え=橋）──
+const NS_ART = [-2050, -1250, -600, 0, 620, 1250, 1850];
+const EW_ART = [-1100, -550, 0, 560, 1150];
+const X_MIN = -2150, X_MAX = 2150, Z_MIN = -1600, Z_MAX = 1360;
+const WS = [-1450, 40], ES = [1700, -40];   // 郊外(将来の駅前)
+const segs = [];
+for (const x of NS_ART) segs.push({ x1: x, z1: Z_MIN, x2: x, z2: Z_MAX, kind: 'avenue' });
+for (const z of EW_ART) segs.push({ x1: X_MIN, z1: z, x2: X_MAX, z2: z, kind: 'avenue' });
+// セル毎の街路（間隔はゾーンで変える・ジッタ付き＝隣セルと揃わない入り組み）
+const XB = [X_MIN, ...NS_ART, X_MAX].sort((a, b2) => a - b2);
+const ZB = [Z_MIN, ...EW_ART, Z_MAX].sort((a, b2) => a - b2);
+function targetSpacing(cx, cz) {
+  const dc = Math.hypot(cx, cz);
+  let t = dc < 800 ? 150 : dc < 1500 ? 190 : 245;
+  for (const S of [WS, ES]) if (Math.hypot(cx - S[0], cz - S[1]) < 500) t = Math.min(t, 135);
+  return t;
+}
+for (let ci = 0; ci < XB.length - 1; ci++) {
+  for (let cj = 0; cj < ZB.length - 1; cj++) {
+    const x0 = XB[ci], x1 = XB[ci + 1], z0 = ZB[cj], z1 = ZB[cj + 1];
+    const cw = x1 - x0, ch = z1 - z0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    if (!cityOk(cx, cz) && !cityOk(x0 + cw * 0.25, cz) && !cityOk(x1 - cw * 0.25, cz)) continue;
+    const rng = mulberry(hash2(ci + 11, cj + 29));
+    const tSp = targetSpacing(cx, cz);
+    const kx = Math.max(0, Math.round(cw / tSp) - 1), kz = Math.max(0, Math.round(ch / tSp) - 1);
+    const sx = [], sz = [];
+    for (let i = 1; i <= kx; i++) { const x = Math.round(x0 + (cw * i) / (kx + 1) + (rng() - 0.5) * tSp * 0.36); sx.push(x); segs.push({ x1: x, z1: z0, x2: x, z2: z1, kind: 'street' }); }
+    for (let j = 1; j <= kz; j++) { const z = Math.round(z0 + (ch * j) / (kz + 1) + (rng() - 0.5) * tSp * 0.36); sz.push(z); segs.push({ x1: x0, z1: z, x2: x1, z2: z, kind: 'street' }); }
+    // 路地: 中心部と駅前だけ。サブブロックを1本ずつ割り、35%は袋小路
+    const dc = Math.hypot(cx, cz);
+    const alley = dc < 850 || [WS, ES].some((S) => Math.hypot(cx - S[0], cz - S[1]) < 430);
+    if (alley) {
+      const xs2 = [x0, ...sx, x1].sort((a, b2) => a - b2), zs2 = [z0, ...sz, z1].sort((a, b2) => a - b2);
+      for (let i = 0; i < xs2.length - 1; i++) {
+        for (let j = 0; j < zs2.length - 1; j++) {
+          const bw = xs2[i + 1] - xs2[i], bh = zs2[j + 1] - zs2[j];
+          if (Math.max(bw, bh) < 112) continue;
+          const vert = bw >= bh ? rng() < 0.7 : rng() < 0.3;
+          if (vert && bw >= 112) {
+            const x = Math.round(xs2[i] + bw * (0.4 + rng() * 0.2));
+            let za = zs2[j], zb = zs2[j + 1];
+            if (rng() < 0.35) { const span = 0.55 + rng() * 0.25; if (rng() < 0.5) zb = Math.round(za + bh * span); else za = Math.round(zb - bh * span); }
+            segs.push({ x1: x, z1: za, x2: x, z2: zb, kind: 'alley' });
+          } else if (bh >= 112) {
+            const z = Math.round(zs2[j] + bh * (0.4 + rng() * 0.2));
+            let xa = xs2[i], xb = xs2[i + 1];
+            if (rng() < 0.35) { const span = 0.55 + rng() * 0.25; if (rng() < 0.5) xb = Math.round(xa + bw * span); else xa = Math.round(xb - bw * span); }
+            segs.push({ x1: xa, z1: z, x2: xb, z2: z, kind: 'alley' });
+          }
+        }
+      }
     }
   }
 }
-
-// ── 4) 植生（山＋川沿い）──
-const FRES = 400, FCELL = 16;
-const forest = new Uint8Array(FRES * FRES);
-const hAt = (x, z) => heightAt(T, x, z);
-for (let j = 0; j < FRES; j++) {
-  for (let i = 0; i < FRES; i++) {
-    const x = (i + 0.5) * FCELL - HALF, z = (j + 0.5) * FCELL - HALF;
-    const h = hAt(x, z);
-    if (h < 1.5 || z > coastZ(x) - 60) continue;
-    if (Math.abs(x) < 720 && Math.abs(z) < 720) continue;                       // 中心街
-    if (Math.abs(x + 1450) < 340 && Math.abs(z - 40) < 340) continue;           // 西郊外
-    if (Math.abs(x - 1700) < 340 && Math.abs(z + 40) < 340) continue;           // 東郊外
-    const slope = Math.max(Math.abs(hAt(x + 16, z) - hAt(x - 16, z)), Math.abs(hAt(x, z + 16) - hAt(x, z - 16))) / 32;
-    let den = 0;
-    const mf = clamp((h - 130) / 110, 0, 1) * clamp((1.15 - slope) / 1.0, 0, 1);
-    if (mf > 0) den = 200 * mf * (0.55 + 0.45 * fbm(x, z, 5));
-    let nearRiver = false;   // 川沿いの緑地帯
-    for (const s of riverSamples) { const d = Math.hypot(x - s.x, z - s.z); if (d > s.w / 2 + 10 && d < s.w / 2 + 48) { nearRiver = true; break; } }
-    if (nearRiver && h < 110 && h > 1.5) den = Math.max(den, 62 * (0.5 + 0.5 * fbm(x + 999, z, 7)));
-    forest[j * FRES + i] = Math.round(clamp(den, 0, 255));
+// クリップ: 10m刻みで 地形OK/川/不可 を判定 → OK区間へ分割。大通りの短い川越え区間は橋として残す
+const bridges = [];
+const pieces = [];
+for (const sg of segs) {
+  const vert = sg.x1 === sg.x2;
+  const len = Math.abs(vert ? sg.z2 - sg.z1 : sg.x2 - sg.x1);
+  const n = Math.max(2, Math.round(len / 10));
+  const cls = [];   // 0=OK 1=川 2=不可
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const x = sg.x1 + (sg.x2 - sg.x1) * t, z = sg.z1 + (sg.z2 - sg.z1) * t;
+    const rv = riverAt(x, z);
+    cls.push(rv.d <= 6 ? 1 : cityOk(x, z) ? 0 : 2);
+  }
+  if (sg.kind === 'avenue') {   // 川区間が240m未満で両側がOKなら橋化（クラスを0に書き戻し＋橋サイト記録）
+    let i = 0;
+    while (i <= n) {
+      if (cls[i] !== 1) { i++; continue; }
+      let j2 = i;
+      while (j2 <= n && cls[j2] === 1) j2++;
+      const runLen = (j2 - i) * 10;
+      const before = i > 0 ? cls[i - 1] : 2, after = j2 <= n ? cls[j2] : 2;
+      if (runLen < 240 && before === 0 && after === 0) {
+        const tm = (i + j2 - 1) / 2 / n;
+        const mx = sg.x1 + (sg.x2 - sg.x1) * tm, mz = sg.z1 + (sg.z2 - sg.z1) * tm;
+        const rv = riverAt(mx, mz);
+        const dirX = vert ? 0 : 1, dirZ = vert ? 1 : 0;
+        const bl = runLen + 36;
+        const e1x = mx - dirX * (bl / 2 + 12), e1z = mz - dirZ * (bl / 2 + 12);
+        const e2x = mx + dirX * (bl / 2 + 12), e2z = mz + dirZ * (bl / 2 + 12);
+        const kindB = (rv.s ? rv.s.w : 20) < 25 ? 'flat' : 'arch';
+        const deckY = +(Math.max(hAt(e1x, e1z), hAt(e2x, e2z), (rv.s ? rv.s.wl : 0) + (kindB === 'arch' ? 4 : 2.4)) + 0.35).toFixed(2);
+        bridges.push({ x: Math.round(mx), z: Math.round(mz), dx: dirX, dz: dirZ, len: Math.round(bl), w: kindB === 'arch' ? 13 : 8, kind: kindB, deckY, wl: +(rv.s ? rv.s.wl : 0).toFixed(2), bedY: +((rv.s ? rv.s.wl : 0) - (2.2 + (rv.s ? rv.s.w : 20) * 0.06)).toFixed(2) });
+        for (let k = i; k < j2; k++) cls[k] = 0;
+      }
+      i = j2;
+    }
+  }
+  let i = 0;   // OK区間→ピース
+  while (i <= n) {
+    if (cls[i] !== 0) { i++; continue; }
+    let j2 = i;
+    while (j2 <= n && cls[j2] === 0) j2++;
+    const t0 = i / n, t1 = Math.min(1, (j2 - 1) / n);
+    const px1 = Math.round(sg.x1 + (sg.x2 - sg.x1) * t0), pz1 = Math.round(sg.z1 + (sg.z2 - sg.z1) * t0);
+    const px2 = Math.round(sg.x1 + (sg.x2 - sg.x1) * t1), pz2 = Math.round(sg.z1 + (sg.z2 - sg.z1) * t1);
+    const plen = Math.hypot(px2 - px1, pz2 - pz1);
+    if (plen >= (sg.kind === 'alley' ? 60 : 80)) pieces.push({ x1: px1, z1: pz1, x2: px2, z2: pz2, kind: sg.kind });
+    i = j2;
   }
 }
-
-// ── 5) 道路網（直線・90°交差・交差点=制御点共有）──
-// 軸平行セグメントを集め、他セグメントとの交点/接点を制御点として折れ線化する
-const segs = [];   // {x1,z1,x2,z2,kind}
-function districtGrid(cx, cz, lines) { for (const L of lines) segs.push({ x1: cx + L[0], z1: cz + L[1], x2: cx + L[2], z2: cz + L[3], kind: L[4] }); }
-// 中心街(原点): 大通り十字＋街路±240/±480＋路地±120(コア内)
-{
-  const S = 520, lines = [];
-  lines.push([0, -S, 0, S, 'avenue'], [-S, 0, S, 0, 'avenue']);
-  for (const p of [-480, -240, 240, 480]) { lines.push([p, -S, p, S, 'street'], [-S, p, S, p, 'street']); }
-  for (const p of [-120, 120]) { lines.push([p, -240, p, 240, 'alley'], [-240, p, 240, p, 'alley']); }
-  districtGrid(0, 0, lines);
-}
-// 郊外(西/東): 小さな格子
-for (const [cx, cz] of [[-1450, 40], [1700, -40]]) {
-  const S = 240, lines = [];
-  for (const p of [-120, 0, 120]) { lines.push([p, -S, p, S, 'street'], [-S, p, S, p, 'street']); }
-  districtGrid(cx, cz, lines);
-}
-// 軸平行セグメント → 交点付き折れ線
+// ピース同士の交点/接点を制御点にして折れ線化
 const EPS = 0.01;
 const roads = [];
-for (const a of segs) {
+for (const a of pieces) {
   const vert = Math.abs(a.x1 - a.x2) < EPS;
   const ts = new Set([vert ? a.z1 : a.x1, vert ? a.z2 : a.x2]);
-  for (const b2 of segs) {
+  for (const b2 of pieces) {
     if (b2 === a) continue;
     const bv = Math.abs(b2.x1 - b2.x2) < EPS;
     if (vert === bv) continue;
-    if (vert) {   // a=縦線x固定, b=横線z固定
+    if (vert) {
       const bx0 = Math.min(b2.x1, b2.x2), bx1 = Math.max(b2.x1, b2.x2);
       const az0 = Math.min(a.z1, a.z2), az1 = Math.max(a.z1, a.z2);
       if (a.x1 >= bx0 - EPS && a.x1 <= bx1 + EPS && b2.z1 >= az0 - EPS && b2.z1 <= az1 + EPS) ts.add(b2.z1);
@@ -228,40 +297,102 @@ for (const a of segs) {
   const sorted = [...ts].sort((p, q) => p - q);
   roads.push({ kind: a.kind, points: sorted.map((t) => (vert ? [a.x1, t] : [t, a.z1])) });
 }
-// 接続道路（端点は既存線の端点/線上と正確に一致させて交差点にする）
-roads.push({ kind: 'avenue', points: [[-1210, 40], [-880, 20], [-520, 0]] });        // 西郊外→中心
-roads.push({ kind: 'avenue', points: [[520, 0], [1000, -20], [1460, -40]] });        // 中心→東郊外
-roads.push({ kind: 'street', points: [[0, 520], [0, 1150]] });                       // 中心→海岸通り
-roads.push({ kind: 'street', points: [[-1200, 1150], [0, 1150], [2000, 1150]] });    // 海岸通り
-roads.push({ kind: 'street', points: [[0, -520], [0, -1150]] });                     // 中心→北の山麓
 
-// ── 6) 建物差分（郊外中心に中層ビルを若干）──
+// ── 4) 植生（山＋川沿い。道路の近くは生やさない）──
+const ROADCELL = 24, roadHash = new Set();
+{
+  const g0 = buildRoadGraph(roads);
+  for (const [aId, bId] of g0.edges) {
+    const A = g0.nodes.get(aId), B = g0.nodes.get(bId);
+    const L = Math.hypot(B.x - A.x, B.z - A.z), n = Math.max(1, Math.round(L / 12));
+    for (let i = 0; i <= n; i++) {
+      const x = A.x + (B.x - A.x) * i / n, z = A.z + (B.z - A.z) * i / n;
+      roadHash.add(Math.floor(x / ROADCELL) + '_' + Math.floor(z / ROADCELL));
+    }
+  }
+}
+const nearRoad = (x, z) => {
+  const cx = Math.floor(x / ROADCELL), cz = Math.floor(z / ROADCELL);
+  for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) if (roadHash.has((cx + i) + '_' + (cz + j))) return true;
+  return false;
+};
+const FRES = 400, FCELL = 16;
+const forest = new Uint8Array(FRES * FRES);
+for (let j = 0; j < FRES; j++) {
+  for (let i = 0; i < FRES; i++) {
+    const x = (i + 0.5) * FCELL - HALF, z = (j + 0.5) * FCELL - HALF;
+    const h = hAt(x, z);
+    if (h < 1.5 || z > coastZ(x) - 60) continue;
+    if (nearRoad(x, z)) continue;
+    const slope = slopeAt(x, z);
+    let den = 0;
+    const mf = clamp((h - 130) / 110, 0, 1) * clamp((1.15 - slope) / 1.0, 0, 1);
+    if (mf > 0) den = 200 * mf * (0.55 + 0.45 * fbm(x, z, 5));
+    const rv = riverAt(x, z);
+    if (rv.d > -4 && rv.d < 34 && h < 110) den = Math.max(den, 62 * (0.5 + 0.5 * fbm(x + 999, z, 7)));
+    forest[j * FRES + i] = Math.round(clamp(den, 0, 255));
+  }
+}
+
+// ── 5) 建物差分（郊外中心の中層ビル追加＋川/海/急斜面/橋に被る自動配置の除外）──
 const added = [];
 {
   const models = ['building-a', 'building-c', 'building-e', 'building-g', 'building-b', 'building-f'];
   const offs = [[60, 62], [-60, 62], [62, -60], [-62, -60], [180, 62], [-180, -62]];
   const rng = mulberry(SEED + 7);
-  for (const [cx, cz] of [[-1450, 40], [1700, -40]]) {
+  for (const [cx, cz] of [WS, ES]) {
     offs.forEach((o, i) => added.push({ kit: 'city', model: models[i], tier: 'mid', x: cx + o[0], z: cz + o[1], ry: Math.floor(rng() * 4) * Math.PI / 2, s: 1 }));
   }
 }
+const g = buildRoadGraph(roads);
+const genEdges = g.edges.map(([aId, bId]) => { const A = g.nodes.get(aId), B = g.nodes.get(bId); return [A.x, 0, A.z, B.x, 0, B.z]; });
+const gen = generateBuildings(genEdges, { seed: 20260706 });
+const removed = [];
+for (const it of gen.instances) {
+  const rv = riverAt(it.x, it.z);
+  let bad = rv.d < 6 || hAt(it.x, it.z) < 1.6 || slopeAt(it.x, it.z) > 0.5 || it.z > coastZ(it.x) - 90;
+  if (!bad) for (const br of bridges) {
+    const alo = (it.x - br.x) * br.dx + (it.z - br.z) * br.dz;
+    const per = -(it.x - br.x) * br.dz + (it.z - br.z) * br.dx;
+    if (Math.abs(alo) < br.len / 2 + 12 && Math.abs(per) < 16) { bad = true; break; }
+  }
+  if (bad) removed.push(instanceId(it));
+}
 
 // ── 出力 ──
+autoColorize(T);
+for (let j = 0; j < RES; j++) {
+  for (let i = 0; i < RES; i++) {
+    const x = (i / (RES - 1) - 0.5) * SIZE, z = (j / (RES - 1) - 0.5) * SIZE;
+    const h = T.heights[j * RES + i], o = (j * RES + i) * 3, cz = coastZ(x);
+    if (h < 0 && z > cz - 400) {
+      const t = clamp(-h / 42, 0, 1);
+      T.colors[o] = 180 - 128 * t; T.colors[o + 1] = 170 - 106 * t; T.colors[o + 2] = 140 - 62 * t;
+    } else if (z > cz - 260 && h < 4.5) {
+      T.colors[o] = 198; T.colors[o + 1] = 182; T.colors[o + 2] = 142;
+    } else if (riverMask[j * RES + i]) {
+      T.colors[o] = 118; T.colors[o + 1] = 110; T.colors[o + 2] = 88;
+    }
+  }
+}
 const out = {
   format: 'city-map', version: 1, name: 'floz',
   terrain: serializeTerrain(T),
   roads, osmRoads: false,
-  buildings: { seed: 20260706, removed: [], moved: {}, added },
+  bridges,
+  buildings: { seed: 20260706, removed, moved: {}, added },
   water,
   forest: { cell: FCELL, res: FRES, yOff: 0, model: 'fantasy_GLB format/tree-high-round.glb', treeH: 20, data: b64(forest) },
 };
 const dest = path.join(root, 'public', 'maps', 'floz.map.json');
 fs.writeFileSync(dest, JSON.stringify(out));
 // ── 検証 ──
-const g = buildRoadGraph(roads);
 let hMin = 1e9, hMax = -1e9; for (const h of T.heights) { hMin = Math.min(hMin, h); hMax = Math.max(hMax, h); }
 let fCells = 0; for (const d of forest) if (d > 0) fCells++;
+let roadKm = 0; for (const e of genEdges) roadKm += Math.hypot(e[3] - e[0], e[5] - e[2]) / 1000;
 console.log('wrote:', dest, (fs.statSync(dest).size / 1024).toFixed(0) + 'KB');
 console.log('terrain h:', hMin.toFixed(1), '..', hMax.toFixed(1));
-console.log('roads:', roads.length, 'splines →', g.nodes.size, 'nodes /', g.edges.length, 'edges');
-console.log('water rects:', water.length, '/ forest cells:', fCells, '/ added bld:', added.length);
+console.log('roads:', roads.length, 'splines /', roadKm.toFixed(1) + 'km →', g.nodes.size, 'nodes /', g.edges.length, 'edges');
+console.log('buildings:', gen.instances.length, 'auto (removed', removed.length, ') + added', added.length, '/ zones', JSON.stringify(gen.zones));
+console.log('bridges:', bridges.length, bridges.map((b2) => b2.kind + '@' + b2.x + ',' + b2.z + ' L' + b2.len).join(' / '));
+console.log('water rects:', water.length, '/ forest cells:', fCells);
