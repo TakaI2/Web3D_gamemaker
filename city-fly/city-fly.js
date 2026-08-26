@@ -806,12 +806,102 @@ function tutWallX(geoms, x, z0, z1, y0, y1, hole) {   // X位置の壁（Z方向
   if (hole.y0 > y0) tutSolid(geoms, x, (hole.z0 + hole.z1) / 2, y0, hole.y0, TUT_WALL, hole.z1 - hole.z0);
   if (y1 > hole.y1) tutSolid(geoms, x, (hole.z0 + hole.z1) / 2, hole.y1, y1, TUT_WALL, hole.z1 - hole.z0);
 }
+function tutBldMd(geo, mat, tier, insts, opts = {}) {   // 単体ジオメトリを建物パイプラインへ登録（被弾カーブ＋崩壊ディソルブが街と共通）
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox, size = bb.getSize(new THREE.Vector3());
+  const tpl = { geometry: geo, material: mat, size, baseY: bb.min.y };
+  const near = new THREE.InstancedMesh(geo, mat, insts.length);
+  const boxGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
+  boxGeo.translate(bb.min.x + size.x / 2, bb.min.y + size.y / 2, bb.min.z + size.z / 2);
+  const far = new THREE.InstancedMesh(boxGeo, mat, insts.length);
+  near.frustumCulled = far.frustumCulled = false;
+  near.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 100, 0), 3000);   // LOD入替でレイキャスト球が古くならないよう固定
+  far.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 100, 0), 3000);
+  near.userData.slots = []; far.userData.slots = [];
+  const md = { tpl, near, far, recs: [], rel: null, entries: null, ...opts };
+  near.userData.md = md; far.userData.md = md;
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _e = new THREE.Euler();
+  for (const it of insts) {
+    const sc = it.s || 1, y0 = it.y || 0;
+    _e.set(0, it.ry || 0, 0); _q.setFromEuler(_e);
+    _p.set(it.x, y0 - bb.min.y * sc, it.z); _s.set(sc, sc, sc);
+    _m.compose(_p, _q, _s);
+    md.recs.push({ m: _m.clone(), x: it.x, z: it.z, tier, boxIdx: addCollBox(it.x, it.z, y0, y0 + size.y * sc, size.x * sc * 0.5, size.z * sc * 0.5), dead: false, isFar: false, carve: null });
+  }
+  tut.root.add(near); tut.root.add(far);
+  bldModels.push(md);
+  return md;
+}
+function tutObjective(text) {   // 画面右上の目標表示
+  if (!tut.objEl) {
+    tut.objEl = document.createElement('div');
+    tut.objEl.style.cssText = 'position:fixed;right:12px;top:96px;z-index:24;pointer-events:none;'
+      + 'background:rgba(8,14,30,0.6);border:1px solid rgba(255,205,110,0.5);border-radius:6px;padding:6px 14px;'
+      + 'color:#ffe6b0;font:700 14px Meiryo,sans-serif;text-shadow:0 1px 3px #000;';
+    document.body.appendChild(tut.objEl);
+  }
+  if (!text) { tut.objEl.style.display = 'none'; return; }
+  tut.objEl.textContent = text;
+  tut.objEl.style.display = '';
+}
+function tutRefreshObjective() {
+  if (tut.room === 1) tutObjective(tut.goalDone ? '' : '最深部のゴールリングまで飛べ');
+  else if (tut.room === 2) {
+    if (tut.targetsDown < tut.targetsTotal) tutObjective('ターゲット 残り ' + (tut.targetsTotal - tut.targetsDown));
+    else if (!tut.gateDown) tutObjective('隔壁をチャージビームで破壊せよ');
+    else tutObjective('');
+  } else tutObjective('');
+}
+function tutHumanoidGeo() {   // 人型シルエット標的（台座＋胴＋頭）
+  const parts = [];
+  const base = new THREE.CylinderGeometry(0.9, 1.1, 0.4, 10); base.translate(0, 0.2, 0); parts.push(base);
+  const body = new THREE.BoxGeometry(1.6, 2.1, 0.4); body.translate(0, 1.45, 0); parts.push(body);
+  const arms = new THREE.BoxGeometry(2.4, 0.9, 0.35); arms.translate(0, 2.0, 0); parts.push(arms);
+  const head = new THREE.SphereGeometry(0.48, 10, 8); head.translate(0, 2.95, 0); parts.push(head);
+  return mergeGeometries(parts, false);
+}
+function buildTutRoom2(geoms) {   // 部屋2: 強襲訓練（ターゲット＋破壊可能構造物＋高HP隔壁）
+  const R = tut.rooms[1], xs = R.x0;
+  for (const [px, pz] of [[80, -70], [80, 70], [200, 0], [320, -70], [320, 70]]) tutSolid(geoms, xs + px, pz, 0, 70, 14, 14);   // 柱
+  tutSolid(geoms, xs + 140, -60, 40, 46, 64, 52);   // 足場（低）
+  tutSolid(geoms, xs + 260, 55, 66, 72, 64, 52);    // 足場（高）
+  const matTarget = new THREE.MeshStandardMaterial({ color: 0xff8c42, emissive: 0x552200, roughness: 0.6 });
+  const matCapsule = new THREE.MeshStandardMaterial({ color: 0x35d0c0, emissive: 0x104440, roughness: 0.6 });
+  const matStruct = new THREE.MeshStandardMaterial({ color: 0x93a0b8, roughness: 0.9 });
+  const matGate = new THREE.MeshStandardMaterial({ color: 0x8a4a3a, emissive: 0x330d08, roughness: 0.7 });
+  const onTargetDown = () => {
+    tut.targetsDown++;
+    addKill('target');   // ターゲットも撃墜数スコアに加算
+    if (tut.targetsDown >= tut.targetsTotal) { queueTalk('r2_targets'); tutHint('charge'); }
+    tutRefreshObjective();
+  };
+  tutBldMd(tutHumanoidGeo(), matTarget, 'target', [
+    { x: xs + 60, z: -20, ry: -1.4 }, { x: xs + 95, z: 30, ry: 2.2 }, { x: xs + 170, z: -95, ry: 0.6 },
+    { x: xs + 230, z: 100, ry: 3.0 }, { x: xs + 300, z: -40, ry: -2.0 },
+    { x: xs + 140, z: -60, y: 46, ry: 1.0 }, { x: xs + 260, z: 55, y: 72, ry: -0.8 }, { x: xs + 200, z: 0, y: 70, ry: 0.2 },
+  ], { onCollapse: onTargetDown });
+  const capGeo = new THREE.CapsuleGeometry(1.0, 1.7, 4, 12);
+  tutBldMd(capGeo, matCapsule, 'target', [
+    { x: xs + 130, z: 90 }, { x: xs + 180, z: 40 }, { x: xs + 340, z: 100 }, { x: xs + 385, z: -80 },
+    { x: xs + 90, z: -100 }, { x: xs + 360, z: 40 },   // ↑後ろ2つは構造物の中に隠れている
+  ], { onCollapse: onTargetDown });
+  const structGeo = new THREE.BoxGeometry(22, 55, 22); structGeo.translate(0, 27.5, 0);
+  tutBldMd(structGeo, matStruct, 'mid', [
+    { x: xs + 90, z: -100 }, { x: xs + 250, z: -20 }, { x: xs + 360, z: 40 },
+  ]);
+  const gateGeo = new THREE.BoxGeometry(2.6, 16, 24); gateGeo.translate(0, 8, 0);
+  tutBldMd(gateGeo, matGate, 'gate', [{ x: tut.doors[1].x - 8, z: 0 }], {
+    onCollapse: () => { tut.gateDown = true; setTutDoor(1, true); tutHint('goal'); tutRefreshObjective(); },
+  });
+  tut.targetsTotal = 14; tut.targetsDown = 0; tut.gateDown = false;
+}
 async function buildTutorialStage() {
   const geoms = [], emGeoms = [];
   const totalL = TUT_ROOMS.reduce((a, r) => a + r.L, 0) + TUT_WALL * (TUT_ROOMS.length + 1);
   let x = -totalL / 2;   // 西外壁の西端
   const doorHole = { z0: -TUT_DOOR_W / 2, z1: TUT_DOOR_W / 2, y0: 0, y1: TUT_DOOR_H };
   tut.root = new THREE.Group();
+  cityDamaged = new THREE.Group(); scene.add(cityDamaged);   // 破壊で単体化した建物の置き場（街と共通の破壊経路が使う）
   for (let i = 0; i < TUT_ROOMS.length; i++) {
     const r = TUT_ROOMS[i], prev = TUT_ROOMS[i - 1];
     const spanW = (prev ? Math.max(prev.W, r.W) : r.W) / 2 + TUT_WALL;
@@ -844,6 +934,7 @@ async function buildTutorialStage() {
   core.position.copy(goalPos);
   tut.root.add(ring); tut.root.add(core);
   tut.goal = { pos: goalPos, ring, core };
+  buildTutRoom2(geoms);
   // メッシュ確定（壁=チェッカー1メッシュ／発光=1メッシュ）
   const stage = new THREE.Mesh(mergeGeometries(geoms, false), new THREE.MeshLambertMaterial({ map: makeTutTex() }));
   stage.matrixAutoUpdate = false;
@@ -883,7 +974,10 @@ function setTutDoor(i, open) {
 const TUT_HINTS = {
   move: { pc: 'PC：マウスで視点移動　／　WASD・カーソルキーで移動　／　Space上昇・Shift下降', sp: 'スマホ：画面右側スワイプで視点移動　／　左側スワイプで移動　／　右下ボタンで上昇・下降' },
   goal: { pc: '隔壁が開いた！　次の部屋へ進もう', sp: '隔壁が開いた！　次の部屋へ進もう' },
+  attack: { pc: 'PC：左クリック＝ビーム（レティクルで狙う）　／　3連射目は雷撃', sp: 'スマホ：右タップ＝ビーム（レティクルで狙う）' },
+  charge: { pc: 'PC：左クリック長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）', sp: 'スマホ：長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）' },
 };
+const TUT_ROOM_HINT = { 2: 'attack' };
 function tutHint(key) {
   const h = TUT_HINTS[key];
   if (!h) return;
@@ -917,7 +1011,7 @@ function updateTutorial(dt) {
   }
   if (tut.goal) { tut.goal.ring.rotation.y += dt * 1.4; tut.goal.core.scale.setScalar(1 + 0.25 * Math.sin(exhaustT * 5)); }
   if (gameMode !== 'play' && gameMode !== 'training') return;
-  if (!tut.started) { tut.started = true; tut.room = 1; queueTalk('r1_start'); tutHint('move'); }
+  if (!tut.started) { tut.started = true; tut.room = 1; queueTalk('r1_start'); tutHint('move'); tutRefreshObjective(); }
   const px = player.pos.x;
   let roomIdx = -1;   // 現在の部屋（1-based）
   for (let i = 0; i < tut.rooms.length; i++) if (px >= tut.rooms[i].x0 - TUT_WALL && px <= tut.rooms[i].x1 + TUT_WALL) { roomIdx = i; break; }
@@ -926,12 +1020,16 @@ function updateTutorial(dt) {
     tut.room = roomIdx + 1;
     const talk = TUT_ROOM_TALK[tut.room];
     if (talk) queueTalk(talk);
+    const hk = TUT_ROOM_HINT[tut.room];
+    if (hk) tutHint(hk);
+    tutRefreshObjective();
   }
   if (tut.room === 1) {   // 部屋1: 中間会話→ゴール到達で隔壁解放
     if (!tut.midFired.r1 && px > tut.rooms[0].x0 + 150) { tut.midFired.r1 = true; queueTalk('r1_mid'); }
     if (!tut.goalDone && player.pos.distanceTo(tut.goal.pos) < 9) {
       tut.goalDone = true;
       setTutDoor(0, true);
+      tutRefreshObjective();
       tut.goal.ring.material.color.set(0x54ff9a);
       tut.goal.core.material.color.set(0xbaffd4);
       tutHint('goal');
@@ -1892,7 +1990,7 @@ window.__fly = { get player() { return player; }, get camera() { return camera; 
   dmgBldAt: (x, z, dmg = 1) => {   // テスト用: 最寄り建物へダメージ
     ensureBoxMap();
     let best = -1, bd = 1e9;
-    for (let i = 0; i < collBoxes.length; i++) { const b = collBoxes[i]; if (b.top <= b.bottom) continue; const d = Math.hypot(b.x - x, b.z - z); if (d < bd) { bd = d; best = i; } }
+    for (let i = 0; i < collBoxes.length; i++) { const b = collBoxes[i]; if (b.top <= b.bottom || !boxToBld[i]) continue; const d = Math.hypot(b.x - x, b.z - z); if (d < bd) { bd = d; best = i; } }
     const bb = best >= 0 ? boxToBld[best] : null;
     if (!bb) return null;
     const b = collBoxes[best];
@@ -4563,7 +4661,7 @@ function groundCollide() {
 // ── P2: Joyのショット破壊（左クリック→命中建物を単体化し、命中点中心の球状ディソルブで大きく欠損）──
 // HP制: 小さな住宅=少HP / 中層=中HP / 高層=大HP。被弾後は自壊（毎秒スローでHP減＋徐々に傾く＋上から溶け始め）
 const CARVE_MAX = 6, CARVE_RADIUS = 7, SHOOT_RANGE = 450, DIE_DUR = 1.7;
-const BLD_HP = { house: 2, mid: 5, tower: 9 };   // 建物HP（ダメージ: 通常弾=1, 雷=2.5, 貫通ビーム=0.55/tick）
+const BLD_HP = { house: 2, mid: 5, tower: 9, target: 1, gate: 24, fort: 260 };   // 建物HP（ダメージ: 通常弾=1, 雷=2.5, 貫通ビーム=0.55/tick）
 const BLD_DECAY_TIME = 28;   // 被弾後、放置してもこの秒数で自壊しきる（基準値）
 const BLD_DECAY_ACCEL = 6;   // ダメージが進むほど自壊が加速する係数（progの2乗に掛ける）
 const BLD_MAX_TILT = 0.14;   // 自壊進行での最大傾き(rad)
@@ -4640,7 +4738,7 @@ function damageBuildingRec(rec0, md, point, dmg = DMG_SHOT, fxScale = 1, src = n
   const tiltA = Math.random() * Math.PI * 2;   // 傾き方向（水平軸）をランダムに固定
   const rec = {
     std, baseMatrix: m.clone(), uCenters: cm.uCenters, uRadii: cm.uRadii, uKill: cm.uKill, uKillOn: cm.uKillOn, uBaseY: cm.uBaseY,
-    baseY0: baseY, height, hits: 0, boxIdx: rec0.boxIdx, carveR, bldRec: rec0,
+    baseY0: baseY, height, hits: 0, boxIdx: rec0.boxIdx, carveR, bldRec: rec0, mdRef: md,
     hp: hpMax, hpMax, decay: hpMax / BLD_DECAY_TIME,
     tiltAxis: new THREE.Vector3(Math.cos(tiltA), 0, Math.sin(tiltA)),
     pivot: new THREE.Vector3(_p2.x, baseY, _p2.z),   // 傾き回転の支点（基部中心）
@@ -4670,6 +4768,7 @@ function applyBldDamage(rec, dmg) {
 function startCollapse(rec) {   // 崩壊開始＋当たり判定を無効化。現在の傾きを基準行列に焼き込む
   if (rec.dying) return;
   gp.destroyed++;   // 都市被害率（誰が壊しても加算）
+  if (rec.mdRef && rec.mdRef.onCollapse) { try { rec.mdRef.onCollapse(rec); } catch (e) { console.warn('collapse hook失敗', e); } }
   if (rec.lastSrc === 'player') addWanted(0.5, rec.pivot);   // プレイヤー起因の建物破壊＝犯罪
   playSfxAt('bakuha.ogg', rec.pivot, 1.0);
   hideBuildingLights(rec.bldRec);   // 窓明かり・屋上ランプを消す（廃墟が光り続けない）
@@ -7204,6 +7303,7 @@ let policeTpl = null, policePending = 0;   // 非同期スポーンの多重発�
 const wantedLevel = () => Math.min(WANTED_MAX, Math.floor(wantedPts));
 
 function addWanted(base, pos) {
+  if (TUTORIAL) return;   // チュートリアル: 手配・警察なし
   let wit = false;   // 目撃者: 事件現場の近くに別の住人がいるか
   if (pos) for (const m of kens) {
     if (!m.dissolving && Math.hypot(m.pos.x - pos.x, m.pos.z - pos.z) < WITNESS_R) {
@@ -7379,6 +7479,7 @@ function mdMarkers(md) {
 
 // 近傍の建物マーカーを走査してEキー候補を更新（0.25s毎）
 function updateEntryPrompt(dt) {
+  if (TUTORIAL) return;   // チュートリアル: 建物進入なし（ターゲット等に入口を合成しない）
   _entryT -= dt;
   if (_entryT > 0) return;
   _entryT = 0.25;
