@@ -855,6 +855,8 @@ function tutRefreshObjective() {
     else tutObjective('');
   } else if (tut.room === 3) {
     tutObjective(tut.aerialClear ? '' : '撃墜 ' + Math.min(20, tutJetKills()) + '/20　／　救出 ' + tut.rescued + '/5');
+  } else if (tut.room === 4) {
+    tutObjective(tut.fortDown ? '' : '要塞HP ' + Math.round(tutFortHp() / BLD_HP.fort * 100) + '%　— 巨大オブジェクトを投げつけろ');
   } else tutObjective('');
 }
 function tutHumanoidGeo() {   // 人型シルエット標的（台座＋胴＋頭）
@@ -896,6 +898,7 @@ function buildTutRoom2(geoms) {   // 部屋2: 強襲訓練（ターゲット＋�
   ]);
   const gateGeo = new THREE.BoxGeometry(2.6, 16, 24); gateGeo.translate(0, 8, 0);
   tutBldMd(gateGeo, matGate, 'gate', [{ x: tut.doors[1].x - 8, z: 0 }], {
+    noDecay: true,   // 高HP隔壁は放置で自壊しない
     onCollapse: () => { tut.gateDown = true; setTutDoor(1, true); tutHint('goal'); tutRefreshObjective(); },
   });
   tut.targetsTotal = 14; tut.targetsDown = 0; tut.gateDown = false;
@@ -919,6 +922,91 @@ function buildTutRoom3(geoms) {   // 部屋3: 空中戦訓練（下層に破壊�
   tut.root.add(ring); tut.root.add(pillar);
   tut.safety = { x: sx, z: sz, r: srad, ring, pillar };
   tut.rescued = 0; tut.jetBase = 0; tut.dollsSpawned = false; tut.aerialClear = false;
+}
+const tutProps = [];
+const _tutGlowGeo = new THREE.SphereGeometry(0.8, 10, 8);
+const _tutGlowMat = new THREE.MeshBasicMaterial({ color: 0x4ad7ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+const _tuV0 = new THREE.Vector3(), _tuV1 = new THREE.Vector3();
+function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ（光るマーカー付き・既存の掴み/投擲/転がり物理に乗る）
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.25 });
+  const mesh = new THREE.Mesh(geo, mat);
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox;
+  mesh.position.set(x, -bb.min.y, z);
+  mesh.rotation.y = ry;
+  const glow = new THREE.Mesh(_tutGlowGeo, _tutGlowMat);
+  glow.position.y = bb.max.y + 1.4;
+  mesh.add(glow);
+  tut.root.add(mesh);
+  const size = bb.getSize(new THREE.Vector3());
+  const proxy = { mesh, hitR: Math.max(size.x, size.y, size.z) * 0.5, mass, tutObj: true,
+    home: { x, y: -bb.min.y, z, ry }, tutHp0: 2 + mass, tutHp: 2 + mass };
+  tutProps.push(proxy);
+  return proxy;
+}
+function buildTutRoom4(geoms) {   // 部屋4: 念動力訓練（要塞＋砲台＋グラブ用オブジェクト群）
+  void geoms;
+  const R = tut.rooms[3], cx2 = (R.x0 + R.x1) / 2;
+  // 要塞（超高HP。巨大物の投擲=質量×速度ダメージで削る）
+  const fortParts = [];
+  const fb = new THREE.BoxGeometry(70, 46, 70); fb.translate(0, 23, 0); fortParts.push(fb);
+  const ft = new THREE.BoxGeometry(30, 16, 30); ft.translate(0, 54, 0); fortParts.push(ft);
+  for (const [ox, oz] of [[-30, -30], [30, -30], [-30, 30], [30, 30]]) {
+    const t = new THREE.CylinderGeometry(8, 9, 62, 10); t.translate(ox, 31, oz); fortParts.push(t);
+  }
+  const matFort = new THREE.MeshStandardMaterial({ color: 0x6e7686, roughness: 0.85, metalness: 0.15 });
+  tut.fortMd = tutBldMd(mergeGeometries(fortParts, false), matFort, 'fort', [{ x: cx2, z: 0 }], {
+    noDecay: true,
+    onCollapse: () => { tut.fortDown = true; setTutDoor(3, true); tutHint('goal'); tutRefreshObjective(); },
+  });
+  // 砲台×4（破壊可能。スパイダーキャノンと同じ弾）
+  const tg = [];
+  const tb = new THREE.CylinderGeometry(3.4, 4.4, 14, 10); tb.translate(0, 7, 0); tg.push(tb);
+  const th = new THREE.SphereGeometry(3.4, 10, 8); th.translate(0, 15, 0); tg.push(th);
+  const matTur = new THREE.MeshStandardMaterial({ color: 0x92596a, roughness: 0.7 });
+  tut.turMd = tutBldMd(mergeGeometries(tg, false), matTur, 'mid', [
+    { x: cx2 - 62, z: -62 }, { x: cx2 + 62, z: -62 }, { x: cx2 - 62, z: 62 }, { x: cx2 + 62, z: 62 },
+  ], { noDecay: true });
+  tut.turrets = tut.turMd.recs.map((rec, i) => ({ rec, x: rec.x, z: rec.z, y: 15, cd: 2 + i * 0.9 }));
+  // グラブ用プロップ（小→船級。質量で慣性/投擲ダメージが変わる）
+  const crate = new THREE.BoxGeometry(4, 4, 4); crate.translate(0, 2, 0);
+  const block = new THREE.BoxGeometry(6.5, 3.2, 5); block.translate(0, 1.6, 0);
+  const contG = new THREE.BoxGeometry(12, 5, 5); contG.translate(0, 2.5, 0);
+  const pillar = new THREE.CylinderGeometry(5, 5, 28, 12); pillar.translate(0, 14, 0);
+  const beam = new THREE.BoxGeometry(55, 8, 10); beam.translate(0, 4, 0);
+  const spots = [
+    [crate, -200, -180, 1.2, 0xc9a860], [crate, -160, 200, 1.2, 0xc9a860], [crate, 150, -210, 1.2, 0xc9a860], [crate, 210, 170, 1.2, 0xc9a860],
+    [block, -220, 40, 2, 0x7fa6c9], [block, 90, 225, 2, 0x7fa6c9], [block, 200, -60, 2, 0x7fa6c9],
+    [contG, -120, -215, 3, 0xc96f5a], [contG, -230, 130, 3, 0xc96f5a], [contG, 235, 90, 3, 0x5ac9a0], [contG, 120, -170, 3, 0x5ac9a0],
+    [pillar, -180, -90, 12, 0x9a90c9], [pillar, 175, 205, 12, 0x9a90c9],
+    [beam, -90, 235, 32, 0x8891a5], [beam, 60, -235, 32, 0x8891a5],
+  ];
+  for (const [g, ox, oz, mass, color] of spots) tutProp(g.clone(), cx2 + ox * 0.95, oz * 0.95, mass, color, Math.sin(ox * 12.9898) * 3);
+  tut.fortDown = false;
+}
+function tutFortHp() {
+  const rec = tut.fortMd && tut.fortMd.recs[0];
+  if (!rec) return 0;
+  if (rec.carve) return Math.max(0, rec.carve.hp);
+  return BLD_HP.fort;
+}
+function updateTutRoom4(dt) {
+  if (tut.fortDown) return;
+  for (const tr of tut.turrets) {   // 砲台: プレイヤーを狙って砲撃（破壊されると沈黙）
+    if (tr.rec.carve && tr.rec.carve.dying) continue;
+    tr.cd -= dt;
+    if (tr.cd > 0) continue;
+    tr.cd = 3.4;
+    _tuV0.set(tr.x, tr.y + 2, tr.z);
+    _tuV1.copy(player.pos); _tuV1.y += 1;
+    if (_tuV0.distanceTo(_tuV1) > 480) continue;
+    const dir = _tuV1.sub(_tuV0).normalize();
+    _tuV0.addScaledVector(dir, 8);   // 銃口を自分の当たり判定箱の外へ（内側から撃つと自爆する）
+    fireEnemyBolt(_tuV0, dir, { speed: 105, radius: 2.0, len: 16, color: 0xffb040, dmg: 10, knock: 26, bldDmg: DMG_SHOT, fxScale: 1.4, range: 540 });
+    playSfxAt('beam.ogg', _tuV0, 0.5);
+  }
+  const hp = Math.round(tutFortHp() / BLD_HP.fort * 100);
+  if (hp !== tut._fortHpShown) { tut._fortHpShown = hp; tutRefreshObjective(); }
 }
 const TUT_DOLL_SPOTS = [[-180, -60], [-120, 150], [-40, -180], [30, 60], [90, -90], [160, 30], [230, -160], [300, 90]];
 function tutSpawnDolls() {   // 部屋3のダミードール（走り回る救出対象）
@@ -1026,6 +1114,7 @@ async function buildTutorialStage() {
   tut.goal = { pos: goalPos, ring, core };
   buildTutRoom2(geoms);
   buildTutRoom3(geoms);
+  buildTutRoom4(geoms);
   // メッシュ確定（壁=チェッカー1メッシュ／発光=1メッシュ）
   const stage = new THREE.Mesh(mergeGeometries(geoms, false), new THREE.MeshLambertMaterial({ map: makeTutTex() }));
   stage.matrixAutoUpdate = false;
@@ -1070,8 +1159,9 @@ const TUT_HINTS = {
   attack: { pc: 'PC：左クリック＝ビーム（レティクルで狙う）　／　3連射目は雷撃', sp: 'スマホ：右タップ＝ビーム（レティクルで狙う）' },
   charge: { pc: 'PC：左クリック長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）', sp: 'スマホ：長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）' },
   aerial: { pc: 'PC：右クリック長押し＝ドールを掴む→運んで光の柱の中で離す　／　訓練機はビームで撃墜', sp: 'スマホ：長押し＝ドールを掴む→光の柱まで運ぶ　／　右タップで撃墜' },
+  grab: { pc: 'PC：右クリック長押し＝光る物を掴む／マウスを振って離すと投擲　重い物ほど破壊力大・持っている間は盾になる', sp: 'スマホ：長押し＝光る物を掴む／指を離すと投擲　重い物ほど破壊力大・盾にもなる' },
 };
-const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial' };
+const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial', 4: 'grab' };
 function tutHint(key) {
   const h = TUT_HINTS[key];
   if (!h) return;
@@ -1123,6 +1213,25 @@ function updateTutorial(dt) {
     tutRefreshObjective();
   }
   if (tut.room === 3) updateTutRoom3(dt);
+  if (tut.room === 4) updateTutRoom4(dt);
+  for (const c of tutProps) {   // プロップ: 縮小消滅→リスポーン／待機中はマーカー脈動
+    if (c.dying != null) {
+      c.dying -= dt;
+      c.mesh.scale.setScalar(Math.max(0.01, c.dying / 0.6));
+      if (c.dying <= 0) { c.dying = null; c.mesh.visible = false; c.respawnT = 7; }
+    } else if (c.respawnT != null) {
+      c.respawnT -= dt;
+      if (c.respawnT <= 0) {
+        c.respawnT = null; c.dead = false; c.tutHp = c.tutHp0;
+        c.mesh.scale.setScalar(1);
+        c.mesh.position.set(c.home.x, c.home.y, c.home.z);
+        c.mesh.rotation.set(0, c.home.ry, 0);
+        c.mesh.visible = true; c.thrown = false; c.rolling = false;
+      }
+    } else if (!c.dead && !c.grabbed && !c.thrown && c.mesh.children[0]) {
+      c.mesh.children[0].scale.setScalar(1 + 0.35 * Math.sin(exhaustT * 4 + c.home.x));
+    }
+  }
   if (tut.room === 1) {   // 部屋1: 中間会話→ゴール到達で隔壁解放
     if (!tut.midFired.r1 && px > tut.rooms[0].x0 + 150) { tut.midFired.r1 = true; queueTalk('r1_mid'); }
     if (!tut.goalDone && player.pos.distanceTo(tut.goal.pos) < 9) {
@@ -2084,7 +2193,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, setTutDoor,
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
   dmgBldAt: (x, z, dmg = 1) => {   // テスト用: 最寄り建物へダメージ
     ensureBoxMap();
@@ -4838,7 +4947,7 @@ function damageBuildingRec(rec0, md, point, dmg = DMG_SHOT, fxScale = 1, src = n
   const rec = {
     std, baseMatrix: m.clone(), uCenters: cm.uCenters, uRadii: cm.uRadii, uKill: cm.uKill, uKillOn: cm.uKillOn, uBaseY: cm.uBaseY,
     baseY0: baseY, height, hits: 0, boxIdx: rec0.boxIdx, carveR, bldRec: rec0, mdRef: md,
-    hp: hpMax, hpMax, decay: hpMax / BLD_DECAY_TIME,
+    hp: hpMax, hpMax, decay: (md && md.noDecay) ? 0 : hpMax / BLD_DECAY_TIME,
     tiltAxis: new THREE.Vector3(Math.cos(tiltA), 0, Math.sin(tiltA)),
     pivot: new THREE.Vector3(_p2.x, baseY, _p2.z),   // 傾き回転の支点（基部中心）
     dying: false, dieT: 0,
@@ -4900,6 +5009,11 @@ function applyHitToBuilding(hit, dmg, fxScale = 1, src = null) {
   else if (hit.object.userData && hit.object.userData.rec) applyCarve(hit.object.userData.rec, hit.point, dmg, fxScale, src);
 }
 function hitCarBeam(car) {
+  if (car.tutObj && !car.dead) {   // チュートリアルのプロップ: 耐久を削る→尽きたら破壊
+    car.tutHp = (car.tutHp ?? (2 + massOf(car))) - 1;
+    spawnImpactFx(car.mesh.position.clone(), 1);
+    if (car.tutHp > 0) return;
+  }
   if (car.jet && !car.thrown && !car.dead) {   // 戦闘機: 撃墜＝きりもみ落下（着地/建物で爆発）。落下中に追撃なら即爆発
     addKill();
     car.flashT = 0.35;   // 被弾の赤フラッシュ
@@ -5720,6 +5834,14 @@ function breakCar(car, point) {
   if (car.ship) {   // 客船: 建物と同じ強度（カーブ欠損＋HP）。投擲の衝突は大ダメージ
     shipHit(point, car.thrown ? 4 : 2);
     car.thrown = false; car.vel = null;
+    return;
+  }
+  if (car.tutObj) {   // チュートリアルのプロップ: 破片＋縮小消滅→数秒後に元位置へ再出現
+    const m = massOf(car);
+    spawnDebrisBurst(point, 'bld', Math.min(1.6, 0.5 + m * 0.05), Math.min(2.4, 0.9 + m * 0.04), (car.rollR || 2) * 0.5);
+    spawnImpactFx(point, Math.min(2.2, 0.9 + m * 0.03));
+    car.dead = true; car.thrown = false; car.vel = null; car.rolling = false;
+    car.dying = 0.6;
     return;
   }
   if (car.container) {   // コンテナ（単体化済み）: 破壊
@@ -7865,6 +7987,7 @@ function carsAndJets() {
   for (const tr of trains) for (const c of tr.cars) extra.push(c.proxy);   // 電車（車両単位で掴める）
   if (portShip) extra.push(portShip.proxy);                       // 客船
   for (const c of takenConts) if (!c.dead) extra.push(c);         // 置き直されたコンテナ
+  if (TUTORIAL) for (const c of tutProps) if (!c.dead) extra.push(c);   // チュートリアルのグラブ用プロップ
   if (!jets.length && !extra.length) return cars;
   return cars.concat(jets, extra);
 }
