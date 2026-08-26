@@ -171,7 +171,10 @@ async function init() {
     try { initDebrisFx(); } catch (e) { console.warn('破片FX準備失敗:', e); }
     try { initUltFx(); } catch (e) { console.warn('アルティメットFX準備失敗:', e); }
     if (!NO_NPC) {   // 性能切り分け: ?nonpc=1 で住民NPCと生活エージェントを出さない
-      prepareKenAssets().then((ok) => { if (ok && !TUTORIAL) setKenCount(KEN_COUNT); }).catch((e) => console.warn('ken準備失敗:', e));   // チュートリアルはドール用にアセットだけ準備
+      prepareKenAssets().then((ok) => {
+        if (ok && !TUTORIAL) setKenCount(KEN_COUNT);
+        else if (ok && TUTORIAL && tut.ready) tutSpawnDolls();   // タイトル中にドール生成＝マネキンのパイプラインコンパイルを先に消化
+      }).catch((e) => console.warn('ken準備失敗:', e));
       if (!TUTORIAL) loadAgentOverrides().then(() => { try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); } });
     }
   });
@@ -850,6 +853,8 @@ function tutRefreshObjective() {
     if (tut.targetsDown < tut.targetsTotal) tutObjective('ターゲット 残り ' + (tut.targetsTotal - tut.targetsDown));
     else if (!tut.gateDown) tutObjective('隔壁をチャージビームで破壊せよ');
     else tutObjective('');
+  } else if (tut.room === 3) {
+    tutObjective(tut.aerialClear ? '' : '撃墜 ' + Math.min(20, tutJetKills()) + '/20　／　救出 ' + tut.rescued + '/5');
   } else tutObjective('');
 }
 function tutHumanoidGeo() {   // 人型シルエット標的（台座＋胴＋頭）
@@ -895,6 +900,91 @@ function buildTutRoom2(geoms) {   // 部屋2: 強襲訓練（ターゲット＋�
   });
   tut.targetsTotal = 14; tut.targetsDown = 0; tut.gateDown = false;
 }
+function buildTutRoom3(geoms) {   // 部屋3: 空中戦訓練（下層に破壊可能構造物・ドール・セーフティエリア）
+  const R = tut.rooms[2], xs = R.x0;
+  const matStruct = new THREE.MeshStandardMaterial({ color: 0x8f9cb0, roughness: 0.9 });
+  const g1 = new THREE.BoxGeometry(26, 64, 26); g1.translate(0, 32, 0);
+  tutBldMd(g1, matStruct, 'mid', [
+    { x: xs + 110, z: -140 }, { x: xs + 190, z: 110 }, { x: xs + 300, z: -60 },
+    { x: xs + 370, z: 170 }, { x: xs + 420, z: -170 }, { x: xs + 250, z: -220 },
+  ]);
+  // セーフティエリア（光の柱＋地面リング）
+  const sx = R.x1 - 90, sz = 120, srad = 16;
+  const ringG = new THREE.TorusGeometry(srad, 0.9, 10, 40); ringG.rotateX(Math.PI / 2);
+  const ring = new THREE.Mesh(ringG, new THREE.MeshBasicMaterial({ color: 0x58ffb0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+  ring.position.set(sx, 1.2, sz);
+  const pillarG = new THREE.CylinderGeometry(srad * 0.92, srad * 0.92, R.H * 0.75, 24, 1, true);
+  const pillar = new THREE.Mesh(pillarG, new THREE.MeshBasicMaterial({ color: 0x2bffa0, transparent: true, opacity: 0.10, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  pillar.position.set(sx, R.H * 0.375, sz);
+  tut.root.add(ring); tut.root.add(pillar);
+  tut.safety = { x: sx, z: sz, r: srad, ring, pillar };
+  tut.rescued = 0; tut.jetBase = 0; tut.dollsSpawned = false; tut.aerialClear = false;
+}
+const TUT_DOLL_SPOTS = [[-180, -60], [-120, 150], [-40, -180], [30, 60], [90, -90], [160, 30], [230, -160], [300, 90]];
+function tutSpawnDolls() {   // 部屋3のダミードール（走り回る救出対象）
+  const R = tut.rooms[2];
+  const cx = (R.x0 + R.x1) / 2;
+  for (const [ox, oz] of TUT_DOLL_SPOTS) {
+    spawnKen({
+      mannequin: 'dummy', noBite: true, walkSpeed: 3.4,
+      pos: { x: cx + ox, z: oz },
+      bounds: { x0: R.x0 + 8, x1: R.x1 - 8, z0: R.z0 + 8, z1: R.z1 - 8 },
+    }).catch((e) => console.warn('ドール生成失敗:', e));
+  }
+  tut.dollsSpawned = true;
+}
+function tutJetKills() {
+  let n = 0;
+  for (const k of ev.kills) if (k === 'jet') n++;
+  return n - tut.jetBase;
+}
+function updateTutRoom3(dt) {
+  if (!tut.aerialOn) {   // 入室時: 訓練ジェット解禁（低速・爆撃なし・低威力の設定はステージ構築時に適用済み）
+    tut.aerialOn = true;
+    tut.jetBase = tutJetKills() + tut.jetBase;   // 以後のjet撃墜だけ数える
+    ev.spawnAllow.jet = true;
+  }
+  const R = tut.rooms[2];
+  for (const j of jets) {   // 訓練機は部屋の中に閉じ込める
+    if (j.dead) continue;
+    const q = j.mesh.position;
+    q.x = Math.max(R.x0 + 12, Math.min(R.x1 - 12, q.x));
+    q.z = Math.max(R.z0 + 12, Math.min(R.z1 - 12, q.z));
+    q.y = Math.max(12, Math.min(R.H - 14, q.y));
+  }
+  const sa = tut.safety;
+  sa.ring.rotation.z += dt * 0.8;
+  sa.pillar.material.opacity = 0.09 + 0.04 * Math.sin(exhaustT * 2.2);
+  for (const m of kens) {   // 掴んで運んだドールがエリア内→救出
+    if (m.mannequin !== 'dummy' || m.rescued || m._remove || !m.wasGrabbed) continue;
+    kenCenter(m, _kQ);
+    if (Math.hypot(_kQ.x - sa.x, _kQ.z - sa.z) < sa.r) {
+      m.rescued = true;
+      tut.rescued++;
+      m.grabbed = false;
+      if (player.prey === m) player.prey = null;
+      spawnImpactFx(_kQ.clone(), 1);
+      playSfx('se1.ogg', 0.5);
+      m.vrm.scene.visible = false;
+      m._remove = true;
+      if (tut.rescued === 1) queueTalk('r3_mid');
+      if (tut.rescued < 5) {   // 補充
+        const spot = TUT_DOLL_SPOTS[(Math.random() * TUT_DOLL_SPOTS.length) | 0];
+        spawnKen({ mannequin: 'dummy', noBite: true, walkSpeed: 3.4, pos: { x: (R.x0 + R.x1) / 2 + spot[0], z: spot[1] }, bounds: { x0: R.x0 + 8, x1: R.x1 - 8, z0: R.z0 + 8, z1: R.z1 - 8 } }).catch(() => { /* noop */ });
+      }
+      tutRefreshObjective();
+    }
+  }
+  if (!tut.aerialClear && tutJetKills() >= 20 && tut.rescued >= 5) {   // クリア: 隔壁解放＋訓練機撤収
+    tut.aerialClear = true;
+    ev.spawnAllow.jet = false;
+    for (const j of jets) { j.dead = true; j.mesh.visible = false; }
+    jets.length = 0;
+    setTutDoor(2, true);
+    tutHint('goal');
+    tutRefreshObjective();
+  }
+}
 async function buildTutorialStage() {
   const geoms = [], emGeoms = [];
   const totalL = TUT_ROOMS.reduce((a, r) => a + r.L, 0) + TUT_WALL * (TUT_ROOMS.length + 1);
@@ -935,6 +1025,7 @@ async function buildTutorialStage() {
   tut.root.add(ring); tut.root.add(core);
   tut.goal = { pos: goalPos, ring, core };
   buildTutRoom2(geoms);
+  buildTutRoom3(geoms);
   // メッシュ確定（壁=チェッカー1メッシュ／発光=1メッシュ）
   const stage = new THREE.Mesh(mergeGeometries(geoms, false), new THREE.MeshLambertMaterial({ map: makeTutTex() }));
   stage.matrixAutoUpdate = false;
@@ -947,6 +1038,8 @@ async function buildTutorialStage() {
   tutSpawn = [tut.rooms[0].x0 + 24, 4, 0];
   player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);
   player.yaw = Math.PI / 2;   // +X（奥）を向く
+  camYaw = Math.PI / 2; camPitch = 0.1;   // カメラも進行方向へ
+  Object.assign(JET, { n: 6, spMin: 13, spMax: 22, orbitR: 95, killZone: 140, shotCd: 2.8, shotDmg: 4, bombCd: 1e9, resp: 5 });   // 訓練用戦闘機（低速・爆撃なし・低威力）
   tut.ready = true;
   console.log('tutorial stage:', totalL.toFixed(0) + 'm x', Math.max(...TUT_ROOMS.map((r) => r.W)) + 'm, collBoxes', collBoxes.length);
 }
@@ -976,8 +1069,9 @@ const TUT_HINTS = {
   goal: { pc: '隔壁が開いた！　次の部屋へ進もう', sp: '隔壁が開いた！　次の部屋へ進もう' },
   attack: { pc: 'PC：左クリック＝ビーム（レティクルで狙う）　／　3連射目は雷撃', sp: 'スマホ：右タップ＝ビーム（レティクルで狙う）' },
   charge: { pc: 'PC：左クリック長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）', sp: 'スマホ：長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）' },
+  aerial: { pc: 'PC：右クリック長押し＝ドールを掴む→運んで光の柱の中で離す　／　訓練機はビームで撃墜', sp: 'スマホ：長押し＝ドールを掴む→光の柱まで運ぶ　／　右タップで撃墜' },
 };
-const TUT_ROOM_HINT = { 2: 'attack' };
+const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial' };
 function tutHint(key) {
   const h = TUT_HINTS[key];
   if (!h) return;
@@ -1011,7 +1105,11 @@ function updateTutorial(dt) {
   }
   if (tut.goal) { tut.goal.ring.rotation.y += dt * 1.4; tut.goal.core.scale.setScalar(1 + 0.25 * Math.sin(exhaustT * 5)); }
   if (gameMode !== 'play' && gameMode !== 'training') return;
-  if (!tut.started) { tut.started = true; tut.room = 1; queueTalk('r1_start'); tutHint('move'); tutRefreshObjective(); }
+  if (!tut.started) {
+    tut.started = true; tut.room = 1;
+    queueTalk('r1_start'); tutHint('move'); tutRefreshObjective();
+    if (!tut.dollsSpawned && kenAssets.ready) tutSpawnDolls();   // ドールは開始直後に先読み生成（部屋3入室時のVRMロードヒッチを避ける）
+  } else if (!tut.dollsSpawned && kenAssets.ready) tutSpawnDolls();
   const px = player.pos.x;
   let roomIdx = -1;   // 現在の部屋（1-based）
   for (let i = 0; i < tut.rooms.length; i++) if (px >= tut.rooms[i].x0 - TUT_WALL && px <= tut.rooms[i].x1 + TUT_WALL) { roomIdx = i; break; }
@@ -1024,6 +1122,7 @@ function updateTutorial(dt) {
     if (hk) tutHint(hk);
     tutRefreshObjective();
   }
+  if (tut.room === 3) updateTutRoom3(dt);
   if (tut.room === 1) {   // 部屋1: 中間会話→ゴール到達で隔壁解放
     if (!tut.midFired.r1 && px > tut.rooms[0].x0 + 150) { tut.midFired.r1 = true; queueTalk('r1_mid'); }
     if (!tut.goalDone && player.pos.distanceTo(tut.goal.pos) < 9) {
@@ -1121,7 +1220,7 @@ function revivePlayer() {   // リトライ＝その場で復帰（パラメー�
   setState('idle');
 }
 function updateParamsUI() {   // デバッグ兼HUD: 都市被害/敵損耗/手配（タイトル中は非表示）
-  if (gameMode === 'title') { if (paramsEl) paramsEl.style.display = 'none'; return; }
+  if (gameMode === 'title' || TUTORIAL) { if (paramsEl) paramsEl.style.display = 'none'; return; }   // チュートリアルでは戦況パラメータなし
   if (!paramsEl) {
     paramsEl = document.createElement('div');
     paramsEl.style.cssText = 'position:fixed;left:12px;top:122px;z-index:20;pointer-events:none;'
@@ -1985,7 +2084,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, setTutDoor,
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
   dmgBldAt: (x, z, dmg = 1) => {   // テスト用: 最寄り建物へダメージ
     ensureBoxMap();
@@ -6411,7 +6510,7 @@ function updateHpBar(m) {
   bar.fill.material.color.set(frac > 0.5 ? 0x35e06a : frac > 0.25 ? 0xffc23a : 0xff4436);
 }
 
-async function spawnKen() {
+async function spawnKen(opts = {}) {
   if (!kenAssets.ready) return false;
   const loader = new GLTFLoader();
   loader.register((p) => new VRMLoaderPlugin(p, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }) }));
@@ -6420,11 +6519,14 @@ async function spawnKen() {
   // プレイヤー近傍の道路沿いにスポーン（地形の地面Yへ接地）
   let px = player.pos.x + (Math.random() - 0.5) * KEN_SPAWN_R * 2, pz = player.pos.z + (Math.random() - 0.5) * KEN_SPAWN_R * 2;
   if (activeEdges.length) { const e = pickEdgeNear(player.pos, KEN_SPAWN_R * 2); px = e.a.x + (Math.random() - 0.5) * 6; pz = e.a.z + (Math.random() - 0.5) * 6; }
+  if (opts.pos) { px = opts.pos.x; pz = opts.pos.z; }
   const pos = new THREE.Vector3(px, groundYAt(px, pz, player.pos.y), pz);
+  scene.add(vrm.scene); vrm.scene.updateMatrixWorld(true);   // まず原点でバインド姿勢を確定
+  if (opts.mannequin) { try { makeMannequin(vrm, opts.mannequin); } catch (e) { console.warn('マネキン生成失敗:', e); } }   // マネキンはバインド空間（モデル原点）で焼く
   vrm.scene.position.copy(pos);
-  scene.add(vrm.scene); vrm.scene.updateMatrixWorld(true);
+  vrm.scene.updateMatrixWorld(true);
   let mixer = null, action = null;
-  if (kenAssets.walkAnim) {
+  if (kenAssets.walkAnim && !opts.still) {
     const clip = createVRMAnimationClip(kenAssets.walkAnim, vrm);
     stripRootMotion(clip);
     mixer = new THREE.AnimationMixer(vrm.scene);
@@ -6451,16 +6553,79 @@ async function spawnKen() {
     scared: false, wanderTimer: 0, wanderDirX: 0, wanderDirZ: 0,
     hp: KEN_MAX_HP, maxHp: KEN_MAX_HP, hpBar,
     dissolving: false, dis, dissT: 0, dead: false, deadTimer: 0, _remove: false, eating: false, tornado: null,
+    mannequin: opts.mannequin || null, doll: !!opts.mannequin, noBite: !!opts.noBite, still: !!opts.still,
+    bounds: opts.bounds || null, healMul: opts.healMul ?? 1, walkSpeed: opts.walkSpeed, rescued: false, wasGrabbed: false,
   });
   if (speech) speech._holder.m = kens[kens.length - 1];   // バブル所有者を確定
-  return true;
+  return kens[kens.length - 1];
 }
-
-function kenCount() { return kens.filter((k) => !k.interior).length; }   // 屋外プールの数（在宅住人は別枠）
+// ── マネキン（ダミー/プネウマドール）: kenのVRMリグへ剛体パーツ（円筒/球/箱）をボーン直付け ──
+// スキニング不使用＝WebGPUで確実に描画。ボーンは歩行VRMA/ラグドールが動かすのでパーツも追従する
+const MANN_PARTS = [
+  ['hips', 'spine', 0.115], ['spine', 'chest', 0.11], ['chest', 'neck', 0.125], ['neck', 'head', 0.05],
+  ['leftUpperArm', 'leftLowerArm', 0.045], ['leftLowerArm', 'leftHand', 0.04],
+  ['rightUpperArm', 'rightLowerArm', 0.045], ['rightLowerArm', 'rightHand', 0.04],
+  ['leftUpperLeg', 'leftLowerLeg', 0.062], ['leftLowerLeg', 'leftFoot', 0.052],
+  ['rightUpperLeg', 'rightLowerLeg', 0.062], ['rightLowerLeg', 'rightFoot', 0.052],
+];
+const _mnV0 = new THREE.Vector3(), _mnV1 = new THREE.Vector3(), _mnQ = new THREE.Quaternion(), _mnY = new THREE.Vector3(0, 1, 0);
+const _mannGeoCyl = new THREE.CylinderGeometry(1, 1, 1, 8);     // 単位ジオメトリ共有（scaleで各部位へ）
+const _mannGeoSph = new THREE.SphereGeometry(1, 10, 8);
+function makeMannequin(vrm, kind) {
+  const nodeOf = (name) => vrm.humanoid?.getRawBoneNode?.(name) || vrm.humanoid?.getNormalizedBoneNode?.(name);
+  let smesh = null;
+  vrm.scene.traverse((o) => { if (o.isSkinnedMesh && !smesh) smesh = o; });
+  const srcMat = smesh ? (Array.isArray(smesh.material) ? smesh.material[0] : smesh.material) : null;
+  let mat;   // kenのMToonをクローンして色替え＝fx-dissolveのラップ互換（Standard新規生成はノードビルドが黒化する）
+  if (srcMat && srcMat.clone) {
+    mat = srcMat.clone();
+    mat.map = null;
+    if (mat.color) mat.color.set(kind === 'pneuma' ? 0x7fe8ff : 0xd9cfc2);
+    if (mat.shadeColorFactor) mat.shadeColorFactor.set(kind === 'pneuma' ? 0x2b7f96 : 0x8f8578);
+    if (mat.shadeMultiplyTexture !== undefined) mat.shadeMultiplyTexture = null;
+    if (mat.emissive) mat.emissive.set(kind === 'pneuma' ? 0x2bd6ff : 0x000000);
+    if (mat.emissiveMap !== undefined) mat.emissiveMap = null;
+  } else {
+    mat = new THREE.MeshBasicMaterial({ color: kind === 'pneuma' ? 0x7fe8ff : 0xd9cfc2 });
+  }
+  vrm.scene.updateMatrixWorld(true);
+  let made = 0;
+  const _im = new THREE.Matrix4();
+  for (const [a, b, r] of MANN_PARTS) {
+    const na = nodeOf(a), nb = nodeOf(b);
+    if (!na || !nb) continue;
+    na.getWorldPosition(_mnV0); nb.getWorldPosition(_mnV1);
+    const len = _mnV0.distanceTo(_mnV1);
+    if (len < 0.02) continue;
+    const mesh = new THREE.Mesh(_mannGeoCyl, mat);
+    mesh.scale.set(r, len, r);
+    // ワールドで中点＋軸姿勢を決め、ボーンaのローカルへ変換して直付け
+    _mnQ.setFromUnitVectors(_mnY, _mnV1.clone().sub(_mnV0).normalize());
+    _im.copy(na.matrixWorld).invert();
+    mesh.position.set((_mnV0.x + _mnV1.x) / 2, (_mnV0.y + _mnV1.y) / 2, (_mnV0.z + _mnV1.z) / 2).applyMatrix4(_im);
+    const wq = na.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(_mnQ);
+    mesh.quaternion.copy(wq);
+    mesh.frustumCulled = false;
+    na.add(mesh);
+    made++;
+  }
+  const hn = nodeOf('head');
+  if (hn) {
+    const head = new THREE.Mesh(_mannGeoSph, mat);
+    head.scale.setScalar(0.105);
+    head.position.set(0, 0.09, 0);
+    head.frustumCulled = false;
+    hn.add(head);
+    made++;
+  }
+  if (!made) return;
+  vrm.scene.traverse((o) => { if ((o.isMesh || o.isSkinnedMesh) && o.geometry !== _mannGeoCyl && o.geometry !== _mannGeoSph) o.visible = false; });   // 元メッシュは隠す
+}
+function kenCount() { return kens.filter((k) => !k.interior && !k.doll).length; }   // 屋外プールの数（在宅住人・ドールは別枠）
 function removeKen() {
   for (let i = kens.length - 1; i >= 0; i--) {
     const m = kens[i];
-    if (m.grabbed || m.eating || m === player.prey || m.interior) continue;
+    if (m.grabbed || m.eating || m === player.prey || m.interior || m.doll) continue;
     finalizeRemoveKenAssets(m);
     kens.splice(i, 1);
     return true;
@@ -6512,11 +6677,12 @@ function nearestKenJoint(m, orig, dir) {   // 照準レイに近い関節（掴�
 }
 function grabKen(m, bone) {
   m.grabbed = true;
+  m.wasGrabbed = true;
   addWanted(0.2, m.pos);   // 住人を掴む＝軽犯罪
   if (m.speech) m.speech.bark('grabbed');
   if (!m.ragdoll.active) setRagdollActive(m.ragdoll, true);
   m.grabBone = bone || 'chest';
-  if (bite.ready) { player.prey = m; m.preyGroundT = 0; }   // 捕食候補（地面付近で保持→捕食）
+  if (bite.ready && !m.noBite) { player.prey = m; m.preyGroundT = 0; }   // 捕食候補（ダミードールは吸血不可）
 }
 function releaseKen(m) {
   m.grabbed = false;
@@ -6535,7 +6701,17 @@ function hitKenBeam(m, dmg) {
   kenCenter(m, _kQ);
   spawnImpactFx(_kQ);
   addWanted(0.4, _kQ);   // 住人への攻撃＝犯罪
-  if (m.hp <= 0) { startKenDissolve(m); return; }
+  if (m.hp <= 0) {
+    if (m.mannequin === 'dummy') {   // ダミードール: 車と同じ破壊パターン（破片バースト＋消滅）
+      spawnBreakFx(_kQ.clone());
+      playSfxAt('bomb_short.ogg', _kQ, 0.6);
+      m.vrm.scene.visible = false;
+      m._remove = true;
+      return;
+    }
+    startKenDissolve(m);
+    return;
+  }
   camera.getWorldDirection(_camDir);
   hitKen(m, _camDir, KEN_RAGDOLL_IMPULSE);
 }
@@ -6581,6 +6757,7 @@ function onKenRecovered(m) {
 }
 
 function updateKenGround(m, dt) {   // 地形上を逃走/うろつき
+  if (m.still) { m.vrm.scene.position.copy(m.pos); return; }   // プネウマドール: 立っているだけ
   _kF.copy(player.pos).sub(m.pos); _kF.y = 0;
   const dist = _kF.length();
   let dx, dz, speed;
@@ -6844,7 +7021,7 @@ function updateEatingRagdoll(m, dt) {
 const PREDATION_HEAL = 5;   // 吸血(捕食)中のHP回復量/秒
 function updatePlayerEating(dt) {
   if (playerHp < PLAYER_HP_MAX) {   // 吸血で回復（損耗・表情も戻る）
-    playerHp = Math.min(PLAYER_HP_MAX, playerHp + PREDATION_HEAL * dt);
+    playerHp = Math.min(PLAYER_HP_MAX, playerHp + PREDATION_HEAL * (player.prey?.healMul ?? 1) * dt);
     updateHpUI();
     applyDamageFx();
   }
