@@ -859,6 +859,9 @@ function tutRefreshObjective() {
     tutObjective(tut.fortDown ? '' : '要塞HP ' + Math.round(tutFortHp() / BLD_HP.fort * 100) + '%　— 巨大オブジェクトを投げつけろ');
   } else if (tut.room === 5) {
     tutObjective(tut.fedPneuma ? '' : 'プネウマドールを吸血して回復せよ（掴んだまま着地→捕食）');
+  } else if (tut.room === 6) {
+    const bb = tut.boss;
+    tutObjective(!bb || bb.gone ? 'ミッションコンプリート！' : bb.dying ? '' : 'ボスHP ' + Math.max(0, Math.round(bb.hp / bb.hpMax * 100)) + '%　— 学んだすべてで撃破せよ');
   } else tutObjective('');
 }
 function tutHumanoidGeo() {   // 人型シルエット標的（台座＋胴＋頭）
@@ -1010,6 +1013,289 @@ function updateTutRoom4(dt) {
   const hp = Math.round(tutFortHp() / BLD_HP.fort * 100);
   if (hp !== tut._fortHpShown) { tut._fortHpShown = hp; tutRefreshObjective(); }
 }
+// ── 部屋6ボス: 回転する正二十面体コア＋惑星のように周回する正八面体の子機 ──
+const BOSS_HP = 130, DRONE_N = 8, DRONE_HP = 3;
+const _bsV0 = new THREE.Vector3(), _bsV1 = new THREE.Vector3(), _bsV2 = new THREE.Vector3();
+function buildTutBoss() {
+  const R = tut.rooms[5], cx = (R.x0 + R.x1) / 2;
+  const grp = new THREE.Group();
+  const coreMat = new THREE.MeshStandardMaterial({ color: 0x8f7ca8, emissive: 0x1a0f28, roughness: 0.5, metalness: 0.35, flatShading: true });   // ステージよりやや紫寄りの色
+  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(14, 0), coreMat);
+  core.frustumCulled = false;
+  grp.add(core);
+  grp.position.set(cx, 120, 0);
+  tut.root.add(grp);
+  const droneMat = new THREE.MeshStandardMaterial({ color: 0xb08fc0, emissive: 0x241233, roughness: 0.45, metalness: 0.3, flatShading: true });
+  const drones = [];
+  for (let i = 0; i < DRONE_N; i++) {
+    const dm = new THREE.Mesh(new THREE.OctahedronGeometry(3.2, 0), droneMat.clone());
+    dm.frustumCulled = false;
+    tut.root.add(dm);
+    const proxy = { mesh: dm, hitR: 4.2, mass: 3, drone: true };
+    const d = { mesh: dm, proxy, state: 'orbit', hp: DRONE_HP,
+      th: i / DRONE_N * Math.PI * 2, w: 0.7 + (i % 3) * 0.25, r: 26 + (i % 4) * 4,
+      tilt: (i % 4) * 0.5, vel: new THREE.Vector3(), t: 0 };
+    proxy.dRef = d;
+    drones.push(d);
+  }
+  tut.boss = { grp, core, coreMat, proxy: { mesh: grp, hitR: 17, mass: 999, boss: true, noGrab: true },
+    hp: BOSS_HP, hpMax: BOSS_HP, flash: 0, drones, state: 'roam', t: 4, atkT: 0, atkN: 0,
+    moveMode: 'float', moveT: 0, vel: new THREE.Vector3(), target: new THREE.Vector3(cx, 120, 0),
+    dying: 0, gone: false, droneReT: 0, bob: 0, awake: false };
+  for (const d of drones) droneOrbitPos(tut.boss, d, d.mesh.position);   // 初期位置=軌道上
+}
+function bossBox() {   // ボスの可動域
+  const R = tut.rooms[5];
+  return { x0: R.x0 + 45, x1: R.x1 - 45, z0: R.z0 + 45, z1: R.z1 - 45, y0: 35, y1: R.H - 45 };
+}
+function bossHit(n, point) {
+  const b = tut.boss;
+  if (!b || b.dying || b.gone) return;
+  b.hp -= n;
+  b.flash = 0.3;
+  if (point) { spawnImpactFx(_bsV0.copy(point), Math.min(2, 0.8 + n * 0.05)); playSfxAt('bomb_short.ogg', _bsV0, 0.6); }
+  if (!b.midTalk && b.hp <= b.hpMax * 0.6) { b.midTalk = true; queueTalk('r6_mid'); }
+  if (b.hp <= 0) startBossDeath();
+  tutRefreshObjective();
+}
+function droneBeamHit(d) {   // ビーム命中: ふっとび→壁反射→しばらくして復帰
+  if (d.proxy.dead || d.proxy.grabbed || d.proxy.thrown) return;
+  d.hp--;
+  spawnImpactFx(d.mesh.position.clone(), 0.8);
+  if (d.hp <= 0) { droneDie(d); return; }
+  camera.getWorldDirection(_bsV0);
+  d.state = 'knock';
+  d.t = 3.0;
+  d.vel.copy(_bsV0).multiplyScalar(46);
+  d.vel.x += (Math.random() - 0.5) * 8; d.vel.y += (Math.random() - 0.5) * 8; d.vel.z += (Math.random() - 0.5) * 8;
+}
+function droneDie(d) {
+  if (d.proxy.dead) return;
+  addKill('drone');   // 子機も撃墜数に加算
+  spawnDebrisBurst(d.mesh.position.clone(), 'bld', 0.7);
+  spawnImpactFx(d.mesh.position.clone(), 1.2);
+  playSfxAt('bomb.ogg', d.mesh.position, 0.7);
+  d.proxy.dead = true; d.proxy.thrown = false; d.proxy.vel = null;
+  d.state = 'dead';
+  d.mesh.visible = false;
+  const b = tut.boss;
+  if (b.drones.every((q) => q.proxy.dead) && !b.dying) b.droneReT = 7;   // 全滅→しばらくして復活
+}
+function droneOrbitPos(b, d, out) {
+  const ca = Math.cos(d.th), sa = Math.sin(d.th);
+  out.set(ca * d.r, sa * d.r * Math.sin(d.tilt), sa * d.r * Math.cos(d.tilt));
+  return out.add(b.grp.position);
+}
+function startBossDeath() {
+  const b = tut.boss;
+  b.dying = 1;
+  b.flash = 1.2;
+  queueTalk('r6_clear');
+  for (const d of b.drones) if (!d.proxy.dead) droneDie(d);
+  b.droneReT = 0;
+  playSfxAt('bakuha.ogg', b.grp.position, 1.0);
+}
+function updateTutBoss(dt) {
+  const b = tut.boss;
+  if (!b || b.gone) return;
+  const box = bossBox();
+  b.bob += dt;
+  b.core.rotation.x += dt * 0.7; b.core.rotation.y += dt * 1.1;   // 回転する巨大ボディ
+  if (b.flash > 0) { b.flash = Math.max(0, b.flash - dt); }
+  const fl = Math.min(1, b.flash * 4);
+  b.coreMat.emissive.setRGB(0.1 + fl * 0.85, 0.06 * (1 - fl), 0.16 * (1 - fl));   // 被弾で赤フラッシュ
+  if (b.dying) {   // 撃破: ゆっくり降下→接地でディソルブ消滅
+    b.grp.position.y -= 9 * dt;
+    b.core.rotation.y += dt * 2;
+    if (b.grp.position.y <= 15) {
+      b.dying += dt;
+      const sc = Math.max(0.01, 1 - (b.dying - 1) / 1.6);
+      b.grp.scale.setScalar(sc);
+      if (b.dying - 1 > 0.4 && !b.deathFx) { b.deathFx = true; spawnDebrisBurst(b.grp.position.clone(), 'bld', 1.6, 2.2, 12); spawnImpactFx(b.grp.position.clone(), 2.2); spawnFirePillar(b.grp.position.clone(), 1.6); playSfxAt('bakuha.ogg', b.grp.position, 1.0); }
+      if (sc <= 0.02) {
+        b.gone = true;
+        b.grp.visible = false;
+        setTutDoor(4, true);   // 念のため（既に開いている）
+        tutRefreshObjective();
+        if (flowRt && flowNode && flowNode.type === 'battle' && !flowTimer) { ev.lastPort = 'win'; flowTimer = { port: 'win', t: 5 }; }   // 本編フロー: 勝利ED
+      }
+    }
+    return;
+  }
+  if (!b.awake) {   // プレイヤーが部屋6に入るまで待機（子機だけ周回）
+    for (const d of b.drones) {
+      if (d.proxy.dead || d.proxy.grabbed || d.proxy.thrown) continue;
+      d.th += d.w * dt;
+      d.mesh.rotation.x += dt * 2.2; d.mesh.rotation.y += dt * 3.1;
+      droneOrbitPos(b, d, _bsV0);
+      d.mesh.position.lerp(_bsV0, Math.min(1, 8 * dt));
+    }
+    return;
+  }
+  // ── 移動: TPS-Flight NPC式 float/drift/dash ──
+  b.moveT -= dt;
+  if (b.moveT <= 0) {
+    b.moveMode = ['float', 'drift', 'dash'][(Math.random() * 3) | 0];
+    b.moveT = 3 + Math.random() * 3;
+    if (b.moveMode === 'drift') { b.vel.set(Math.random() - 0.5, (Math.random() - 0.5) * 0.4, Math.random() - 0.5).normalize().multiplyScalar(9); }
+    if (b.moveMode === 'dash') b.target.set(box.x0 + Math.random() * (box.x1 - box.x0), box.y0 + Math.random() * (box.y1 - box.y0), box.z0 + Math.random() * (box.z1 - box.z0));
+  }
+  if (b.moveMode === 'float') { b.vel.multiplyScalar(Math.exp(-dt * 1.5)); b.vel.y = Math.sin(b.bob * 1.6) * 2.2; }
+  else if (b.moveMode === 'dash') {
+    _bsV0.copy(b.target).sub(b.grp.position);
+    const k = 1 - Math.exp(-dt / 0.6);
+    b.vel.x += (_bsV0.x * 0.4 - b.vel.x) * k; b.vel.y += (_bsV0.y * 0.4 - b.vel.y) * k; b.vel.z += (_bsV0.z * 0.4 - b.vel.z) * k;
+    _bsV1.set(b.vel.x, b.vel.y, b.vel.z);
+    const sp = _bsV1.length();
+    if (sp > 26) b.vel.multiplyScalar(26 / sp);
+  }
+  b.grp.position.addScaledVector(b.vel, dt);
+  b.grp.position.x = Math.max(box.x0, Math.min(box.x1, b.grp.position.x));
+  b.grp.position.y = Math.max(box.y0, Math.min(box.y1, b.grp.position.y));
+  b.grp.position.z = Math.max(box.z0, Math.min(box.z1, b.grp.position.z));
+  // ── 攻撃パターン ──
+  b.t -= dt;
+  if (b.state === 'roam' && b.t <= 0) {
+    const alive = b.drones.filter((d) => d.state === 'orbit');
+    const opts = ['beamDrones', 'bigBeam'];
+    if (alive.length >= 2) opts.push('launch');
+    if (!jets.length) opts.push('jets');
+    b.state = opts[(Math.random() * opts.length) | 0];
+    b.t = b.state === 'beamDrones' ? 4 : b.state === 'bigBeam' ? 1.1 : 0.1;
+    b.atkT = 0; b.atkN = 0;
+    if (b.state === 'bigBeam') { b.flash = 0.0; b.tele = 1.1; playSfxAt('beam.ogg', b.grp.position, 0.8); }
+  } else if (b.state === 'beamDrones') {   // 移動しつつ子機からビーム（スパイダーキャノンと同弾）
+    b.atkT -= dt;
+    if (b.atkT <= 0) {
+      b.atkT = 0.85;
+      const alive = b.drones.filter((d) => d.state === 'orbit');
+      for (let k = 0; k < Math.min(2, alive.length); k++) {
+        const d = alive[(Math.random() * alive.length) | 0];
+        _bsV0.copy(d.mesh.position);
+        _bsV1.copy(player.pos); _bsV1.y += 1;
+        const dir = _bsV1.sub(_bsV0).normalize();
+        _bsV0.addScaledVector(dir, 5);
+        fireEnemyBolt(_bsV0, dir, { speed: 105, radius: 2.0, len: 16, color: 0xffb040, dmg: 8, knock: 24, bldDmg: DMG_SHOT, fxScale: 1.4, range: 600 });
+        playSfxAt('beam.ogg', _bsV0, 0.45);
+      }
+    }
+    if (b.t <= 0) { b.state = 'roam'; b.t = 4 + Math.random() * 3; }
+  } else if (b.state === 'launch') {   // 子機を飛ばして体当たり
+    const alive = b.drones.filter((d) => d.state === 'orbit');
+    for (let k = 0; k < Math.min(3, alive.length); k++) {
+      const d = alive[k];
+      d.state = 'strike';
+      d.t = 1.9;
+      _bsV0.copy(player.pos); _bsV0.y += 1;
+      d.vel.copy(_bsV0).sub(d.mesh.position).normalize().multiplyScalar(52);
+    }
+    playSfxAt('beam.ogg', b.grp.position, 0.6);
+    b.state = 'roam'; b.t = 5 + Math.random() * 3;
+  } else if (b.state === 'bigBeam') {   // 前兆（白熱）→本体から高速極大ビーム連射
+    b.tele -= dt;
+    b.coreMat.emissive.setRGB(0.9 - b.tele * 0.5, 0.85 - b.tele * 0.5, 1.0 - b.tele * 0.5);
+    if (b.tele <= 0) {
+      b.atkT -= dt;
+      if (b.atkT <= 0) {
+        b.atkT = 0.3;
+        b.atkN++;
+        _bsV0.copy(b.grp.position);
+        _bsV1.copy(player.pos); _bsV1.y += 1;
+        const dir = _bsV1.sub(_bsV0).normalize();
+        _bsV0.addScaledVector(dir, 20);
+        fireEnemyBolt(_bsV0, dir, { speed: 250, radius: 3.4, len: 30, color: 0xff5a8a, dmg: 16, knock: 40, bldDmg: DMG_SHOT * 2, fxScale: 2.2, range: 900 });
+        playSfxAt('bomb.ogg', _bsV0, 0.7);
+        if (b.atkN >= 5) { b.state = 'roam'; b.t = 5 + Math.random() * 3; }
+      }
+    }
+  } else if (b.state === 'jets') {   // 訓練用戦闘機を10機射出
+    JET.n = 10;
+    ev.spawnAllow.jet = true;
+    b.state = 'roam'; b.t = 8 + Math.random() * 3;
+    b.jetsOut = true;
+  }
+  if (b.jetsOut && jets.length) {   // 射出直後: コア位置から散開させる
+    for (const j of jets) { j.mesh.position.copy(b.grp.position); j.mesh.position.x += (Math.random() - 0.5) * 20; j.mesh.position.y += (Math.random() - 0.5) * 10; j.mesh.position.z += (Math.random() - 0.5) * 20; }
+    b.jetsOut = false;
+    ev.spawnAllow.jet = false;   // 補充はしない
+  }
+  // ── 子機 ──
+  if (b.droneReT > 0) {   // 全滅→ディソルブ風に復活（拡大＋発光）
+    b.droneReT -= dt;
+    if (b.droneReT <= 0) {
+      for (const d of b.drones) {
+        d.proxy.dead = false; d.hp = DRONE_HP; d.state = 'reborn'; d.t = 0.8;
+        d.mesh.visible = true;
+        d.mesh.position.copy(b.grp.position);
+        d.mesh.scale.setScalar(0.01);
+      }
+      spawnImpactFx(b.grp.position.clone(), 1.6);
+      playSfxAt('beam.ogg', b.grp.position, 0.7);
+    }
+  }
+  for (const d of b.drones) {
+    const pr = d.proxy;
+    if (pr.dead) continue;
+    if (pr.grabbed) { d.state = 'held'; continue; }   // 掴まれ中は物理系に任せる
+    if (pr.thrown || pr.rolling) { d.state = 'held'; continue; }
+    if (d.state === 'held') { d.state = 'return'; }   // 手から離れて落ち着いたら帰還
+    d.mesh.rotation.x += dt * 2.2; d.mesh.rotation.y += dt * 3.1;
+    if (d.state === 'orbit') {
+      d.th += d.w * dt;
+      droneOrbitPos(b, d, _bsV0);
+      d.mesh.position.lerp(_bsV0, Math.min(1, 8 * dt));
+    } else if (d.state === 'reborn') {
+      d.t -= dt;
+      d.mesh.scale.setScalar(Math.min(1, (0.8 - d.t) / 0.8));
+      d.th += d.w * dt;
+      droneOrbitPos(b, d, _bsV0);
+      d.mesh.position.lerp(_bsV0, Math.min(1, 4 * dt));
+      if (d.t <= 0) { d.mesh.scale.setScalar(1); d.state = 'orbit'; }
+    } else if (d.state === 'knock') {   // ふっとび＋壁反射（TPS-Flight bounceAxis式）
+      d.t -= dt;
+      d.mesh.position.addScaledVector(d.vel, dt);
+      const q = d.mesh.position, R6 = tut.rooms[5];
+      if (q.x < R6.x0 + 6) { q.x = R6.x0 + 6; d.vel.x = Math.abs(d.vel.x) * 0.92; }
+      else if (q.x > R6.x1 - 6) { q.x = R6.x1 - 6; d.vel.x = -Math.abs(d.vel.x) * 0.92; }
+      if (q.z < R6.z0 + 6) { q.z = R6.z0 + 6; d.vel.z = Math.abs(d.vel.z) * 0.92; }
+      else if (q.z > R6.z1 - 6) { q.z = R6.z1 - 6; d.vel.z = -Math.abs(d.vel.z) * 0.92; }
+      if (q.y < 6) { q.y = 6; d.vel.y = Math.abs(d.vel.y) * 0.92; }
+      else if (q.y > R6.H - 8) { q.y = R6.H - 8; d.vel.y = -Math.abs(d.vel.y) * 0.92; }
+      d.vel.multiplyScalar(Math.exp(-dt * 0.35));
+      if (d.t <= 0) d.state = 'return';
+    } else if (d.state === 'strike') {   // 体当たり（当たり判定あり）
+      d.t -= dt;
+      d.mesh.position.addScaledVector(d.vel, dt);
+      _bsV0.copy(player.pos); _bsV0.y += 1;
+      if (d.mesh.position.distanceTo(_bsV0) < 4.6) {
+        _bsV1.copy(_bsV0).sub(d.mesh.position).normalize();
+        playerDamage(10, _bsV1);
+        spawnImpactFx(d.mesh.position.clone(), 1);
+        d.state = 'return';
+      }
+      if (d.t <= 0) d.state = 'return';
+    } else if (d.state === 'return') {   // 本体の元へ復帰
+      droneOrbitPos(b, d, _bsV0);
+      _bsV1.copy(_bsV0).sub(d.mesh.position);
+      const dist = _bsV1.length();
+      if (dist < 4) { d.state = 'orbit'; }
+      else d.mesh.position.addScaledVector(_bsV1.normalize(), Math.min(dist, 40 * dt));
+    }
+  }
+}
+function buildTutRoom6() {   // 部屋6: ボス戦（グラブ可能な巨大オブジェクトも多数）
+  const R = tut.rooms[5], cx = (R.x0 + R.x1) / 2;
+  const pillar6 = new THREE.CylinderGeometry(5, 5, 28, 12); pillar6.translate(0, 14, 0);
+  const beam6 = new THREE.BoxGeometry(55, 8, 10); beam6.translate(0, 4, 0);
+  const cont6 = new THREE.BoxGeometry(12, 5, 5); cont6.translate(0, 2.5, 0);
+  const spots6 = [
+    [beam6, -240, -240, 32, 0x8891a5], [beam6, 240, 240, 32, 0x8891a5], [beam6, -240, 240, 32, 0x8891a5],
+    [pillar6, 250, -230, 12, 0x9a90c9], [pillar6, -120, 260, 12, 0x9a90c9],
+    [cont6, 140, -260, 3, 0x5ac9a0], [cont6, -260, 60, 3, 0xc96f5a], [cont6, 260, 40, 3, 0xc96f5a],
+  ];
+  for (const [g, ox, oz, mass, color] of spots6) tutProp(g.clone(), cx + ox, oz, mass, color, Math.sin(ox * 7.13) * 3);
+  buildTutBoss();
+}
 const TUT_DOLL_SPOTS = [[-180, -60], [-120, 150], [-40, -180], [30, 60], [90, -90], [160, 30], [230, -160], [300, 90]];
 function tutSpawnDolls() {   // 部屋3のダミードール（走り回る救出対象）
   const R = tut.rooms[2];
@@ -1125,6 +1411,7 @@ async function buildTutorialStage() {
   buildTutRoom2(geoms);
   buildTutRoom3(geoms);
   buildTutRoom4(geoms);
+  buildTutRoom6();
   // メッシュ確定（壁=チェッカー1メッシュ／発光=1メッシュ）
   const stage = new THREE.Mesh(mergeGeometries(geoms, false), new THREE.MeshLambertMaterial({ map: makeTutTex() }));
   stage.matrixAutoUpdate = false;
@@ -1173,6 +1460,11 @@ const TUT_HINTS = {
   feed: { pc: 'PC：右クリック長押し＝ドールを掴む→持ったまま着地すると捕食（HP回復・服とマントも修復）', sp: 'スマホ：長押し＝ドールを掴む→持ったまま着地すると捕食（HP回復・服とマントも修復）' },
 };
 const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial', 4: 'grab', 5: 'feed' };
+function tutHurtLine() {   // 被弾時のランダム一言（連発しないようクールダウン）
+  if (tut.hurtCd > 0) return;
+  tut.hurtCd = 8;
+  queueTalk(Math.random() < 0.5 ? 't_hurt1' : 't_hurt2');
+}
 function tutHint(key) {
   const h = TUT_HINTS[key];
   if (!h) return;
@@ -1199,13 +1491,18 @@ function updateTutorial(dt) {
     b.bottom = y; b.top = y + TUT_DOOR_H;
     if (d.t >= 1) d.anim = false;
   }
+  if (tut.hurtCd > 0) tut.hurtCd -= dt;
   if (tut.hintEl && tut.hintT > 0) {   // ヒントのフェードアウト
     tut.hintT -= dt;
     if (tut.hintT <= 0) tut.hintEl.style.display = 'none';
     else if (tut.hintT < 1) tut.hintEl.style.opacity = String(tut.hintT);
   }
   if (tut.goal) { tut.goal.ring.rotation.y += dt * 1.4; tut.goal.core.scale.setScalar(1 + 0.25 * Math.sin(exhaustT * 5)); }
-  if (gameMode !== 'play' && gameMode !== 'training') return;
+  if (gameMode !== 'play' && gameMode !== 'training') {   // OP/EDシナリオ中は目標/ヒントUIを隠す
+    if (tut.objEl) tut.objEl.style.display = 'none';
+    if (tut.hintEl) tut.hintEl.style.display = 'none';
+    return;
+  }
   if (!tut.started) {
     tut.started = true; tut.room = 1;
     queueTalk('r1_start'); tutHint('move'); tutRefreshObjective();
@@ -1225,6 +1522,11 @@ function updateTutorial(dt) {
   }
   if (tut.room === 3) updateTutRoom3(dt);
   if (tut.room === 4) updateTutRoom4(dt);
+  if (tut.boss) {
+    if (tut.room === 6 && !tut.boss.awake && !tut.boss.dying) tut.boss.awake = true;   // 入室で起動
+    if (tut.room === 6) jetRespawn.length = 0;   // ボス射出機は補充しない
+    updateTutBoss(dt);
+  }
   for (const c of tutProps) {   // プロップ: 縮小消滅→リスポーン／待機中はマーカー脈動
     if (c.dying != null) {
       c.dying -= dt;
@@ -1961,6 +2263,7 @@ function releaseDrop() {   // 投げずに手放す（僅かな慣性のみ）
 function playerDamage(n, dir) {
   if (!player.ready || playerDead) return;
   if (gameMode === 'op' || gameMode === 'ed') return;   // シナリオ中は被弾なし
+  if (TUTORIAL && n >= 4 && tut.started) tutHurtLine();   // 被弾ランダム会話
   if (grabbedCar && n > 0) {   // 持っている物が盾になる（真後ろからの被弾だけ本人に通る）
     let fromBehind = false;
     if (dir) { _shV.set(Math.sin(player.yaw), 0, Math.cos(player.yaw)); fromBehind = dir.dot(_shV) > 0.4; }
@@ -5020,6 +5323,8 @@ function applyHitToBuilding(hit, dmg, fxScale = 1, src = null) {
   else if (hit.object.userData && hit.object.userData.rec) applyCarve(hit.object.userData.rec, hit.point, dmg, fxScale, src);
 }
 function hitCarBeam(car) {
+  if (car.boss) { bossHit(2, car.mesh.position); return; }   // ボス本体: ビーム=2
+  if (car.drone) { droneBeamHit(car.dRef); return; }         // 子機: ふっとび＋HP減
   if (car.tutObj && !car.dead) {   // チュートリアルのプロップ: 耐久を削る→尽きたら破壊
     car.tutHp = (car.tutHp ?? (2 + massOf(car))) - 1;
     spawnImpactFx(car.mesh.position.clone(), 1);
@@ -5481,6 +5786,7 @@ function heldContact(car, cx, cy, cz, speed, m, bottomY) {   // 振り回し/転
     if (c === car || c.grabbed || c.thrown || c.dead || !c.mesh.visible) continue;
     const q = c.mesh.position;
     if (Math.hypot(cx - q.x, cy - q.y, cz - q.z) >= sweepR + (c.hitR || 2.5)) continue;
+    if (c.boss) { bossHit(Math.max(3, Math.min(45, m * speed / 20)), _hcV.set(cx, cy, cz).clone()); car.fxCd = 0.5; return true; }
     if (c.ship) { shipHit(_hcV.set(cx, cy, cz).clone(), Math.max(1, Math.round(m * speed / 60))); car.fxCd = 0.3; return true; }
     breakCar(c, q.clone());
   }
@@ -5615,7 +5921,7 @@ function grabTarget() {
   // 車（照準レイ→無ければ前方近傍の最寄り）。パトカー/電車/客船もプロキシ経由で対象
   if (!carsAndJets().length) return;
   _grabRay.set(_muzzle, _camDir); _grabRay.far = GRAB_RANGE;
-  const meshes = carsAndJets().filter((c) => !c.grabbed && !c.thrown && !c.dead && !c.tornado).map((c) => c.mesh);
+  const meshes = carsAndJets().filter((c) => !c.grabbed && !c.thrown && !c.dead && !c.tornado && !c.noGrab).map((c) => c.mesh);
   if (portCont) meshes.push(portCont.im);   // コンテナも掴める（インスタンス→命中時に単体化）
   const hit = _grabRay.intersectObjects(meshes, true)[0];
   let car = null;
@@ -5625,7 +5931,7 @@ function grabTarget() {
   if (!car) {
     _tmpV.copy(_muzzle).addScaledVector(_camDir, HOLD_DIST + 8);
     let best = GRAB_RANGE, contPick = -1;
-    for (const c of carsAndJets()) { if (c.grabbed || c.thrown || c.dead || c.tornado) continue; const d = c.mesh.position.distanceTo(_tmpV); if (d < best) { best = d; car = c; } }
+    for (const c of carsAndJets()) { if (c.grabbed || c.thrown || c.dead || c.tornado || c.noGrab) continue; const d = c.mesh.position.distanceTo(_tmpV); if (d < best) { best = d; car = c; } }
     if (portCont) for (let i = 0; i < portCont.spots.length; i++) {
       const sp = portCont.spots[i];
       if (sp.gone) continue;
@@ -5774,7 +6080,9 @@ function updateThrown(dt) {
       for (const c of carsAndJets()) {
         if (c === car || c.grabbed || c.thrown || c.dead || c.ship || !c.mesh.visible) continue;
         const q = c.mesh.position;
-        if (Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) < (car.rollR || car.hitR || 2) + (c.hitR || 2.5)) breakCar(c, q.clone());
+        if (Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) >= (car.rollR || car.hitR || 2) + (c.hitR || 2.5)) continue;
+        if (c.boss) { if ((car.fxCd || 0) <= 0) { bossHit(Math.max(3, Math.min(45, m * car.vel.length() / 20)), q.clone()); car.fxCd = 0.5; } continue; }
+        breakCar(c, q.clone());
       }
     }
     if (!impact && (car.thrownT > (car.shotDown ? 16 : THROW_LIFE) || p.y < -40)) {
@@ -5847,6 +6155,7 @@ function breakCar(car, point) {
     car.thrown = false; car.vel = null;
     return;
   }
+  if (car.drone) { droneDie(car.dRef); return; }   // 子機: 破壊
   if (car.tutObj) {   // チュートリアルのプロップ: 破片＋縮小消滅→数秒後に元位置へ再出現
     const m = massOf(car);
     spawnDebrisBurst(point, 'bld', Math.min(1.6, 0.5 + m * 0.05), Math.min(2.4, 0.9 + m * 0.04), (car.rollR || 2) * 0.5);
@@ -8004,7 +8313,13 @@ function carsAndJets() {
   for (const tr of trains) for (const c of tr.cars) extra.push(c.proxy);   // 電車（車両単位で掴める）
   if (portShip) extra.push(portShip.proxy);                       // 客船
   for (const c of takenConts) if (!c.dead) extra.push(c);         // 置き直されたコンテナ
-  if (TUTORIAL) for (const c of tutProps) if (!c.dead) extra.push(c);   // チュートリアルのグラブ用プロップ
+  if (TUTORIAL) {
+    for (const c of tutProps) if (!c.dead) extra.push(c);   // チュートリアルのグラブ用プロップ
+    if (tut.boss && !tut.boss.gone) {
+      extra.push(tut.boss.proxy);                            // ボス本体（掴み不可・被弾のみ）
+      for (const d of tut.boss.drones) if (!d.proxy.dead) extra.push(d.proxy);   // 子機（掴める）
+    }
+  }
   if (!jets.length && !extra.length) return cars;
   return cars.concat(jets, extra);
 }
