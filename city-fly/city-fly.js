@@ -1678,6 +1678,14 @@ window.__fly = { get player() { return player; }, get camera() { return camera; 
     damageBuildingRec(bb.rec, bb.md, new THREE.Vector3(b.x, (b.bottom + b.top) / 2, b.z), dmg, 1, 'player');
     return bb.rec.carve ? { hp: bb.rec.carve.hp, hpMax: bb.rec.carve.hpMax } : null;
   },
+  grabTest: (car) => {   // テスト用: 掴み状態を直接作る
+    car.grabbed = true; grabbedCar = car;
+    car.holdVel = car.holdVel || new THREE.Vector3(); car.holdVel.set(0, 0, 0);
+    computeHoldDims(car);
+    car.holdSpin = new THREE.Vector3(1, 1.4, 0.7).multiplyScalar(1 / Math.sqrt(massOf(car)));
+    if (car.trainCar) beginTrainHold(car);
+  },
+  releaseTest: () => releaseGrab(),
   grabBldNear: (x, z) => {   // テスト用: 最寄りの損傷ビルを掴む
     let best = null, bd = 1e9;
     for (const rec of damagedList) { const d = Math.hypot(rec.pivot.x - x, rec.pivot.z - z); if (d < bd) { bd = d; best = rec; } }
@@ -1775,10 +1783,10 @@ function updateFlight(dt) {
   player.vrm.scene.position.copy(player.pos);
   player.vrm.scene.rotation.y = player.yaw + player.faceOffset;
   // 前方アンカー（掴んだ物の吸着点）。掴み中はカメラ3D前方＝上下にも振り回せる
-  const reach = GRAB_FRONT_DIST + (grabbedCar ? 1.6 : 0);
+  const reach = GRAB_FRONT_DIST + (grabbedCar ? 1.6 + (grabbedCar.holdR || 2) * 1.15 : 0);   // TPS Flight風: 持ったものの大きさに応じて距離を離す
   if (holding) frontAnchor.copy(_fwd).multiplyScalar(reach).add(player.pos);
   else frontAnchor.set(Math.sin(player.yaw), 0, Math.cos(player.yaw)).multiplyScalar(reach).add(player.pos);
-  frontAnchor.y += (player.prey && !player.eating) ? PREY_FRONT_Y : GRAB_FRONT_Y;
+  frontAnchor.y += (player.prey && !player.eating) ? PREY_FRONT_Y : GRAB_FRONT_Y + (grabbedCar ? (grabbedCar.holdR || 0) * 0.22 : 0);   // 大きいものは少し高めに掲げる
 }
 function isHolding() { return !!grabbedCar || !!grabbedKen(); }
 function setState(name) {
@@ -4929,22 +4937,28 @@ function grabDamagedBuilding(rec) {   // 崩れかけ（HP半分以下）の単�
 let grabFxBeam = null, grabFxSpec = null;
 const _gfxFrom = new THREE.Vector3(), _gfxTo = new THREE.Vector3();
 function ensureGrabFx() {
-  if (grabFxBeam || grabFxSpec === false) return;
-  if (grabFxSpec == null) {
-    grabFxSpec = undefined;   // 読込中
+  if (grabFxBeam || grabFxSpec === 'loading' || grabFxSpec === false) return;
+  if (!grabFxSpec) {
+    grabFxSpec = 'loading';
     fetch('../fx/electric_beam.fx.json').then((r) => (r.ok ? r.json() : Promise.reject())).then((j) => { grabFxSpec = j; }).catch(() => { grabFxSpec = false; });
     return;
   }
-  if (!grabFxSpec) return;
   try {
     grabFxBeam = createTkBeam(grabFxSpec);
     for (const o of grabFxBeam.objects) scene.add(o);
   } catch (e) { grabFxSpec = false; console.warn('掴み電撃エフェクト生成失敗:', e); }
 }
 function updateGrabFx(dt) {
+  ensureGrabFx();   // 起動時に読込を進める（初回掴みでのfetch/コンパイルを避ける）
+  if (grabFxBeam && !grabFxBeam._warmed) {   // 1フレームだけ画面外で描いてパイプラインを事前コンパイル
+    grabFxBeam._warmed = true;
+    _gfxFrom.set(player.pos.x, player.pos.y - 400, player.pos.z);
+    _gfxTo.set(player.pos.x + 3, player.pos.y - 398, player.pos.z + 2);
+    grabFxBeam.show(_gfxFrom, _gfxTo, dt, camera.position);
+    return;
+  }
   const kn = typeof grabbedKen === 'function' ? grabbedKen() : null;
   if (!grabbedCar && !kn) { if (grabFxBeam) grabFxBeam.hide(); return; }
-  ensureGrabFx();
   if (!grabFxBeam) return;
   const h = player.vrm?.humanoid?.getNormalizedBoneNode('rightHand');
   if (h) h.getWorldPosition(_gfxFrom); else _gfxFrom.copy(player.pos);
@@ -5029,6 +5043,7 @@ function grabTarget() {
   }
   if (car) {
     car.grabbed = true; grabbedCar = car; car.holdVel = car.holdVel || new THREE.Vector3(); car.holdVel.set(0, 0, 0);
+    computeHoldDims(car);
     const mSpin = 1 / Math.sqrt(massOf(car));   // 重いほどゆっくり回る
     car.holdSpin = new THREE.Vector3((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5).multiplyScalar(mSpin);
     if (car.trainCar) beginTrainHold(car);      // 電車: 残りの車両がぶら下がる
@@ -5067,14 +5082,29 @@ function launchHeldCar() {
   thrownCars.push(car);
 }
 
+const _grabBox = new THREE.Box3();
+function computeHoldDims(car) {   // 保持距離と中心合わせ用の実寸（掴んだ瞬間に1回だけ計測）
+  try {
+    _grabBox.setFromObject(car.mesh);
+    _grabBox.getSize(_tmpV);
+    car.holdR = Math.max(1.5, Math.min(45, _tmpV.length() * 0.35));
+    car.holdCY = (_grabBox.min.y + _grabBox.max.y) / 2 - car.mesh.position.y;   // 原点→中心のY差（底原点のビル/船を正面中央へ）
+  } catch { car.holdR = car.hitR || 2; car.holdCY = 0; }
+}
 function updateGrab(dt) {
   if (!grabbedCar) return;
-  const mesh = grabbedCar.mesh;
-  _tmpV.copy(mesh.position);
-  const m = massOf(grabbedCar);
-  mesh.position.lerp(frontAnchor, Math.min(1, 12 / (1 + (m - 1) * 0.15) * dt));   // 重いほど遅れて追従＝大きな慣性で振り回せる
-  if (dt > 0 && grabbedCar.holdVel) grabbedCar.holdVel.copy(mesh.position).sub(_tmpV).divideScalar(dt);
-  const sp = grabbedCar.holdSpin;
+  const car = grabbedCar, mesh = car.mesh;
+  const m = massOf(car);
+  // ばね-減衰: しっかり追従しつつ、重いほどバネが柔らかく減衰も弱い＝大きな慣性でうねって振り回せる
+  const K = 90 / (1 + (m - 1) * 0.10);
+  const damp = Math.exp(-(6.5 / (1 + (m - 1) * 0.06)) * dt);
+  const hv = car.holdVel || (car.holdVel = new THREE.Vector3());
+  _tmpV.set(frontAnchor.x, frontAnchor.y - (car.holdCY || 0), frontAnchor.z).sub(mesh.position);
+  hv.addScaledVector(_tmpV, K * dt);
+  hv.multiplyScalar(damp);
+  if (hv.length() > 130) hv.multiplyScalar(130 / hv.length());   // 発散ガード
+  mesh.position.addScaledVector(hv, dt);
+  const sp = car.holdSpin;
   if (sp) { mesh.rotation.x += sp.x * dt; mesh.rotation.y += sp.y * dt; mesh.rotation.z += sp.z * dt; }
   else mesh.rotation.y += dt * 2.2 / Math.sqrt(m);
 }
