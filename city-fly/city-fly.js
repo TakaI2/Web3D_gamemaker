@@ -179,7 +179,10 @@ async function init() {
     }
   });
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
-  loadPlayer().then(() => prepareBiteAssets()).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
+  loadPlayer().then(() => {
+    if (TUTORIAL) { player.yaw = Math.PI / 2; camYaw = Math.PI / 2; }   // マント生成後に進行方向(+X)へ向き直す（布はボーン追従で正しく付いてくる）
+    return prepareBiteAssets();
+  }).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
   try {
     // マルチプレイはMP専用ビルド(window.MP_BUILD)か ?mp=1 のときだけ有効化（通常のCityFlyはシングル専用のまま）
     const mpAvailable = MP_ON || !!window.MP_BUILD;
@@ -225,6 +228,12 @@ function recenterToHachioji() {
 // ── マップモード（map-editor製 .map.json の地形。既定 mytown＝my-city ステージ）──
 const MAP_NAME = new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || 'mytown';   // dist はビルド時に window.DEFAULT_MAP を注入
 const TUTORIAL = MAP_NAME === 'tutorial';   // チュートリアルステージ（部屋群を実行時構築。街の生成はスキップ）
+if (TUTORIAL) {   // スポーン位置を最初に確定（布はこの位置で生成される）。
+  // 向きはマント生成が終わるまで基準yaw=πのまま（布のアンカー結合は基準向きで行い、その後に向き直す。
+  // 生成時に非基準の向きだと結合が回転ずれのまま固定され「マントが逆に付く」）
+  player.pos.set(-1256, 4, 0);
+  camPitch = 0.1;
+}
 // 性能切り分け用スイッチ。?diag=1 で GPU名/drawCall/三角数まで表示。
 //   ?nocape=1 マント無効 / ?nocity=1 建物無効 / ?nonpc=1 NPC(ken)と車を無効 / ?dpr=1 解像度を下げる
 const _qs = new URLSearchParams(location.search);
@@ -1336,6 +1345,8 @@ function updateTutRoom3(dt) {
     q.z = Math.max(R.z0 + 12, Math.min(R.z1 - 12, q.z));
     q.y = Math.max(12, Math.min(R.H - 14, q.y));
   }
+  const jk = tutJetKills();
+  if (jk !== tut._jkShown || tut.rescued !== tut._rsShown) { tut._jkShown = jk; tut._rsShown = tut.rescued; tutRefreshObjective(); }   // 表示を即時更新
   const sa = tut.safety;
   sa.ring.rotation.z += dt * 0.8;
   sa.pillar.material.opacity = 0.09 + 0.04 * Math.sin(exhaustT * 2.2);
@@ -1422,9 +1433,7 @@ async function buildTutorialStage() {
   scene.add(tut.root);
   cityRoot = tut.root;   // タイトル解錠条件（cityRoot && collBoxes.length）を満たす
   tutSpawn = [tut.rooms[0].x0 + 24, 4, 0];
-  player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);
-  player.yaw = Math.PI / 2;   // +X（奥）を向く
-  camYaw = Math.PI / 2; camPitch = 0.1;   // カメラも進行方向へ
+  player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);   // 向きはマント生成後に loadPlayer 側で設定（布結合の回転ずれ防止）
   Object.assign(JET, { n: 6, spMin: 13, spMax: 22, orbitR: 95, killZone: 140, shotCd: 2.8, shotDmg: 4, bombCd: 1e9, resp: 5 });   // 訓練用戦闘機（低速・爆撃なし・低威力）
   tut.ready = true;
   console.log('tutorial stage:', totalL.toFixed(0) + 'm x', Math.max(...TUT_ROOMS.map((r) => r.W)) + 'm, collBoxes', collBoxes.length);
@@ -7015,21 +7024,10 @@ const _mannGeoCyl = new THREE.CylinderGeometry(1, 1, 1, 8);     // 単位ジオ�
 const _mannGeoSph = new THREE.SphereGeometry(1, 10, 8);
 function makeMannequin(vrm, kind) {
   const nodeOf = (name) => vrm.humanoid?.getRawBoneNode?.(name) || vrm.humanoid?.getNormalizedBoneNode?.(name);
-  let smesh = null;
-  vrm.scene.traverse((o) => { if (o.isSkinnedMesh && !smesh) smesh = o; });
-  const srcMat = smesh ? (Array.isArray(smesh.material) ? smesh.material[0] : smesh.material) : null;
-  let mat;   // kenのMToonをクローンして色替え＝fx-dissolveのラップ互換（Standard新規生成はノードビルドが黒化する）
-  if (srcMat && srcMat.clone) {
-    mat = srcMat.clone();
-    mat.map = null;
-    if (mat.color) mat.color.set(kind === 'pneuma' ? 0x7fe8ff : 0xd9cfc2);
-    if (mat.shadeColorFactor) mat.shadeColorFactor.set(kind === 'pneuma' ? 0x2b7f96 : 0x8f8578);
-    if (mat.shadeMultiplyTexture !== undefined) mat.shadeMultiplyTexture = null;
-    if (mat.emissive) mat.emissive.set(kind === 'pneuma' ? 0x2bd6ff : 0x000000);
-    if (mat.emissiveMap !== undefined) mat.emissiveMap = null;
-  } else {
-    mat = new THREE.MeshBasicMaterial({ color: kind === 'pneuma' ? 0x7fe8ff : 0xd9cfc2 });
-  }
+  const mat = kind === 'pneuma'
+    ? new THREE.MeshStandardMaterial({ color: 0x7fe8ff, emissive: 0x2bd6ff, emissiveIntensity: 1.2, roughness: 0.35 })
+    : new THREE.MeshStandardMaterial({ color: 0xe4d3b8, emissive: 0x2a1608, roughness: 0.8 });
+  mat._dissolveApplied = true;   // fx-dissolveのラップ対象から除外（新規StandardをラップするとTSLノードビルドが黒化する）
   vrm.scene.updateMatrixWorld(true);
   let made = 0;
   const _im = new THREE.Matrix4();
@@ -7059,6 +7057,13 @@ function makeMannequin(vrm, kind) {
     head.frustumCulled = false;
     hn.add(head);
     made++;
+    const mkMat = new THREE.MeshBasicMaterial({ color: kind === 'pneuma' ? 0x4ad7ff : 0xffb040, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+    mkMat._dissolveApplied = true;   // ディソルブラップ除外
+    const mk = new THREE.Mesh(_mannGeoSph, mkMat);   // 頭上の発光マーカー（広い部屋でも視認できるように）
+    mk.scale.setScalar(0.22);
+    mk.position.set(0, 0.5, 0);
+    mk.frustumCulled = false;
+    hn.add(mk);
   }
   if (!made) return;
   vrm.scene.traverse((o) => { if ((o.isMesh || o.isSkinnedMesh) && o.geometry !== _mannGeoCyl && o.geometry !== _mannGeoSph) o.visible = false; });   // 元メッシュは隠す
@@ -7159,6 +7164,7 @@ function hitKenBeam(m, dmg) {
 }
 
 function startKenDissolve(m) {
+  if (m.mannequin) m._mannShrink = true;   // マネキンパーツはディソルブラップ対象外→縮小で溶かす
   if (m.dissolving) return;
   kenCenter(m, _kQ);
   addWanted(1.0, _kQ);   // 住人を倒した＝重犯罪
@@ -7181,6 +7187,7 @@ function updateKenDissolve(m, dt) {
     m.dissT += dt;
     const pr = Math.min(1, m.dissT / KEN_DISSOLVE_DURATION);
     m.dis.setProgress(pr);
+    if (m._mannShrink) m.vrm.scene.scale.setScalar(Math.max(0.01, 1 - pr));   // マネキンは液溜まりへ縮んで溶ける
     if (pr >= 1) { m.dead = true; m.deadTimer = KEN_DISSOLVE_LINGER; }
   } else m.deadTimer -= dt;
   if (m.dis) m.dis.update(dt);
