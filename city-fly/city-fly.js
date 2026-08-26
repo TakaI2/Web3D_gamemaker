@@ -857,6 +857,8 @@ function tutRefreshObjective() {
     tutObjective(tut.aerialClear ? '' : '撃墜 ' + Math.min(20, tutJetKills()) + '/20　／　救出 ' + tut.rescued + '/5');
   } else if (tut.room === 4) {
     tutObjective(tut.fortDown ? '' : '要塞HP ' + Math.round(tutFortHp() / BLD_HP.fort * 100) + '%　— 巨大オブジェクトを投げつけろ');
+  } else if (tut.room === 5) {
+    tutObjective(tut.fedPneuma ? '' : 'プネウマドールを吸血して回復せよ（掴んだまま着地→捕食）');
   } else tutObjective('');
 }
 function tutHumanoidGeo() {   // 人型シルエット標的（台座＋胴＋頭）
@@ -1019,6 +1021,14 @@ function tutSpawnDolls() {   // 部屋3のダミードール（走り回る救�
       bounds: { x0: R.x0 + 8, x1: R.x1 - 8, z0: R.z0 + 8, z1: R.z1 - 8 },
     }).catch((e) => console.warn('ドール生成失敗:', e));
   }
+  const C = tut.rooms[4];   // 廊下: プネウマドール3体（立位・吸血可・回復1/3）
+  for (const ox of [45, 80, 115]) {
+    spawnKen({
+      mannequin: 'pneuma', still: true, healMul: 1 / 3,
+      pos: { x: C.x0 + ox, z: (ox % 2 ? -6 : 6) },
+      bounds: { x0: C.x0 + 4, x1: C.x1 - 4, z0: C.z0 + 4, z1: C.z1 - 4 },
+    }).catch((e) => console.warn('プネウマ生成失敗:', e));
+  }
   tut.dollsSpawned = true;
 }
 function tutJetKills() {
@@ -1160,8 +1170,9 @@ const TUT_HINTS = {
   charge: { pc: 'PC：左クリック長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）', sp: 'スマホ：長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）' },
   aerial: { pc: 'PC：右クリック長押し＝ドールを掴む→運んで光の柱の中で離す　／　訓練機はビームで撃墜', sp: 'スマホ：長押し＝ドールを掴む→光の柱まで運ぶ　／　右タップで撃墜' },
   grab: { pc: 'PC：右クリック長押し＝光る物を掴む／マウスを振って離すと投擲　重い物ほど破壊力大・持っている間は盾になる', sp: 'スマホ：長押し＝光る物を掴む／指を離すと投擲　重い物ほど破壊力大・盾にもなる' },
+  feed: { pc: 'PC：右クリック長押し＝ドールを掴む→持ったまま着地すると捕食（HP回復・服とマントも修復）', sp: 'スマホ：長押し＝ドールを掴む→持ったまま着地すると捕食（HP回復・服とマントも修復）' },
 };
-const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial', 4: 'grab' };
+const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial', 4: 'grab', 5: 'feed' };
 function tutHint(key) {
   const h = TUT_HINTS[key];
   if (!h) return;
@@ -7172,6 +7183,12 @@ function finishEating() {
     m.eating = false;
     m.pos.copy(m.vrm.scene.position);
     startKenDissolve(m);
+    if (TUTORIAL && m.mannequin === 'pneuma' && !tut.fedPneuma) {   // 捕食訓練クリア
+      tut.fedPneuma = true;
+      if (tut.doors[4] && !tut.doors[4].open) setTutDoor(4, true);
+      tutHint('goal');
+      tutRefreshObjective();
+    }
   }
   const idle = player.states.idle;
   if (idle) {
