@@ -1428,9 +1428,43 @@ const PLAYER_BIGHIT = 10;   // これ以上の単発ダメージ＝大ダメー�
 let playerDead = false, playerDeathT = 0, playerRagOn = false, playerKnockT = 0;   // playerRagOn=きりもみ落下フェーズ
 let playerRagdoll = null, playerLandRag = false, playerRagOpts = null;   // 接地後のラグドール（nei_vamp.ragdoll.json）
 const _pdV = new THREE.Vector3(), _pdV2 = new THREE.Vector3(), _pdV3 = new THREE.Vector3(), _pdC = new THREE.Vector3(), _pdAxis = new THREE.Vector3(), _pdUp = new THREE.Vector3(0, 1, 0), _pdQ = new THREE.Quaternion();
+const _shV = new THREE.Vector3();
+function damageHeld(n) {   // 持っている物が被弾を肩代わり
+  const car = grabbedCar;
+  if (!car) return;
+  spawnImpactFx(_hcV.copy(car.mesh.position), 0.9);
+  playSfxAt('bomb_short.ogg', car.mesh.position, 0.6);
+  if (car.ship) {   // 船は実HP（欠損つき）で受ける
+    shipHit(car.mesh.position.clone(), Math.max(1, Math.round(n / 8)));
+    if (portShip && (portShip.dying || portShip.proxy.dead)) { grabbedCar = null; car.grabbed = false; }   // 沈み始めたら手放す（沈降はupdatePortが処理）
+    return;
+  }
+  if (car.holdHp == null) car.holdHp = 2 + massOf(car);   // 被弾耐久（n/6を1被弾換算）
+  car.holdHp -= n / 6;
+  if (car.holdHp <= 0) {   // HPが尽きたら落としてそのまま破壊（投げフェーズは経由しない）
+    grabbedCar = null;
+    car.grabbed = false;
+    breakCar(car, car.mesh.position.clone());
+  }
+}
+function releaseDrop() {   // 投げずに手放す（僅かな慣性のみ）
+  const car = grabbedCar;
+  if (!car) return;
+  grabbedCar = null;
+  car.grabbed = false; car.thrown = true; car.thrownT = 0; car.rolling = false; car.slammed = false;
+  car.vel = (car.vel || new THREE.Vector3()).copy(car.holdVel || _tmpV.set(0, 0, 0)).multiplyScalar(0.4);
+  car.angVel = (car.angVel || new THREE.Vector3()).set(0, 0, 0);
+  if (car.trainCar) car.tRef.tr.state = 'thrownChain';
+  thrownCars.push(car);
+}
 function playerDamage(n, dir) {
   if (!player.ready || playerDead) return;
   if (gameMode === 'op' || gameMode === 'ed') return;   // シナリオ中は被弾なし
+  if (grabbedCar && n > 0) {   // 持っている物が盾になる（真後ろからの被弾だけ本人に通る）
+    let fromBehind = false;
+    if (dir) { _shV.set(Math.sin(player.yaw), 0, Math.cos(player.yaw)); fromBehind = dir.dot(_shV) > 0.4; }
+    if (!fromBehind) { damageHeld(n); return; }
+  }
   dmgFlash = Math.min(1, 0.45 + n * 0.03);   // 被弾の赤フラッシュ（強いほど濃い）
   playerHp = Math.max(0, playerHp - n);
   updateHpUI();
@@ -4926,6 +4960,53 @@ function ensureRollDims(car) {   // 転がり用の円筒コライダー（ロ�
     car.rollR = Math.max(0.8, (dims[(li + 1) % 3] + dims[(li + 2) % 3]) / 4);
   } else { car.rollAxisL = new THREE.Vector3(0, 0, 1); car.rollR = car.hitR || 2; }
 }
+const _hcV = new THREE.Vector3();
+function heldContact(car, cx, cy, cz, speed, m) {   // 振り回し/転がり中の接触: 建物/敵/地面（既存ダメージ系へ委譲。car.fxCdでレート制限）
+  if (speed < 8 || (car.fxCd || 0) > 0) return false;
+  const r = car.rollR || car.hitR || 2;
+  const gx = Math.floor(cx / COLL_CELL), gz = Math.floor(cz / COLL_CELL);
+  for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {   // 建物
+    const arr = collGrid.get((gx + dx) + '_' + (gz + dz));
+    if (!arr) continue;
+    for (const idx of arr) {
+      const b = collBoxes[idx];
+      if (b.top <= b.bottom) continue;
+      if (Math.abs(cx - b.x) < b.h + r && Math.abs(cz - b.z) < b.h + r && cy > b.bottom - 2 && cy < b.top + r) {
+        ensureBoxMap();
+        const bb = boxToBld[idx];
+        _hcV.set(cx, cy, cz);
+        if (bb) damageBuildingRec(bb.rec, bb.md, _hcV, Math.max(1, Math.round(m * speed / 60)), 1, 'player');
+        spawnDebrisBurst(_hcV, 'bld', Math.min(1.4, 0.5 + m * speed / 600));
+        playSfxAt(m >= 8 ? 'bakuha.ogg' : 'bomb_short.ogg', _hcV, Math.min(1, 0.5 + m * speed / 800));
+        car.fxCd = 0.22;
+        return true;
+      }
+    }
+  }
+  if (walker && !walker.dying && Math.hypot(cx - walker.pos.x, cy - (walker.pos.y + 6), cz - walker.pos.z) < 13 + r) {   // 敵
+    walkerHit(_hcV.set(cx, cy, cz).clone(), Math.max(3, m * speed / 8));
+    spawnDebrisBurst(_hcV, 'bld', 0.8);
+    playSfxAt('bakuha.ogg', _hcV, 0.85);
+    car.fxCd = 0.3;
+    return true;
+  }
+  if (spider && !spider.dying && Math.hypot(cx - spider.pos.x, cy - (spider.pos.y + 10), cz - spider.pos.z) < 38 + r) {
+    spiderHit(_hcV.set(cx, cy, cz).clone(), Math.max(3, m * speed / 8));
+    spawnDebrisBurst(_hcV, 'bld', 0.8);
+    playSfxAt('bakuha.ogg', _hcV, 0.85);
+    car.fxCd = 0.3;
+    return true;
+  }
+  const gy = groundYAt(cx, cz, cy + 60);   // 地面（叩きつけ/引きずり）
+  if (gy != null && cy - r <= gy + 0.3) {
+    _hcV.set(cx, gy + 0.2, cz);
+    spawnDebrisBurst(_hcV, 'rock', Math.min(1.2, 0.4 + m * speed / 700));
+    playSfxAt(m >= 8 ? 'bakuha.ogg' : 'bomb_short.ogg', _hcV, Math.min(1, 0.4 + m * speed / 900));
+    car.fxCd = 0.25;
+    return true;
+  }
+  return false;
+}
 function settleThrown(car) {   // 重量物は壊れず静止（コンテナ=置き直され再び掴める / 船=座礁）
   car.thrown = false; car.rolling = false; car.slammed = false;
   if (car.vel) car.vel.set(0, 0, 0);
@@ -5078,7 +5159,7 @@ function computeHoldDims(car) {   // 保持距離と中心合わせ用の実寸�
   try {
     _grabBox.setFromObject(car.mesh);
     _grabBox.getSize(_tmpV);
-    car.holdR = Math.max(1.5, Math.min(45, _tmpV.length() * 0.35));
+    car.holdR = Math.max(1.5, Math.min(95, Math.max(_tmpV.x, _tmpV.y, _tmpV.z) * 0.55));   // 長軸基準＝回転しても届かない
     car.holdCY = (_grabBox.min.y + _grabBox.max.y) / 2 - car.mesh.position.y;   // 原点→中心のY差（底原点のビル/船を正面中央へ）
   } catch { car.holdR = car.hitR || 2; car.holdCY = 0; }
 }
@@ -5095,6 +5176,9 @@ function updateGrab(dt) {
   hv.multiplyScalar(damp);
   if (hv.length() > 130) hv.multiplyScalar(130 / hv.length());   // 発散ガード
   mesh.position.addScaledVector(hv, dt);
+  car.fxCd = Math.max(0, (car.fxCd || 0) - dt);
+  ensureRollDims(car);
+  heldContact(car, mesh.position.x, mesh.position.y + (car.holdCY || 0), mesh.position.z, hv.length(), m);   // 振り回し中もダメージ判定＋接地で破壊音
   const sp = car.holdSpin;
   if (sp) { mesh.rotation.x += sp.x * dt; mesh.rotation.y += sp.y * dt; mesh.rotation.z += sp.z * dt; }
   else mesh.rotation.y += dt * 2.2 / Math.sqrt(m);
@@ -5104,7 +5188,9 @@ function updateThrown(dt) {
   for (let k = thrownCars.length - 1; k >= 0; k--) {
     const car = thrownCars[k];
     const m = massOf(car), heavy = m >= 3;   // 重量物(コンテナ/列車/船)はバウンド→転がり→静止
+    if (car.dead || !car.vel) { thrownCars.splice(k, 1); continue; }   // 飛行中に破壊された等
     car.thrownT += dt;
+    car.fxCd = Math.max(0, (car.fxCd || 0) - dt);
     const p = car.mesh.position;
     if (car.rolling) {   // 転がり: 円筒コライダー＝長軸を進行と直交に寝かせ、接地回転 ω=v/r で転がる
       ensureRollDims(car);
@@ -5123,11 +5209,12 @@ function updateThrown(dt) {
         _rollTgt.copy(_rollAxis);
         if (_rollV1.dot(_rollTgt) < 0) _rollTgt.multiplyScalar(-1);   // 近い側へ寝かせる
         _rollQ.setFromUnitVectors(_rollV1, _rollTgt);
-        _rollQ2.identity().slerp(_rollQ, Math.min(1, 4 * dt));   // 樽/丸太の姿勢へ滑らかに
+        _rollQ2.identity().slerp(_rollQ, Math.min(1, 3 * dt * Math.min(1, sp2 / 10)));   // 速いうちだけ寝かせ、減速後は成り行き＝止まる角度は物理任せ
         car.mesh.quaternion.premultiply(_rollQ2);
         _rollQ.setFromAxisAngle(_rollAxis, sp2 / car.rollR * dt);   // 接地して転がる
         car.mesh.quaternion.premultiply(_rollQ);
       }
+      if (heldContact(car, _rollC.x, _rollC.y, _rollC.z, sp2, m)) { car.vel.x *= 0.55; car.vel.z *= 0.55; }   // 転がって建物/敵にぶつける
       if (sp2 < 1.2 || car.thrownT > THROW_LIFE * 3) { thrownCars.splice(k, 1); settleThrown(car); }
       continue;
     }
@@ -5172,13 +5259,13 @@ function updateThrown(dt) {
       breakCar(car, impact);
       continue;
     }
-    // ── 重量物の衝突: 初回の激突でダメージ/破片 → バウンド → 転がりへ ──
-    if (spd > 20 && !car.slammed) {
-      car.slammed = true;
-      if (car.ship) shipHit(impact, 3);
-      else spawnDebrisBurst(impact, hitBld || hitEnemy ? 'bld' : 'rock', 0.9);
-      spawnImpactFx(impact, Math.min(2.2, 0.8 + m * 0.03));
-      playSfxAt('bakuha.ogg', impact, Math.min(1, 0.55 + m * 0.012));   // 巨大なものの激突＝崩壊と同じ音
+    // ── 重量物の衝突: 激突のたびにガレキ＋音（クールダウンでレート制限）→ バウンド → 転がりへ ──
+    if (spd > 9 && (car.fxCd || 0) <= 0) {
+      car.fxCd = 0.25;
+      if (car.ship && spd > 18) shipHit(impact, 3);
+      spawnDebrisBurst(impact, hitBld || hitEnemy ? 'bld' : 'rock', Math.min(1.6, 0.5 + m * spd / 500));
+      spawnImpactFx(impact, Math.min(2.2, 0.6 + m * spd / 400));
+      playSfxAt(m >= 8 ? 'bakuha.ogg' : 'bomb_short.ogg', impact, Math.min(1, 0.5 + m * spd / 800));   // 巨大なものの激突＝崩壊と同じ音
     }
     if (hitEnemy) {   // 敵に激突: 跳ね返る
       car.vel.multiplyScalar(-0.3);
