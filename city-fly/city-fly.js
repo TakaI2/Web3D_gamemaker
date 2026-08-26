@@ -1701,7 +1701,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, takeContainer, destroyContainer, breakCar, debugThrow,
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, takeContainer, destroyContainer, breakCar, debugThrow,
   dmgBldAt: (x, z, dmg = 1) => {   // テスト用: 最寄り建物へダメージ
     ensureBoxMap();
     let best = -1, bd = 1e9;
@@ -4961,9 +4961,17 @@ function ensureRollDims(car) {   // 転がり用の円筒コライダー（ロ�
   } else { car.rollAxisL = new THREE.Vector3(0, 0, 1); car.rollR = car.hitR || 2; }
 }
 const _hcV = new THREE.Vector3();
-function heldContact(car, cx, cy, cz, speed, m) {   // 振り回し/転がり中の接触: 建物/敵/地面（既存ダメージ系へ委譲。car.fxCdでレート制限）
+function heldContact(car, cx, cy, cz, speed, m, bottomY) {   // 振り回し/転がり中の接触: 建物/敵/地面（既存ダメージ系へ委譲。car.fxCdでレート制限）
   if (speed < 8 || (car.fxCd || 0) > 0) return false;
   const r = car.rollR || car.hitR || 2;
+  const sweepR = Math.max(r, (car.holdR || 2) * 0.8);   // 薙ぎ払い半径＝長軸基準（船で振れば船の長さぶん当たる）
+  for (const c of carsAndJets()) {   // 戦闘機・車・パトカー・列車を薙ぎ払う
+    if (c === car || c.grabbed || c.thrown || c.dead || !c.mesh.visible) continue;
+    const q = c.mesh.position;
+    if (Math.hypot(cx - q.x, cy - q.y, cz - q.z) >= sweepR + (c.hitR || 2.5)) continue;
+    if (c.ship) { shipHit(_hcV.set(cx, cy, cz).clone(), Math.max(1, Math.round(m * speed / 60))); car.fxCd = 0.3; return true; }
+    breakCar(c, q.clone());
+  }
   const gx = Math.floor(cx / COLL_CELL), gz = Math.floor(cz / COLL_CELL);
   for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {   // 建物
     const arr = collGrid.get((gx + dx) + '_' + (gz + dz));
@@ -4976,7 +4984,7 @@ function heldContact(car, cx, cy, cz, speed, m) {   // 振り回し/転がり中
         const bb = boxToBld[idx];
         _hcV.set(cx, cy, cz);
         if (bb) damageBuildingRec(bb.rec, bb.md, _hcV, Math.max(1, Math.round(m * speed / 60)), 1, 'player');
-        spawnDebrisBurst(_hcV, 'bld', Math.min(1.4, 0.5 + m * speed / 600));
+        spawnDebrisBurst(_hcV, 'bld', Math.min(1.4, 0.5 + m * speed / 600), Math.min(2.6, 0.8 + m * 0.05), (car.rollR || 2) * 0.5);
         playSfxAt(m >= 8 ? 'bakuha.ogg' : 'bomb_short.ogg', _hcV, Math.min(1, 0.5 + m * speed / 800));
         car.fxCd = 0.22;
         return true;
@@ -4997,10 +5005,11 @@ function heldContact(car, cx, cy, cz, speed, m) {   // 振り回し/転がり中
     car.fxCd = 0.3;
     return true;
   }
-  const gy = groundYAt(cx, cz, cy + 60);   // 地面（叩きつけ/引きずり）
-  if (gy != null && cy - r <= gy + 0.3) {
+  const gy = groundYAt(cx, cz, cy + 60);   // 地面（叩きつけ/引きずり）: 実AABB下端で判定＝傾いた船体の先端接地も拾う
+  const by = bottomY != null ? bottomY : cy - r;
+  if (gy != null && by <= gy + 0.3) {
     _hcV.set(cx, gy + 0.2, cz);
-    spawnDebrisBurst(_hcV, 'rock', Math.min(1.2, 0.4 + m * speed / 700));
+    spawnDebrisBurst(_hcV, 'rock', Math.min(1.2, 0.4 + m * speed / 700), Math.min(3, 0.8 + m * 0.06), (car.rollR || 2) * 0.8);
     playSfxAt(m >= 8 ? 'bakuha.ogg' : 'bomb_short.ogg', _hcV, Math.min(1, 0.4 + m * speed / 900));
     car.fxCd = 0.25;
     return true;
@@ -5178,7 +5187,9 @@ function updateGrab(dt) {
   mesh.position.addScaledVector(hv, dt);
   car.fxCd = Math.max(0, (car.fxCd || 0) - dt);
   ensureRollDims(car);
-  heldContact(car, mesh.position.x, mesh.position.y + (car.holdCY || 0), mesh.position.z, hv.length(), m);   // 振り回し中もダメージ判定＋接地で破壊音
+  _grabBox.setFromObject(car.mesh);   // 実AABB中心/下端で判定（回転した船体でも正確）
+  _grabBox.getCenter(_rollC);
+  heldContact(car, _rollC.x, _rollC.y, _rollC.z, hv.length(), m, _grabBox.min.y);   // 振り回し中もダメージ判定＋接地で破壊音
   const sp = car.holdSpin;
   if (sp) { mesh.rotation.x += sp.x * dt; mesh.rotation.y += sp.y * dt; mesh.rotation.z += sp.z * dt; }
   else mesh.rotation.y += dt * 2.2 / Math.sqrt(m);
@@ -5214,7 +5225,7 @@ function updateThrown(dt) {
         _rollQ.setFromAxisAngle(_rollAxis, sp2 / car.rollR * dt);   // 接地して転がる
         car.mesh.quaternion.premultiply(_rollQ);
       }
-      if (heldContact(car, _rollC.x, _rollC.y, _rollC.z, sp2, m)) { car.vel.x *= 0.55; car.vel.z *= 0.55; }   // 転がって建物/敵にぶつける
+      if (heldContact(car, _rollC.x, _rollC.y, _rollC.z, sp2, m, _rollC.y - car.rollR)) { car.vel.x *= 0.55; car.vel.z *= 0.55; }   // 転がって建物/敵にぶつける
       if (sp2 < 1.2 || car.thrownT > THROW_LIFE * 3) { thrownCars.splice(k, 1); settleThrown(car); }
       continue;
     }
@@ -5241,7 +5252,18 @@ function updateThrown(dt) {
     if (!impact && groundGroup && groundGroup.children.length) {   // 地面へ衝突？
       _grabRay.set(_tmpV.set(p.x, p.y + 30, p.z), _DOWN); _grabRay.far = 100000;
       const g = _grabRay.intersectObject(groundGroup, true)[0];
-      if (g && p.y <= g.point.y + 0.5) { impact = g.point.clone(); gndY = g.point.y; }
+      if (g) {
+        let by = p.y;   // 重量物は実AABB下端で接地判定（傾いた船体の先端接地も拾う）
+        if (heavy) { _grabBox.setFromObject(car.mesh); by = _grabBox.min.y; }
+        if (by <= g.point.y + 0.5) { impact = g.point.clone(); gndY = g.point.y; }
+      }
+    }
+    if (!car.shotDown) {   // 飛翔/転がり前の直進中も戦闘機・車を巻き込む（薙ぎ倒しても飛び続ける）
+      for (const c of carsAndJets()) {
+        if (c === car || c.grabbed || c.thrown || c.dead || c.ship || !c.mesh.visible) continue;
+        const q = c.mesh.position;
+        if (Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) < (car.rollR || car.hitR || 2) + (c.hitR || 2.5)) breakCar(c, q.clone());
+      }
     }
     if (!impact && (car.thrownT > (car.shotDown ? 16 : THROW_LIFE) || p.y < -40)) {
       if (heavy) { thrownCars.splice(k, 1); settleThrown(car); continue; }
@@ -5263,7 +5285,7 @@ function updateThrown(dt) {
     if (spd > 9 && (car.fxCd || 0) <= 0) {
       car.fxCd = 0.25;
       if (car.ship && spd > 18) shipHit(impact, 3);
-      spawnDebrisBurst(impact, hitBld || hitEnemy ? 'bld' : 'rock', Math.min(1.6, 0.5 + m * spd / 500));
+      spawnDebrisBurst(impact, hitBld || hitEnemy ? 'bld' : 'rock', Math.min(1.6, 0.5 + m * spd / 500), Math.min(3, 0.8 + m * 0.06), (car.rollR || 2) * 0.7);
       spawnImpactFx(impact, Math.min(2.2, 0.6 + m * spd / 400));
       playSfxAt(m >= 8 ? 'bakuha.ogg' : 'bomb_short.ogg', impact, Math.min(1, 0.5 + m * spd / 800));   // 巨大なものの激突＝崩壊と同じ音
     }
@@ -5297,6 +5319,7 @@ function updateThrown(dt) {
 
 function breakCar(car, point) {
   spawnBreakFx(point);
+  playSfxAt(car.trainCar ? 'bakuha.ogg' : 'bomb.ogg', point, car.trainCar ? 1.0 : 0.85);   // 破壊音（ビーム撃破と同じ）
   if (car.trainCar) {   // 列車車両: 当たった車両は爆散、残りは脱線して落下
     addWanted(1.0, point);
     spawnImpactFx(point, 1.8);
@@ -5364,7 +5387,7 @@ const debMats = {
   rock: new THREE.MeshStandardMaterial({ color: 0x6b5f52, roughness: 1.0 }),    // 岩
   asphalt: new THREE.MeshStandardMaterial({ color: 0x3a3b40, roughness: 1.0 }), // アスファルト片
 };
-function spawnDebrisBurst(point, kind, scaleN = 1) {
+function spawnDebrisBurst(point, kind, scaleN = 1, sizeMul = 1, spread = 0) {
   const n = Math.max(1, Math.round((kind === 'bld' ? 10 : 7) * scaleN));
   const gy = groundYAt(point.x, point.z, point.y);
   for (let i = 0; i < n && debris.length < DEBRIS_MAX; i++) {
@@ -5382,8 +5405,9 @@ function spawnDebrisBurst(point, kind, scaleN = 1) {
       vel = new THREE.Vector3((Math.random() - 0.5) * 9, 9 + Math.random() * 9, (Math.random() - 0.5) * 9);   // 岩=上向きに吹き上がる
     }
     const d = new THREE.Mesh(_debGeo, mat);
-    d.scale.set(sx, sy, sz);
-    d.position.copy(point);
+    d.scale.set(sx * sizeMul, sy * sizeMul, sz * sizeMul);
+    if (sizeMul !== 1) vel.multiplyScalar(0.7 + sizeMul * 0.35);   // 大きい破片は勢いよく飛ばして見せる
+    d.position.set(point.x + (Math.random() - 0.5) * 2 * spread, point.y, point.z + (Math.random() - 0.5) * 2 * spread);
     d.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
     scene.add(d);
     debris.push({ obj: d, vel, avx: (Math.random() - 0.5) * 9, avz: (Math.random() - 0.5) * 9, t: 0, dur: 1.5 + Math.random() * 0.8, gy });
