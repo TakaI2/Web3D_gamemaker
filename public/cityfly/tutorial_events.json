@@ -1,0 +1,5 @@
+{
+  "events": [
+    { "id": "capeWarn", "when": { "param": "hpPct", "op": "<=", "value": 50 }, "do": [ { "type": "talk", "talk": "t_cape50" } ] }
+  ]
+}

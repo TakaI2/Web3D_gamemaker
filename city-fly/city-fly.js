@@ -156,10 +156,14 @@ async function init() {
   groundGroup = new THREE.Group(); scene.add(groundGroup);
   // map-editor 製 .map.json の自作地形マップ（?map=<name>、既定 mytown）
   let chain = buildMapGround().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)));
-  chain = chain.then(() => loadRoads());
-  if (KENNEY_CITY) chain = chain.then(() => buildKenneyCity());   // 実道路網に Kenney 建物を配置
-  chain = chain.then(() => buildParks().catch((e) => console.warn('公園生成失敗', e)));   // 閉じスプラインの公園
-  chain = chain.then(() => buildForest().catch((e) => console.warn('森生成失敗', e)));   // 空き地の森（建物確定後）
+  if (TUTORIAL) {
+    chain = chain.then(() => buildTutorialStage());   // チュートリアル: 部屋群を実行時構築（道路/都市/森はなし）
+  } else {
+    chain = chain.then(() => loadRoads());
+    if (KENNEY_CITY) chain = chain.then(() => buildKenneyCity());   // 実道路網に Kenney 建物を配置
+    chain = chain.then(() => buildParks().catch((e) => console.warn('公園生成失敗', e)));   // 閉じスプラインの公園
+    chain = chain.then(() => buildForest().catch((e) => console.warn('森生成失敗', e)));   // 空き地の森（建物確定後）
+  }
   chain = chain.then(() => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
     try { warmEnemyMats(); } catch (e) { console.warn('敵材質ウォーム失敗:', e); }
     loadImpactFx().catch((e) => console.warn('着弾FX準備失敗:', e));
@@ -167,8 +171,8 @@ async function init() {
     try { initDebrisFx(); } catch (e) { console.warn('破片FX準備失敗:', e); }
     try { initUltFx(); } catch (e) { console.warn('アルティメットFX準備失敗:', e); }
     if (!NO_NPC) {   // 性能切り分け: ?nonpc=1 で住民NPCと生活エージェントを出さない
-      prepareKenAssets().then((ok) => { if (ok) setKenCount(KEN_COUNT); }).catch((e) => console.warn('ken準備失敗:', e));
-      loadAgentOverrides().then(() => { try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); } });
+      prepareKenAssets().then((ok) => { if (ok && !TUTORIAL) setKenCount(KEN_COUNT); }).catch((e) => console.warn('ken準備失敗:', e));   // チュートリアルはドール用にアセットだけ準備
+      if (!TUTORIAL) loadAgentOverrides().then(() => { try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); } });
     }
   });
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
@@ -217,6 +221,7 @@ function recenterToHachioji() {
 
 // ── マップモード（map-editor製 .map.json の地形。既定 mytown＝my-city ステージ）──
 const MAP_NAME = new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || 'mytown';   // dist はビルド時に window.DEFAULT_MAP を注入
+const TUTORIAL = MAP_NAME === 'tutorial';   // チュートリアルステージ（部屋群を実行時構築。街の生成はスキップ）
 // 性能切り分け用スイッチ。?diag=1 で GPU名/drawCall/三角数まで表示。
 //   ?nocape=1 マント無効 / ?nocity=1 建物無効 / ?nonpc=1 NPC(ken)と車を無効 / ?dpr=1 解像度を下げる
 const _qs = new URLSearchParams(location.search);
@@ -325,7 +330,7 @@ async function buildMapGround() {
   if (a) {
     const parts = [];
     if (j.terrain?.attribution) parts.push('地形標高: 地理院タイル/国土地理院');
-    if (!mapRoads.length || j.osmRoads) parts.push('道路データ: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL)');   // スプライン未保存＝OSMフォールバック
+    if ((!mapRoads.length && !TUTORIAL) || j.osmRoads) parts.push('道路データ: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL)');   // スプライン未保存＝OSMフォールバック
     if (parts.length) a.innerHTML = parts.join('｜ ');
     else a.style.display = 'none';
   }
@@ -755,6 +760,184 @@ function updateHpUI() {
   hpBarEl.style.background = r < 0.3 ? 'linear-gradient(90deg,#e2402f,#ff9a3a)' : 'linear-gradient(90deg,#3adf7c,#9fe6ff)';
   if (hpNumEl) hpNumEl.textContent = String(Math.ceil(playerHp));
 }
+// ═════════ チュートリアルステージ（?map=tutorial。部屋群＋隔壁＋進行管理）═════════
+const TUT_WALL = 4, TUT_DOOR_W = 16, TUT_DOOR_H = 14;
+const TUT_ROOMS = [   // L=X方向長さ, W=Z方向幅, H=天井高
+  { name: 'move',   L: 280, W: 280, H: 150 },
+  { name: 'attack', L: 420, W: 260, H: 130 },
+  { name: 'aerial', L: 520, W: 520, H: 240 },
+  { name: 'grab',   L: 520, W: 520, H: 170 },
+  { name: 'feed',   L: 160, W: 40,  H: 24 },
+  { name: 'boss',   L: 640, W: 640, H: 300 },
+];
+const TUT_ROOM_TALK = { 2: 'r2_start', 3: 'r3_start', 4: 'r4_start', 5: 'r5_start', 6: 'r6_start' };
+const tut = { ready: false, room: 0, started: false, midFired: {}, goalDone: false,
+  rooms: [], doors: [], goal: null, hintEl: null, hintT: 0, root: null };
+let tutSpawn = null;
+function makeTutTex() {   // games_fps 風: ライトグレーのチェッカー＋グリッド線
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const c = cv.getContext('2d');
+  c.fillStyle = '#ccd1d7'; c.fillRect(0, 0, 256, 256);
+  c.fillStyle = '#b3b9c1'; c.fillRect(0, 0, 128, 128); c.fillRect(128, 128, 128, 128);
+  c.strokeStyle = 'rgba(92,102,116,0.45)'; c.lineWidth = 3;
+  c.strokeRect(0, 0, 256, 256);
+  c.beginPath(); c.moveTo(128, 0); c.lineTo(128, 256); c.moveTo(0, 128); c.lineTo(256, 128); c.stroke();
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function tutBoxGeo(sx, sy, sz, cx, cy, cz) {   // チェッカーが実寸16mピッチになるようUVを面ごとにスケール
+  const g = new THREE.BoxGeometry(sx, sy, sz);
+  const uv = g.attributes.uv, K = 1 / 16;
+  const face = [[sz, sy], [sz, sy], [sx, sz], [sx, sz], [sx, sy], [sx, sy]];
+  for (let i = 0; i < 24; i++) { const f = face[i >> 2]; uv.setXY(i, uv.getX(i) * f[0] * K, uv.getY(i) * f[1] * K); }
+  g.translate(cx, cy, cz);
+  return g;
+}
+function tutSolid(geoms, cx, cz, y0, y1, sx, sz) {   // 見た目＋衝突の直方体（矩形collbox）
+  geoms.push(tutBoxGeo(sx, y1 - y0, sz, cx, (y0 + y1) / 2, cz));
+  return addCollBox(cx, cz, y0, y1, sx / 2, sz / 2);
+}
+function tutWallX(geoms, x, z0, z1, y0, y1, hole) {   // X位置の壁（Z方向へ伸びる）。hole={z0,z1,y0,y1}で開口
+  if (!hole) { tutSolid(geoms, x, (z0 + z1) / 2, y0, y1, TUT_WALL, z1 - z0); return; }
+  if (hole.z0 > z0) tutSolid(geoms, x, (z0 + hole.z0) / 2, y0, y1, TUT_WALL, hole.z0 - z0);
+  if (z1 > hole.z1) tutSolid(geoms, x, (hole.z1 + z1) / 2, y0, y1, TUT_WALL, z1 - hole.z1);
+  if (hole.y0 > y0) tutSolid(geoms, x, (hole.z0 + hole.z1) / 2, y0, hole.y0, TUT_WALL, hole.z1 - hole.z0);
+  if (y1 > hole.y1) tutSolid(geoms, x, (hole.z0 + hole.z1) / 2, hole.y1, y1, TUT_WALL, hole.z1 - hole.z0);
+}
+async function buildTutorialStage() {
+  const geoms = [], emGeoms = [];
+  const totalL = TUT_ROOMS.reduce((a, r) => a + r.L, 0) + TUT_WALL * (TUT_ROOMS.length + 1);
+  let x = -totalL / 2;   // 西外壁の西端
+  const doorHole = { z0: -TUT_DOOR_W / 2, z1: TUT_DOOR_W / 2, y0: 0, y1: TUT_DOOR_H };
+  tut.root = new THREE.Group();
+  for (let i = 0; i < TUT_ROOMS.length; i++) {
+    const r = TUT_ROOMS[i], prev = TUT_ROOMS[i - 1];
+    const spanW = (prev ? Math.max(prev.W, r.W) : r.W) / 2 + TUT_WALL;
+    const spanH = (prev ? Math.max(prev.H, r.H) : r.H) + TUT_WALL;
+    tutWallX(geoms, x + TUT_WALL / 2, -spanW, spanW, 0, spanH, i === 0 ? null : doorHole);   // 西壁（i>0は前室との共有壁＋ドア穴）
+    if (i > 0) tutMakeDoor(x + TUT_WALL / 2, i - 1);
+    const xs = x + TUT_WALL;
+    tutSolid(geoms, xs + r.L / 2, -(r.W / 2 + TUT_WALL / 2), 0, r.H + TUT_WALL, r.L, TUT_WALL);   // 側壁
+    tutSolid(geoms, xs + r.L / 2, r.W / 2 + TUT_WALL / 2, 0, r.H + TUT_WALL, r.L, TUT_WALL);
+    tutSolid(geoms, xs + r.L / 2, 0, r.H, r.H + TUT_WALL, r.L + TUT_WALL * 2, r.W + TUT_WALL * 2);   // 天井
+    emGeoms.push(tutBoxGeo(Math.min(r.L * 0.55, 220), 0.6, 10, xs + r.L / 2, r.H - 0.6, 0));   // 天井灯
+    tut.rooms.push({ x0: xs, x1: xs + r.L, z0: -r.W / 2, z1: r.W / 2, H: r.H, name: r.name });
+    x += TUT_WALL + r.L;
+  }
+  tutWallX(geoms, x + TUT_WALL / 2, -TUT_ROOMS[5].W / 2 - TUT_WALL, TUT_ROOMS[5].W / 2 + TUT_WALL, 0, TUT_ROOMS[5].H + TUT_WALL, null);   // 東外壁
+  // 部屋1: 立体迷路のバッフル壁（開口の位置・高さを変えて水平/垂直/斜め移動を促す）
+  const R1 = tut.rooms[0], zA = R1.z0 + 40, zB = R1.z1 - 40;
+  tutWallX(geoms, R1.x0 + 70, R1.z0, R1.z1, 0, R1.H, { z0: R1.z0 + 40, z1: R1.z0 + 84, y0: 0, y1: 26 });      // 低い左穴
+  tutWallX(geoms, R1.x0 + 130, R1.z0, R1.z1, 0, R1.H, { z0: R1.z1 - 84, z1: R1.z1 - 40, y0: 86, y1: 120 });   // 高い右穴（斜め上昇）
+  tutWallX(geoms, R1.x0 + 190, R1.z0, R1.z1, 0, R1.H, { z0: -22, z1: 22, y0: 56, y1: 88 });                   // 中央中段
+  tutWallX(geoms, R1.x0 + 240, R1.z0, R1.z1, 0, R1.H, { z0: R1.z0 + 40, z1: R1.z0 + 84, y0: 112, y1: 142 }); // 最上段左
+  void zA; void zB;
+  // 部屋1ゴール（発光リング）
+  const goalPos = new THREE.Vector3(R1.x1 - 16, 126, R1.z0 + 62);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(7, 0.7, 10, 36),
+    new THREE.MeshBasicMaterial({ color: 0x39d7ff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+  ring.position.copy(goalPos); ring.rotation.y = Math.PI / 2;
+  const core = new THREE.Mesh(new THREE.SphereGeometry(1.6, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0x9fe9ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+  core.position.copy(goalPos);
+  tut.root.add(ring); tut.root.add(core);
+  tut.goal = { pos: goalPos, ring, core };
+  // メッシュ確定（壁=チェッカー1メッシュ／発光=1メッシュ）
+  const stage = new THREE.Mesh(mergeGeometries(geoms, false), new THREE.MeshLambertMaterial({ map: makeTutTex() }));
+  stage.matrixAutoUpdate = false;
+  tut.root.add(stage);
+  const em = new THREE.Mesh(mergeGeometries(emGeoms, false), new THREE.MeshBasicMaterial({ color: 0xe8f6ff }));
+  em.matrixAutoUpdate = false;
+  tut.root.add(em);
+  scene.add(tut.root);
+  cityRoot = tut.root;   // タイトル解錠条件（cityRoot && collBoxes.length）を満たす
+  tutSpawn = [tut.rooms[0].x0 + 24, 4, 0];
+  player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);
+  player.yaw = Math.PI / 2;   // +X（奥）を向く
+  tut.ready = true;
+  console.log('tutorial stage:', totalL.toFixed(0) + 'm x', Math.max(...TUT_ROOMS.map((r) => r.W)) + 'm, collBoxes', collBoxes.length);
+}
+function tutMakeDoor(doorX, idx) {   // 隔壁ドア（上へスライド開閉。collboxはbottom/topを連動）
+  const grp = new THREE.Group();
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(2.4, TUT_DOOR_H, TUT_DOOR_W + 0.8),
+    new THREE.MeshLambertMaterial({ color: 0x59616e }));
+  panel.position.y = TUT_DOOR_H / 2;
+  const lamp = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.8, TUT_DOOR_W + 1.0),
+    new THREE.MeshBasicMaterial({ color: 0xff5a4a }));
+  lamp.position.y = TUT_DOOR_H - 1.2;
+  grp.add(panel); grp.add(lamp);
+  grp.position.set(doorX, 0, 0);
+  tut.root.add(grp);
+  const boxIdx = addCollBox(doorX, 0, 0, TUT_DOOR_H, 1.4, TUT_DOOR_W / 2 + 0.4);
+  tut.doors.push({ mesh: grp, lamp, x: doorX, boxIdx, open: false, anim: false, t: 0 });
+}
+function setTutDoor(i, open) {
+  const d = tut.doors[i];
+  if (!d || d.open === open) return;
+  d.open = open; d.anim = true; d.t = 0;
+  playSfx('bomb_short.ogg', 0.25);
+  d.lamp.material.color.set(open ? 0x44ff88 : 0xff5a4a);
+}
+const TUT_HINTS = {
+  move: { pc: 'PC：マウスで視点移動　／　WASD・カーソルキーで移動　／　Space上昇・Shift下降', sp: 'スマホ：画面右側スワイプで視点移動　／　左側スワイプで移動　／　右下ボタンで上昇・下降' },
+  goal: { pc: '隔壁が開いた！　次の部屋へ進もう', sp: '隔壁が開いた！　次の部屋へ進もう' },
+};
+function tutHint(key) {
+  const h = TUT_HINTS[key];
+  if (!h) return;
+  if (!tut.hintEl) {
+    tut.hintEl = document.createElement('div');
+    tut.hintEl.style.cssText = 'position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:24;pointer-events:none;'
+      + 'background:rgba(8,14,30,0.72);border:1px solid rgba(120,190,255,0.55);border-radius:8px;padding:10px 22px;'
+      + 'color:#dff2ff;font:700 15px Meiryo,sans-serif;text-shadow:0 1px 3px #000;max-width:82vw;text-align:center;';
+    document.body.appendChild(tut.hintEl);
+  }
+  tut.hintEl.textContent = '＜' + (typeof h === 'string' ? h : (IS_TOUCH ? h.sp : h.pc)) + '＞';
+  tut.hintEl.style.display = '';
+  tut.hintEl.style.opacity = '1';
+  tut.hintT = 14;
+}
+function updateTutorial(dt) {
+  if (!TUTORIAL || !tut.ready) return;
+  for (const d of tut.doors) {   // ドア開閉アニメ＋collbox連動
+    if (!d.anim) continue;
+    d.t = Math.min(1, d.t + dt / 1.4);
+    const y = (d.open ? d.t : 1 - d.t) * (TUT_DOOR_H + 1.5);
+    d.mesh.position.y = y;
+    const b = collBoxes[d.boxIdx];
+    b.bottom = y; b.top = y + TUT_DOOR_H;
+    if (d.t >= 1) d.anim = false;
+  }
+  if (tut.hintEl && tut.hintT > 0) {   // ヒントのフェードアウト
+    tut.hintT -= dt;
+    if (tut.hintT <= 0) tut.hintEl.style.display = 'none';
+    else if (tut.hintT < 1) tut.hintEl.style.opacity = String(tut.hintT);
+  }
+  if (tut.goal) { tut.goal.ring.rotation.y += dt * 1.4; tut.goal.core.scale.setScalar(1 + 0.25 * Math.sin(exhaustT * 5)); }
+  if (gameMode !== 'play' && gameMode !== 'training') return;
+  if (!tut.started) { tut.started = true; tut.room = 1; queueTalk('r1_start'); tutHint('move'); }
+  const px = player.pos.x;
+  let roomIdx = -1;   // 現在の部屋（1-based）
+  for (let i = 0; i < tut.rooms.length; i++) if (px >= tut.rooms[i].x0 - TUT_WALL && px <= tut.rooms[i].x1 + TUT_WALL) { roomIdx = i; break; }
+  if (roomIdx + 1 > tut.room) {   // 入室: 背後の隔壁を閉じ、部屋開始会話＋ヒント
+    setTutDoor(roomIdx - 1, false);
+    tut.room = roomIdx + 1;
+    const talk = TUT_ROOM_TALK[tut.room];
+    if (talk) queueTalk(talk);
+  }
+  if (tut.room === 1) {   // 部屋1: 中間会話→ゴール到達で隔壁解放
+    if (!tut.midFired.r1 && px > tut.rooms[0].x0 + 150) { tut.midFired.r1 = true; queueTalk('r1_mid'); }
+    if (!tut.goalDone && player.pos.distanceTo(tut.goal.pos) < 9) {
+      tut.goalDone = true;
+      setTutDoor(0, true);
+      tut.goal.ring.material.color.set(0x54ff9a);
+      tut.goal.core.material.color.set(0xbaffd4);
+      tutHint('goal');
+    }
+  }
+}
 // ── 撃墜数（敵を倒すと太字ゴシックで一定時間表示→フェードアウト）──
 // ── ゲームループP1: モード状態機械＋ゲームパラメータ（docs/cityfly-game-plan.md §3）──
 let gameMode = 'title';   // 'title' | 'training' | 'play'（'op'/'ed' はP2で追加）
@@ -763,6 +946,7 @@ const ATTR_PTS = { jet: 3, walker: 20, spider: 35 };   // 撃破ポイント（�
 function cityDamagePct() { return cityInfo && cityInfo.count ? Math.min(100, gp.destroyed / cityInfo.count * 100) : 0; }
 function attritionPct() { return Math.min(100, gp.attritionPts); }
 function enemyAllowed(kind) {   // 敵出現のモード制御（本編の投入は events.json 駆動）
+  if (TUTORIAL) return !!ev.spawnAllow[kind];   // チュートリアル: ステージ進行が明示解禁した敵のみ
   if (kind === 'walker' && spider) return false;   // スパイダーキャリア出現中はウォーカーを出さない
   if (gameMode === 'training') return true;
   if (gameMode !== 'play') return false;   // title / op / ed 中は敵なし
@@ -777,7 +961,7 @@ function setupTitle() {
     + 'background:linear-gradient(180deg,rgba(6,10,26,0.90),rgba(24,8,34,0.86));color:#eef;';
   const btn = 'font:700 20px Meiryo,sans-serif;padding:12px 52px;border-radius:8px;border:1px solid #86f;background:#1b1f3a;color:#dde;cursor:pointer;min-width:340px;';
   titleEl.innerHTML = '<div style="font:900 64px \'Yu Gothic\',\'Arial Black\',Meiryo,sans-serif;letter-spacing:0.08em;text-shadow:0 4px 18px rgba(130,70,255,0.65),0 2px 6px #000;">City-Fly</div>'
-    + '<div style="font:14px Meiryo,sans-serif;color:#aab;margin-bottom:14px;">デッドアトモス襲来 — 吸血鬼ネイ、出撃</div>'
+    + '<div style="font:14px Meiryo,sans-serif;color:#aab;margin-bottom:14px;">' + (TUTORIAL ? '訓練プログラム — 基本操作を修得せよ' : 'デッドアトモス襲来 — 吸血鬼ネイ、出撃') + '</div>'
     + '<button id="cf-start" style="' + btn + '" disabled>準備中…</button>'
     + '<button id="cf-training" style="' + btn + '" disabled>トレーニングモード</button>';
   document.body.appendChild(titleEl);
@@ -949,7 +1133,7 @@ async function playScenario(name, after = 'play') {   // after: 'play'=本編へ
 let flowRt = null, flowNode = null, flowBattleDone = false, flowTimer = null;   // flowTimer={port,t}=ポート発火の遅延（撃破演出を見せてからED）
 async function startFlow() {
   if (!flowRt) {
-    try { flowRt = createFlow(await (await fetch('../flow/cityfly.flow.json')).json()); }
+    try { flowRt = createFlow(await (await fetch('../flow/' + (TUTORIAL ? 'tutorial' : 'cityfly') + '.flow.json')).json()); }
     catch (err) { console.warn('フロー読込失敗（本編へ直行）:', err); }
   }
   if (!flowRt) { gameMode = 'play'; return; }
@@ -992,8 +1176,8 @@ function updateFlowTimer(dt) {   // battle中のポート発火遅延（例: ウ
 async function loadGameEvents() {
   try {
     const [e, t] = await Promise.all([
-      fetch('../cityfly/events.json').then((r) => r.json()),
-      fetch('../cityfly/talks.json').then((r) => r.json()),
+      fetch('../cityfly/' + (TUTORIAL ? 'tutorial_events' : 'events') + '.json').then((r) => r.json()),
+      fetch('../cityfly/' + (TUTORIAL ? 'tutorial_talks' : 'talks') + '.json').then((r) => r.json()),
     ]);
     ev.defs = Array.isArray(e.events) ? e.events : [];
     ev.talks = t;
@@ -1535,7 +1719,9 @@ function updatePlayerDeath(dt) {
     try { player.vrm.humanoid?.resetNormalizedPose?.(); } catch { /* noop */ }
     playerHp = PLAYER_HP_MAX;
     updateHpUI(); applyDamageFx();
-    player.pos.set(0, 230, 150); player.vel.set(0, 0, 0);
+    if (TUTORIAL && tutSpawn) player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);
+    else player.pos.set(0, 230, 150);
+    player.vel.set(0, 0, 0);
     player.vrm.scene.position.copy(player.pos);
     player.vrm.scene.rotation.set(0, player.yaw + player.faceOffset, 0);
     player.oneShot = null;
@@ -1701,7 +1887,8 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, takeContainer, destroyContainer, breakCar, debugThrow,
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, setTutDoor,
+  tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
   dmgBldAt: (x, z, dmg = 1) => {   // テスト用: 最寄り建物へダメージ
     ensureBoxMap();
     let best = -1, bd = 1e9;
@@ -4264,10 +4451,11 @@ const COLL_CELL = 40;          // 空間ハッシュのセル(m)
 const collGrid = new Map();    // "cx_cz" -> [boxIndex,...]
 const collBoxes = [];          // { x, z, bottom, top, h }
 const PLAYER_R = 1.0, PLAYER_H = 1.5, LAND_EPS = 0.8;
-function addCollBox(x, z, bottom, top, h) {
-  const idx = collBoxes.length; collBoxes.push({ x, z, bottom, top, h });
+function addCollBox(x, z, bottom, top, h, hz) {   // h=X半幅, hz=Z半幅（省略時は正方形）
+  const idx = collBoxes.length; collBoxes.push({ x, z, bottom, top, h, hz: hz ?? h });
+  const hzz = hz ?? h;
   const x0 = Math.floor((x - h) / COLL_CELL), x1 = Math.floor((x + h) / COLL_CELL);
-  const z0 = Math.floor((z - h) / COLL_CELL), z1 = Math.floor((z + h) / COLL_CELL);
+  const z0 = Math.floor((z - hzz) / COLL_CELL), z1 = Math.floor((z + hzz) / COLL_CELL);
   for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) {
     const key = cx + '_' + cz; let a = collGrid.get(key); if (!a) collGrid.set(key, a = []); a.push(idx);
   }
@@ -4304,8 +4492,9 @@ function rayCityBox(ox, oy, oz, dx, dy, dz, far) {   // レイが最初に当た
         else { t1 = (b.x - b.h - ox) / dx; t2 = (b.x + b.h - ox) / dx; if (t1 > t2) { tt = t1; t1 = t2; t2 = tt; } tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2); if (tmin > tmax) continue; }
         if (Math.abs(dy) < 1e-9) { if (oy < b.bottom || oy > b.top) continue; }
         else { t1 = (b.bottom - oy) / dy; t2 = (b.top - oy) / dy; if (t1 > t2) { tt = t1; t1 = t2; t2 = tt; } tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2); if (tmin > tmax) continue; }
-        if (Math.abs(dz) < 1e-9) { if (oz < b.z - b.h || oz > b.z + b.h) continue; }
-        else { t1 = (b.z - b.h - oz) / dz; t2 = (b.z + b.h - oz) / dz; if (t1 > t2) { tt = t1; t1 = t2; t2 = tt; } tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2); if (tmin > tmax) continue; }
+        const bhz = b.hz ?? b.h;
+        if (Math.abs(dz) < 1e-9) { if (oz < b.z - bhz || oz > b.z + bhz) continue; }
+        else { t1 = (b.z - bhz - oz) / dz; t2 = (b.z + bhz - oz) / dz; if (t1 > t2) { tt = t1; t1 = t2; t2 = tt; } tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2); if (tmin > tmax) continue; }
         if (tmin < bestT) { bestT = tmin; bestBi = bi; }
       }
     }
@@ -4331,7 +4520,7 @@ function collidePlayer() {
     for (const idx of arr) {
       const b = collBoxes[idx];
       const px = player.pos.x, pz = player.pos.z, feet = player.pos.y, head = feet + PLAYER_H;
-      const hx = b.h + PLAYER_R, hz = b.h + PLAYER_R;
+      const hx = b.h + PLAYER_R, hz = (b.hz ?? b.h) + PLAYER_R;
       const dxp = px - b.x, dzp = pz - b.z;
       if (Math.abs(dxp) >= hx || Math.abs(dzp) >= hz) continue;   // XZ外
       if (head <= b.bottom || feet >= b.top) continue;            // Y外（屋根より上＝素通り）
@@ -4979,7 +5168,7 @@ function heldContact(car, cx, cy, cz, speed, m, bottomY) {   // 振り回し/転
     for (const idx of arr) {
       const b = collBoxes[idx];
       if (b.top <= b.bottom) continue;
-      if (Math.abs(cx - b.x) < b.h + r && Math.abs(cz - b.z) < b.h + r && cy > b.bottom - 2 && cy < b.top + r) {
+      if (Math.abs(cx - b.x) < b.h + r && Math.abs(cz - b.z) < (b.hz ?? b.h) + r && cy > b.bottom - 2 && cy < b.top + r) {
         ensureBoxMap();
         const bb = boxToBld[idx];
         _hcV.set(cx, cy, cz);
@@ -5236,7 +5425,7 @@ function updateThrown(dt) {
     const cx = Math.floor(p.x / COLL_CELL), cz = Math.floor(p.z / COLL_CELL);   // 建物へ衝突？
     for (let dz = -1; dz <= 1 && !impact; dz++) for (let dx = -1; dx <= 1 && !impact; dx++) {
       const arr = collGrid.get((cx + dx) + '_' + (cz + dz)); if (!arr) continue;
-      for (const idx of arr) { const b = collBoxes[idx]; if (Math.abs(p.x - b.x) < b.h && Math.abs(p.z - b.z) < b.h && p.y > b.bottom && p.y < b.top) { impact = p.clone(); hitBld = true; hitIdx = idx; break; } }
+      for (const idx of arr) { const b = collBoxes[idx]; if (Math.abs(p.x - b.x) < b.h && Math.abs(p.z - b.z) < (b.hz ?? b.h) && p.y > b.bottom && p.y < b.top) { impact = p.clone(); hitBld = true; hitIdx = idx; break; } }
     }
     if (!impact) {   // 敵へ衝突？（ウォーカー/スパイダー: 質量×速度でダメージ）
       const spd0 = car.vel.length();
@@ -7445,7 +7634,7 @@ function updateJetBombs(dt) {
       if (!arr) continue;
       for (const idx of arr) {
         const b = collBoxes[idx];
-        if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < b.h && pos.y > b.bottom && pos.y < b.top) { hit = true; break; }
+        if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < (b.hz ?? b.h) && pos.y > b.bottom && pos.y < b.top) { hit = true; break; }
       }
     }
     const gy = groundYAt(pos.x, pos.z, pos.y + 200);
@@ -7637,7 +7826,7 @@ function updateEnemyBolts(dt) {
         if (!arr) continue;
         for (const idx of arr) {
           const b = collBoxes[idx];
-          if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < b.h && pos.y > b.bottom && pos.y < b.top) { boom = true; bldHit = idx; break outer; }
+          if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < (b.hz ?? b.h) && pos.y > b.bottom && pos.y < b.top) { boom = true; bldHit = idx; break outer; }
         }
       }
     }
@@ -8250,7 +8439,7 @@ function updateSpMissiles(dt) {
         if (!arr) continue;
         for (const idx of arr) {
           const b = collBoxes[idx];
-          if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < b.h && pos.y > b.bottom && pos.y < b.top) { boom = true; break outer; }
+          if (Math.abs(pos.x - b.x) < b.h && Math.abs(pos.z - b.z) < (b.hz ?? b.h) && pos.y > b.bottom && pos.y < b.top) { boom = true; break outer; }
         }
       }
     }
@@ -8483,6 +8672,7 @@ function tick() {
   updateKillUI(dt);
   evalEvents();
   updateFlowTimer(dt);
+  updateTutorial(dt);   // チュートリアル進行（部屋クリア判定・隔壁・ヒント）
   updateTalk(dt);
   updatePortrait(dt);
   scn.update(dt);

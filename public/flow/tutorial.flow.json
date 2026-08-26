@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "id": "tutorial",
+  "title": "チュートリアル フロー",
+  "start": "n_start",
+  "nodes": [
+    { "id": "n_start",  "type": "start",  "x": 40,  "y": 180 },
+    { "id": "n_op",     "type": "story",  "x": 180, "y": 180, "data": { "story": "tutorial_op.story.json" } },
+    { "id": "n_battle", "type": "battle", "x": 380, "y": 180, "data": { "battle": { "title": "訓練（進行はステージ内クリア条件が決定）" } } },
+    { "id": "n_ed",     "type": "story",  "x": 600, "y": 180, "data": { "story": "tutorial_ed.story.json" } },
+    { "id": "n_end",    "type": "end",    "x": 800, "y": 180 }
+  ],
+  "edges": [
+    { "from": "n_start",  "fromPort": "next", "to": "n_op" },
+    { "from": "n_op",     "fromPort": "next", "to": "n_battle" },
+    { "from": "n_battle", "fromPort": "win",  "to": "n_ed" },
+    { "from": "n_battle", "fromPort": "lose", "to": "n_end" },
+    { "from": "n_ed",     "fromPort": "next", "to": "n_end" }
+  ]
+}

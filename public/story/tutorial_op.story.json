@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "tutorial_op",
+  "title": "OP：トレーニング開始",
+  "mode": "2d",
+  "actors": [],
+  "script": [
+    { "op": "bg", "color": "#0a1024" },
+    { "op": "bgm.play", "name": "BGM/crisis_2.ogg", "loop": true, "volume": 0.55 },
+    { "op": "fade.in", "duration": 700 },
+    { "op": "say", "actor": "hakase", "face": "normal", "lines": ["システム正常、トレーニング環境、オールグリーン"] },
+    { "op": "say", "actor": "hakase", "face": "normal", "lines": ["これより訓練を開始する。"] },
+    { "op": "say", "actor": "hakase", "face": "angry", "lines": ["ネイ、起きなさい！　今日のトレーニングをはじめるわよ！"] },
+    { "op": "fade.out", "duration": 700 }
+  ]
+}
