@@ -179,10 +179,7 @@ async function init() {
     }
   });
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
-  loadPlayer().then(() => {
-    if (TUTORIAL) { player.yaw = Math.PI / 2; camYaw = Math.PI / 2; }   // マント生成後に進行方向(+X)へ向き直す（布はボーン追従で正しく付いてくる）
-    return prepareBiteAssets();
-  }).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
+  loadPlayer().then(() => prepareBiteAssets()).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
   try {
     // マルチプレイはMP専用ビルド(window.MP_BUILD)か ?mp=1 のときだけ有効化（通常のCityFlyはシングル専用のまま）
     const mpAvailable = MP_ON || !!window.MP_BUILD;
@@ -228,11 +225,10 @@ function recenterToHachioji() {
 // ── マップモード（map-editor製 .map.json の地形。既定 mytown＝my-city ステージ）──
 const MAP_NAME = new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || 'mytown';   // dist はビルド時に window.DEFAULT_MAP を注入
 const TUTORIAL = MAP_NAME === 'tutorial';   // チュートリアルステージ（部屋群を実行時構築。街の生成はスキップ）
-if (TUTORIAL) {   // スポーン位置を最初に確定（布はこの位置で生成される）。
-  // 向きはマント生成が終わるまで基準yaw=πのまま（布のアンカー結合は基準向きで行い、その後に向き直す。
-  // 生成時に非基準の向きだと結合が回転ずれのまま固定され「マントが逆に付く」）
+if (TUTORIAL) {   // スポーン位置と向きを非同期処理が走る前に確定（布はこの位置・向きで生成される）
   player.pos.set(-1256, 4, 0);
-  camPitch = 0.1;
+  player.yaw = Math.PI / 2;
+  camYaw = Math.PI / 2; camPitch = 0.1;
 }
 // 性能切り分け用スイッチ。?diag=1 で GPU名/drawCall/三角数まで表示。
 //   ?nocape=1 マント無効 / ?nocity=1 建物無効 / ?nonpc=1 NPC(ken)と車を無効 / ?dpr=1 解像度を下げる
@@ -1945,11 +1941,11 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
           if (bundle.cloth.handGrabOffsets) { _flipO(bundle.cloth.handGrabOffsets.left); _flipO(bundle.cloth.handGrabOffsets.right); }
         }
         const tr0 = bundle.cloth.editorTransform ?? { tx: 0, ty: 0, tz: 0, ry: 0, scale: 1 };
-        const yawDeg = faceOff * 180 / Math.PI;   // 初期配置はモデルの向きを見ないので ry に合成が必要
+        const yawDeg = faceOff * 180 / Math.PI;   // 初期配置はモデルの向きを見ないので ry に合成が必要（プレイヤー側と同じ符号規約）
         const c0 = Math.cos(faceOff), s0 = Math.sin(faceOff);
-        const trAdj = { ...tr0, ry: (tr0.ry || 0) + yawDeg,
-          tx: (tr0.tx || 0) * c0 - (tr0.tz || 0) * s0,
-          tz: (tr0.tx || 0) * s0 + (tr0.tz || 0) * c0 };
+        const trAdj = { ...tr0, ry: (tr0.ry || 0) - yawDeg,
+          tx: (tr0.tx || 0) * c0 + (tr0.tz || 0) * s0,
+          tz: -(tr0.tx || 0) * s0 + (tr0.tz || 0) * c0 };
         g.basePos = vrm.scene.position.clone();
         g.cloth = createVRMCloth({ renderer, scene, vrm, cloth: { ...bundle.cloth, editorTransform: trAdj }, basePos: g.basePos, floorY: -1e9 });
         if (g.cloth.clothMesh) { g.cloth.clothMesh.layers.set(PORTRAIT_LAYER); g.cloth.clothMesh.frustumCulled = false; g.cloth.clothMesh.visible = false; }
@@ -2442,11 +2438,14 @@ async function loadPlayer() {
         // アンカーは初期配置から再導出されるため、向きを ry に合成しないと首元が180°破綻する
         // （Joyはspawn時 yawπ+faceOffsetπ=2π≡0で偶然無事だった）。tx/tz も同じ回転で回す。
         const tr0 = bundle.cloth.editorTransform ?? { tx: 0, ty: 0, tz: 0, ry: 0, scale: 1 };
+        // 体の向き(three.jsのY回転)へ布の初期配置を合わせる。vrm-clothのry回転(x'=xc−zs)は
+        // three.jsのY回転(x'=xc+zs)と逆向きなので ry からは「引き」、平行移動は逆回転をかける。
+        // （旧式 ry0+yawDeg は yaw=180°=街のスポーン向きでのみ偶然一致し、90°では180°ズレて「マントが前に付く」）
         const yawDeg = (player.yaw + player.faceOffset) * 180 / Math.PI;
         const c0 = Math.cos((yawDeg) * Math.PI / 180), s0 = Math.sin((yawDeg) * Math.PI / 180);
-        const trAdj = { ...tr0, ry: (tr0.ry || 0) + yawDeg,
-          tx: (tr0.tx || 0) * c0 - (tr0.tz || 0) * s0,
-          tz: (tr0.tx || 0) * s0 + (tr0.tz || 0) * c0 };
+        const trAdj = { ...tr0, ry: (tr0.ry || 0) - yawDeg,
+          tx: (tr0.tx || 0) * c0 + (tr0.tz || 0) * s0,
+          tz: -(tr0.tx || 0) * s0 + (tr0.tz || 0) * c0 };
         player.cloth = createVRMCloth({ renderer, scene, vrm, cloth: { ...bundle.cloth, editorTransform: trAdj }, basePos: player.pos, floorY: -1e9 });
       }
       catch (e) { console.warn('マント生成失敗:', e); }
