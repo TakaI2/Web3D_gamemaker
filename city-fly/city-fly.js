@@ -1488,6 +1488,15 @@ async function buildTutorialStage() {
   tutWallX(geoms, R1.x0 + 190, R1.z0, R1.z1, 0, R1.H, { z0: -22, z1: 22, y0: 56, y1: 88 });                   // 中央中段
   tutWallX(geoms, R1.x0 + 240, R1.z0, R1.z1, 0, R1.H, { z0: R1.z0 + 40, z1: R1.z0 + 84, y0: 112, y1: 142 }); // 最上段左
   void zA; void zB;
+  // パトランプ: 部屋1の各開口部そば=常時点灯（進路の目印）
+  tutBeacon(R1.x0 + 70 - 2.5, 26 + 2.5, R1.z0 + 62, { always: true });
+  tutBeacon(R1.x0 + 130 - 2.5, 120 + 2.5, R1.z1 - 62, { always: true });
+  tutBeacon(R1.x0 + 190 - 2.5, 88 + 2.5, 0, { always: true });
+  tutBeacon(R1.x0 + 240 - 2.5, 142 + 2.5, R1.z0 + 62, { always: true });
+  for (let i = 0; i < tut.doors.length; i++) {   // 各ゲート左右=クリア条件達成(ドア解放)で点灯
+    tutBeacon(tut.doors[i].x - 2.5, TUT_DOOR_H + 2, -(TUT_DOOR_W / 2 + 3.5), { door: i });
+    tutBeacon(tut.doors[i].x - 2.5, TUT_DOOR_H + 2, TUT_DOOR_W / 2 + 3.5, { door: i });
+  }
   // 部屋1ゴール（発光リング）
   const goalPos = new THREE.Vector3(R1.x1 - 16, 126, R1.z0 + 62);
   const ring = new THREE.Mesh(new THREE.TorusGeometry(7, 0.7, 10, 36),
@@ -1521,6 +1530,31 @@ async function buildTutorialStage() {
   Object.assign(JET, { n: 6, spMin: 13, spMax: 22, orbitR: 95, killZone: 140, shotCd: 1e9, shotDmg: 0, bombCd: 1e9, resp: 5 });   // 訓練用戦闘機（低速・攻撃なし＝標的ドローン）
   tut.ready = true;
   console.log('tutorial stage:', totalL.toFixed(0) + 'm x', Math.max(...TUT_ROOMS.map((r) => r.W)) + 'm, collBoxes', collBoxes.length);
+}
+// ── パトランプ: 中心=点滅する赤光点／周囲=鉛直軸まわりを回転する光のコーン ──
+const tutBeacons = [];
+const _tbCoreGeo = new THREE.SphereGeometry(0.5, 10, 8);
+const _tbCoreMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
+const _tbBeamGeo = (() => {   // 頂点を中心に置いた水平コーン（+X向き）。回転はbeam.rotation.y
+  const g = new THREE.ConeGeometry(2.4, 10, 12, 1, true);
+  g.rotateX(Math.PI);            // 頂点を-Y側へ
+  g.translate(0, 3.25, 0);       // 頂点=原点、底面=+Y
+  g.rotateZ(-Math.PI / 2);       // +Y→+X＝水平ビーム
+  return g;
+})();
+const _tbBeamMat = new THREE.MeshBasicMaterial({ color: 0xff4030, transparent: true, opacity: 0.38, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+function tutBeacon(x, y, z, opts = {}) {
+  const grp = new THREE.Group();
+  grp.position.set(x, y, z);
+  const core = new THREE.Mesh(_tbCoreGeo, _tbCoreMat);
+  grp.add(core);
+  const beam = new THREE.Mesh(_tbBeamGeo, _tbBeamMat);
+  grp.add(beam);
+  tut.root.add(grp);
+  const bc = { grp, beam, always: !!opts.always, door: opts.door ?? null, spin: 2.6 + (tutBeacons.length % 3) * 0.5, phase: tutBeacons.length * 1.3 };
+  grp.visible = !!opts.always;
+  tutBeacons.push(bc);
+  return bc;
 }
 function tutMakeDoor(doorX, idx) {   // 隔壁ドア（上へスライド開閉。collboxはbottom/topを連動）
   const grp = new THREE.Group();
@@ -1583,6 +1617,12 @@ function updateTutorial(dt) {
     const b = collBoxes[d.boxIdx];
     b.bottom = y; b.top = y + TUT_DOOR_H;
     if (d.t >= 1) d.anim = false;
+  }
+  _tbCoreMat.opacity = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(exhaustT * 7));   // 中心光点の点滅（共有材質）
+  for (const bc of tutBeacons) {   // パトランプ: ゲート連動＋光コーンの回転
+    const on = bc.always || (bc.door != null && tut.doors[bc.door] && tut.doors[bc.door].open);
+    if (bc.grp.visible !== on) bc.grp.visible = on;
+    if (on) bc.beam.rotation.y = exhaustT * bc.spin + bc.phase;
   }
   if (tut.hurtCd > 0) tut.hurtCd -= dt;
   if (tut.hintEl && tut.hintT > 0) {   // ヒントのフェードアウト
