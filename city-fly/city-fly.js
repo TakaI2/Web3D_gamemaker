@@ -2734,7 +2734,14 @@ function updatePlayerAnim(dt) {
   player.vrm.update(dt);
   const cst = player.states[player.current];
   const curFrame = cst ? Math.floor(cst.action.time * cst.fps) : 0;
-  if (player.cloth && cst) player.cloth.update(dt, curFrame);
+  if (player.cloth && cst) {
+    // マントの床当たり: 足元の支持面（接地中=足の高さ＝屋上等も追従。飛行中=直下の地形/道路）を毎フレーム供給
+    if (player.cloth.setFloorY) {
+      const fy = player.grounded ? player.pos.y : (groundYAt(player.pos.x, player.pos.z, player.pos.y) ?? -1e9);
+      player.cloth.setFloorY(fy + 0.02);
+    }
+    player.cloth.update(dt, curFrame);
+  }
   if (cst) driveStateEffects(cst, curFrame, dt);   // timeline 埋め込みFXをアニメと同期
   if (totemCast && player.current === 'totem' && !totemCast.placed && curFrame >= TOTEM_CAST_FRAME) { totemCast.placed = true; placeTotem(); }
   if (totemCast && player.current !== 'totem') totemCast = null;   // アニメが終わった/中断された
