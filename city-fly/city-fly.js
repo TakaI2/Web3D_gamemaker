@@ -1430,6 +1430,10 @@ async function buildTutorialStage() {
   tut.root.add(em);
   scene.add(tut.root);
   cityRoot = tut.root;   // タイトル解錠条件（cityRoot && collBoxes.length）を満たす
+  const tutMats = new Set();   // 破壊対象の全材質のカーブ版を事前コンパイル（初破壊のヒッチ軽減。街と同じ資産）
+  for (const md of bldModels) if (md.near) tutMats.add(md.near.material);
+  prewarmCarveMats([...tutMats]);
+  try { setStatus('ステージを最適化中…'); if (renderer.compileAsync) await renderer.compileAsync(scene, camera); } catch (e) { console.warn('compileAsync', e); }
   tutSpawn = [tut.rooms[0].x0 + 24, 4, 0];
   player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);   // 向きはマント生成後に loadPlayer 側で設定（布結合の回転ずれ防止）
   Object.assign(JET, { n: 6, spMin: 13, spMax: 22, orbitR: 95, killZone: 140, shotCd: 1e9, shotDmg: 0, bombCd: 1e9, resp: 5 });   // 訓練用戦闘機（低速・攻撃なし＝標的ドローン）
@@ -5001,16 +5005,7 @@ async function buildKenneyCity() {
   partitionBuildings();   // 初期の近/遠振り分け（compile で両パイプラインを事前生成させる）
   try { buildNeon(); } catch (e) { console.warn('neon生成失敗', e); }   // 屋上ランプ（夜用）
   try { buildWindowGlows(); } catch (e) { console.warn('窓発光生成失敗', e); }   // 窓の光漏れ（夜用）
-  // カーブ（欠損）材質のパイプラインを事前コンパイル（初弾のヒッチ軽減）
-  const _dummyGeo = new THREE.BoxGeometry(1, 1, 1);
-  for (const mkey of Object.keys(kitMat)) {
-    try {
-      const cm = makeCarveMaterial(kitMat[mkey], 0, 1);
-      const dm = new THREE.Mesh(_dummyGeo, cm.mat);
-      dm.position.set(0, -500, 0);
-      scene.add(dm);
-    } catch (e) { console.warn('carve prewarm失敗', e); }
-  }
+  prewarmCarveMats(Object.values(kitMat));   // カーブ（欠損）材質のパイプラインを事前コンパイル（初弾のヒッチ軽減）
   // WebGPUパイプラインを事前コンパイル（初回描画のハングをローディング中へ前倒し）
   try { setStatus('都市を最適化中…'); if (renderer.compileAsync) await renderer.compileAsync(scene, camera); } catch (e) { console.warn('compileAsync', e); }
   console.log('city models', bldModels.length, 'buildings', gen.instances.length, 'near/far', _lodNearCount, _lodFarCount);
@@ -5244,6 +5239,17 @@ function makeCarveMaterial(srcMat, baseY, height, flashU) {
   return { mat: nm, uCenters, uRadii, uKill, uKillOn, uBaseY, uHeight };
 }
 
+function prewarmCarveMats(mats) {   // カーブ（欠損）材質のパイプラインを事前コンパイル（初弾のヒッチ軽減。街/チュートリアル共通）
+  const g = new THREE.BoxGeometry(1, 1, 1);
+  for (const m of mats) {
+    try {
+      const cm = makeCarveMaterial(m, 0, 1);
+      const dm = new THREE.Mesh(g, cm.mat);
+      dm.position.set(0, -500, 0);
+      scene.add(dm);
+    } catch (e) { console.warn('carve prewarm失敗', e); }
+  }
+}
 function damageBuilding(instMesh, instanceId, point, dmg = DMG_SHOT, fxScale = 1, src = null) {
   const rec0 = (instMesh.userData.slots || [])[instanceId];   // LOD振り分けの slot から建物レコードへ逆引き（近/遠どちらの命中でも同じレコード）
   const md = instMesh.userData.md;
