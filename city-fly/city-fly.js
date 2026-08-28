@@ -1027,7 +1027,7 @@ function buildTutBoss() {
   const R = tut.rooms[5], cx = (R.x0 + R.x1) / 2;
   const grp = new THREE.Group();
   const coreMat = new THREE.MeshStandardMaterial({ color: 0x8f7ca8, emissive: 0x1a0f28, roughness: 0.5, metalness: 0.35, flatShading: true });   // ステージよりやや紫寄りの色
-  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(14, 0), coreMat);
+  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(28, 0), coreMat);   // 2倍サイズ
   core.frustumCulled = false;
   grp.add(core);
   grp.position.set(cx, 120, 0);
@@ -1040,12 +1040,12 @@ function buildTutBoss() {
     tut.root.add(dm);
     const proxy = { mesh: dm, hitR: 4.2, mass: 3, drone: true };
     const d = { mesh: dm, proxy, state: 'orbit', hp: DRONE_HP,
-      th: i / DRONE_N * Math.PI * 2, w: 0.7 + (i % 3) * 0.25, r: 26 + (i % 4) * 4,
+      th: i / DRONE_N * Math.PI * 2, w: 0.7 + (i % 3) * 0.25, r: 48 + (i % 4) * 6,   // 2倍コアに合わせて軌道拡大
       tilt: (i % 4) * 0.5, vel: new THREE.Vector3(), t: 0 };
     proxy.dRef = d;
     drones.push(d);
   }
-  tut.boss = { grp, core, coreMat, proxy: { mesh: grp, hitR: 17, mass: 999, boss: true, noGrab: true },
+  tut.boss = { grp, core, coreMat, proxy: { mesh: grp, hitR: 34, mass: 999, boss: true, noGrab: true },
     hp: BOSS_HP, hpMax: BOSS_HP, flash: 0, drones, state: 'roam', t: 4, atkT: 0, atkN: 0,
     moveMode: 'float', moveT: 0, vel: new THREE.Vector3(), target: new THREE.Vector3(cx, 120, 0),
     dying: 0, gone: false, droneReT: 0, bob: 0, awake: false };
@@ -1053,7 +1053,7 @@ function buildTutBoss() {
 }
 function bossBox() {   // ボスの可動域
   const R = tut.rooms[5];
-  return { x0: R.x0 + 45, x1: R.x1 - 45, z0: R.z0 + 45, z1: R.z1 - 45, y0: 35, y1: R.H - 45 };
+  return { x0: R.x0 + 60, x1: R.x1 - 60, z0: R.z0 + 60, z1: R.z1 - 60, y0: 50, y1: R.H - 55 };
 }
 function bossHit(n, point) {
   const b = tut.boss;
@@ -1114,7 +1114,7 @@ function updateTutBoss(dt) {
   if (b.dying) {   // 撃破: ゆっくり降下→接地でディソルブ消滅
     b.grp.position.y -= 9 * dt;
     b.core.rotation.y += dt * 2;
-    if (b.grp.position.y <= 15) {
+    if (b.grp.position.y <= 30) {
       b.dying += dt;
       const sc = Math.max(0.01, 1 - (b.dying - 1) / 1.6);
       b.grp.scale.setScalar(sc);
@@ -1209,7 +1209,7 @@ function updateTutBoss(dt) {
         _bsV0.copy(b.grp.position);
         _bsV1.copy(player.pos); _bsV1.y += 1;
         const dir = _bsV1.sub(_bsV0).normalize();
-        _bsV0.addScaledVector(dir, 20);
+        _bsV0.addScaledVector(dir, 36);   // 2倍コアの外から発射
         fireEnemyBolt(_bsV0, dir, { speed: 250, radius: 3.4, len: 30, color: 0xff5a8a, dmg: 16, knock: 40, bldDmg: DMG_SHOT * 2, fxScale: 2.2, range: 900 });
         playSfxAt('bomb.ogg', _bsV0, 0.7);
         if (b.atkN >= 5) { b.state = 'roam'; b.t = 5 + Math.random() * 3; }
@@ -2521,7 +2521,8 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, setTutDoor,
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; },
+  testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
   dmgBldAt: (x, z, dmg = 1) => {   // テスト用: 最寄り建物へダメージ
     ensureBoxMap();
@@ -2724,6 +2725,11 @@ function updatePlayerAnim(dt) {
         const f = Math.min(1, player.chargeT / ULT_CHARGE_TIME);
         $('gauge-fill').style.width = (f * 100) + '%';
         g.classList.toggle('full', f >= 1);
+      } else if (largeBeam.active) {   // 照射中: 貯めた分がチャージと同じ割合で減っていく
+        g.style.display = 'block';
+        const f = Math.max(0, ((largeBeam.dur || LARGE_BEAM_DUR) - largeBeam.t) / ULT_CHARGE_TIME);
+        $('gauge-fill').style.width = (f * 100) + '%';
+        g.classList.toggle('full', false);
       } else g.style.display = 'none';
     }
   }
@@ -5645,7 +5651,8 @@ function updateUltimate(dt) {
 
 function fireLargeBeam() {
   triggerOneShot('large');
-  if (player.oneShot) player.oneShot.until = LARGE_BEAM_DUR;   // 5秒間ポーズ保持しつつ照射
+  largeBeam.dur = Math.max(1.0, Math.min(player.chargeT || 0, ULT_CHARGE_TIME));   // 照射時間＝チャージした秒数（最低1秒）
+  if (player.oneShot) player.oneShot.until = largeBeam.dur;   // 照射時間ぶんポーズ保持
   largeBeam.active = true; largeBeam.t = 0; largeBeam.tickT = 0;
   if (!largeBeam.mesh) {
     const g = new THREE.CylinderGeometry(0.5, 0.5, 1, 10, 1, true);
@@ -5723,7 +5730,7 @@ function updateAttacks(dt) {
       if (rayHitSphere(_muzzle, _camDir, _vk, 0.85, LARGE_BEAM_RANGE) < Infinity) hitKenBeam(m, KEN_DMG_LARGE_TICK);
     }
   }
-  if (largeBeam.t >= LARGE_BEAM_DUR) { largeBeam.active = false; mesh.visible = false; attackAimActive = false; }
+  if (largeBeam.t >= (largeBeam.dur || LARGE_BEAM_DUR)) { largeBeam.active = false; mesh.visible = false; attackAimActive = false; }
 }
 
 function spawnBeam(from, to, impact, colorHex = 0xffb040, thick = false) {
@@ -7688,7 +7695,8 @@ function updateSunMoon(sx, sy) {
   }
 }
 function updateDayNight(dt) {
-  gameHour = (gameHour + dt * timeScale * 24 / DAY_SECONDS) % 24;
+  if (TUTORIAL) gameHour = 12;   // チュートリアルは正午固定（訓練施設が暗くならない）
+  else gameHour = (gameHour + dt * timeScale * 24 / DAY_SECONDS) % 24;
   const ang = ((gameHour - 6) / 12) * Math.PI;   // 6時=日の出 / 18時=日の入り
   const sx = Math.cos(ang), sy = Math.sin(ang);
   nightF = THREE.MathUtils.clamp(1 - (sy + 0.08) / 0.25, 0, 1);   // 0=昼 1=夜
