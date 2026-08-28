@@ -1548,7 +1548,11 @@ function tutBeacon(x, y, z, opts = {}) {
   grp.position.set(x, y, z);
   const core = new THREE.Mesh(_tbCoreGeo, _tbCoreMat);
   grp.add(core);
-  const beam = new THREE.Mesh(_tbBeamGeo, _tbBeamMat);
+  const beam = new THREE.Group();   // 中心点を挟んで向かい合う2本のコーン（グループごと回転）
+  const cone1 = new THREE.Mesh(_tbBeamGeo, _tbBeamMat);
+  const cone2 = new THREE.Mesh(_tbBeamGeo, _tbBeamMat);
+  cone2.rotation.y = Math.PI;
+  beam.add(cone1); beam.add(cone2);
   grp.add(beam);
   tut.root.add(grp);
   const bc = { grp, beam, always: !!opts.always, door: opts.door ?? null, spin: 2.6 + (tutBeacons.length % 3) * 0.5, phase: tutBeacons.length * 1.3 };
