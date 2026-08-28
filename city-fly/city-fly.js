@@ -1050,7 +1050,7 @@ function buildTutRoom4(geoms) {   // 部屋4: 念動力訓練（要塞＋砲台�
   }
   const matFort = new THREE.MeshStandardMaterial({ color: 0x6e7686, roughness: 0.85, metalness: 0.15 });
   tut.fortMd = tutBldMd(mergeGeometries(fortParts, false), matFort, 'fort', [{ x: cx2, z: 0 }], {
-    noDecay: true,
+    noDecay: true, noEnemyDmg: true,
     onCollapse: () => { tut.fortDown = true; setTutDoor(3, true); tutHint('goal'); tutRefreshObjective(); },
   });
   // 砲台×4（破壊可能。スパイダーキャノンと同じ弾）
@@ -1060,7 +1060,7 @@ function buildTutRoom4(geoms) {   // 部屋4: 念動力訓練（要塞＋砲台�
   const matTur = new THREE.MeshStandardMaterial({ color: 0x92596a, roughness: 0.7 });
   tut.turMd = tutBldMd(mergeGeometries(tg, false), matTur, 'mid', [
     { x: cx2 - 62, z: -62 }, { x: cx2 + 62, z: -62 }, { x: cx2 - 62, z: 62 }, { x: cx2 + 62, z: 62 },
-  ], { noDecay: true });
+  ], { noDecay: true, noEnemyDmg: true });
   tut.turrets = tut.turMd.recs.map((rec, i) => ({ rec, x: rec.x, z: rec.z, y: 15, cd: 2 + i * 0.9 }));
   // グラブ用プロップ（小→船級。質量で慣性/投擲ダメージが変わる）
   const crate = new THREE.BoxGeometry(4, 4, 4); crate.translate(0, 2, 0);
@@ -1103,7 +1103,7 @@ function updateTutRoom4(dt) {
   if (hp !== tut._fortHpShown) { tut._fortHpShown = hp; tutRefreshObjective(); }
 }
 // ── 部屋6ボス: 回転する正二十面体コア＋惑星のように周回する正八面体の子機 ──
-const BOSS_HP = 260, DRONE_N = 8, DRONE_HP = 3;   // HP2倍
+const BOSS_HP = 520, DRONE_N = 8, DRONE_HP = 3;
 const _bsV0 = new THREE.Vector3(), _bsV1 = new THREE.Vector3(), _bsV2 = new THREE.Vector3();
 function buildTutBoss() {
   const R = tut.rooms[5], cx = (R.x0 + R.x1) / 2;
@@ -5239,6 +5239,7 @@ const _boxHitP = new THREE.Vector3();
 function hitBoxBuilding(bi, px, py, pz, dmg, fxScale, src) {   // boxIdx→建物レコードへ直ダメージ（applyHitToBuilding 相当）
   const e = boxToBld && boxToBld[bi];
   if (!e) return;
+  if (e.md && e.md.noEnemyDmg && src !== 'player') return;   // 敵側の構造物（要塞/砲台）は敵の攻撃では傷つかない
   _boxHitP.set(px, py, pz);
   if (e.rec.carve) applyCarve(e.rec.carve, _boxHitP, dmg, fxScale, src);
   else if (!e.rec.dead) damageBuildingRec(e.rec, e.md, _boxHitP, dmg, fxScale, src);
@@ -5296,7 +5297,7 @@ function groundCollide() {
 // ── P2: Joyのショット破壊（左クリック→命中建物を単体化し、命中点中心の球状ディソルブで大きく欠損）──
 // HP制: 小さな住宅=少HP / 中層=中HP / 高層=大HP。被弾後は自壊（毎秒スローでHP減＋徐々に傾く＋上から溶け始め）
 const CARVE_MAX = 6, CARVE_RADIUS = 7, SHOOT_RANGE = 450, DIE_DUR = 1.7;
-const BLD_HP = { house: 2, mid: 5, tower: 9, target: 1, gate: 24, fort: 260 };   // 建物HP（ダメージ: 通常弾=1, 雷=2.5, 貫通ビーム=0.55/tick）
+const BLD_HP = { house: 2, mid: 5, tower: 9, target: 1, gate: 24, fort: 520 };   // 建物HP（ダメージ: 通常弾=1, 雷=2.5, 貫通ビーム=0.55/tick）
 const BLD_DECAY_TIME = 28;   // 被弾後、放置してもこの秒数で自壊しきる（基準値）
 const BLD_DECAY_ACCEL = 6;   // ダメージが進むほど自壊が加速する係数（progの2乗に掛ける）
 const BLD_MAX_TILT = 0.14;   // 自壊進行での最大傾き(rad)
