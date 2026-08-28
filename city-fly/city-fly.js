@@ -940,8 +940,21 @@ const tutProps = [];
 const _tutGlowGeo = new THREE.SphereGeometry(0.8, 10, 8);
 const _tutGlowMat = new THREE.MeshBasicMaterial({ color: 0x4ad7ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
 const _tuV0 = new THREE.Vector3(), _tuV1 = new THREE.Vector3();
-function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ（光るマーカー付き・既存の掴み/投擲/転がり物理に乗る）
-  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.25 });
+function tutPropPoints(geo) {   // 重複を除いた頂点だけのPoints用ジオメトリ
+  const pos = geo.attributes.position, seen = new Set(), out = [];
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
+    const k = px.toFixed(2) + ',' + py.toFixed(2) + ',' + pz.toFixed(2);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(px, py, pz);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+  return g;
+}
+function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ（ホログラム風: 薄い面+発光エッジ+点滅頂点。既存の掴み/投擲/転がり物理に乗る）
+  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.14, depthWrite: false });
   const mesh = new THREE.Mesh(geo, mat);
   geo.computeBoundingBox();
   const bb = geo.boundingBox;
@@ -950,10 +963,20 @@ function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ
   const glow = new THREE.Mesh(_tutGlowGeo, _tutGlowMat);
   glow.position.y = bb.max.y + 1.4;
   mesh.add(glow);
-  tut.root.add(mesh);
+  const edgeCol = new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.35);
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({ color: edgeCol, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+  mesh.add(edges);
   const size = bb.getSize(new THREE.Vector3());
+  const ptsMat = new THREE.PointsMaterial({ color: 0xeaffff, transparent: true, opacity: 1,
+    size: Math.max(0.35, Math.min(1.6, Math.max(size.x, size.y, size.z) * 0.05)), sizeAttenuation: true,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const pts = new THREE.Points(tutPropPoints(geo), ptsMat);
+  pts.frustumCulled = false;
+  mesh.add(pts);
+  tut.root.add(mesh);
   const proxy = { mesh, hitR: Math.max(size.x, size.y, size.z) * 0.5, mass, tutObj: true,
-    home: { x, y: -bb.min.y, z, ry }, tutHp0: 2 + mass, tutHp: 2 + mass };
+    home: { x, y: -bb.min.y, z, ry }, tutHp0: 2 + mass, tutHp: 2 + mass, blinkMat: ptsMat, blinkPhase: x * 0.37 };
   tutProps.push(proxy);
   return proxy;
 }
@@ -1559,6 +1582,7 @@ function updateTutorial(dt) {
     } else if (!c.dead && !c.grabbed && !c.thrown && c.mesh.children[0]) {
       c.mesh.children[0].scale.setScalar(1 + 0.35 * Math.sin(exhaustT * 4 + c.home.x));
     }
+    if (c.blinkMat && !c.dead) c.blinkMat.opacity = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(exhaustT * 5 + c.blinkPhase));   // 頂点の点滅
   }
   if (tut.room === 1) {   // 部屋1: 中間会話→ゴール到達で隔壁解放
     if (!tut.midFired.r1 && px > tut.rooms[0].x0 + 150) { tut.midFired.r1 = true; queueTalk('r1_mid'); }
