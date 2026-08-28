@@ -940,21 +940,50 @@ const tutProps = [];
 const _tutGlowGeo = new THREE.SphereGeometry(0.8, 10, 8);
 const _tutGlowMat = new THREE.MeshBasicMaterial({ color: 0x4ad7ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
 const _tuV0 = new THREE.Vector3(), _tuV1 = new THREE.Vector3();
-function tutPropPoints(geo) {   // 重複を除いた頂点だけのPoints用ジオメトリ
-  const pos = geo.attributes.position, seen = new Set(), out = [];
+const _tutEdgeGeo = new THREE.CylinderGeometry(1, 1, 1, 6);   // 単位円筒（発光エッジ用）
+const _tutVertGeo = new THREE.SphereGeometry(1, 8, 6);        // 単位球（頂点光点用）
+function tutPropDecor(mesh, geo, color, maxDim) {   // 太さのある発光エッジ＋各頂点の点滅球（本体は不透明のまま）
+  const eg = new THREE.EdgesGeometry(geo);
+  const ep = eg.attributes.position;
+  const nEdge = ep.count / 2;
+  const edgeCol = new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.45);
+  const er = Math.max(0.07, Math.min(0.35, maxDim * 0.02));
+  const eMat = new THREE.MeshBasicMaterial({ color: edgeCol, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+  const eIM = new THREE.InstancedMesh(_tutEdgeGeo, eMat, nEdge);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+  const va = new THREE.Vector3(), vb = new THREE.Vector3(), vd = new THREE.Vector3(), vs = new THREE.Vector3();
+  for (let i = 0; i < nEdge; i++) {
+    va.set(ep.getX(i * 2), ep.getY(i * 2), ep.getZ(i * 2));
+    vb.set(ep.getX(i * 2 + 1), ep.getY(i * 2 + 1), ep.getZ(i * 2 + 1));
+    const len = va.distanceTo(vb);
+    q.setFromUnitVectors(up, vd.copy(vb).sub(va).normalize());
+    m4.compose(vd.copy(va).add(vb).multiplyScalar(0.5), q, vs.set(er, len, er));
+    eIM.setMatrixAt(i, m4);
+  }
+  eIM.frustumCulled = false;
+  mesh.add(eIM);
+  const seen = new Set(), verts = [];   // 重複を除いた角頂点
+  const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
-    const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
-    const k = px.toFixed(2) + ',' + py.toFixed(2) + ',' + pz.toFixed(2);
+    const k = pos.getX(i).toFixed(2) + ',' + pos.getY(i).toFixed(2) + ',' + pos.getZ(i).toFixed(2);
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push(px, py, pz);
+    verts.push(pos.getX(i), pos.getY(i), pos.getZ(i));
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
-  return g;
+  const vr = Math.max(0.14, Math.min(0.7, maxDim * 0.035));
+  const vMat = new THREE.MeshBasicMaterial({ color: 0xeaffff, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
+  const vIM = new THREE.InstancedMesh(_tutVertGeo, vMat, verts.length / 3);
+  q.identity();
+  for (let i = 0; i < verts.length / 3; i++) {
+    m4.compose(va.set(verts[i * 3], verts[i * 3 + 1], verts[i * 3 + 2]), q, vs.set(vr, vr, vr));
+    vIM.setMatrixAt(i, m4);
+  }
+  vIM.frustumCulled = false;
+  mesh.add(vIM);
+  return vMat;   // 点滅制御用
 }
-function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ（ホログラム風: 薄い面+発光エッジ+点滅頂点。既存の掴み/投擲/転がり物理に乗る）
-  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.14, depthWrite: false });
+function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ（不透明本体+太い発光エッジ+点滅する頂点球。既存の掴み/投擲/転がり物理に乗る）
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.25 });
   const mesh = new THREE.Mesh(geo, mat);
   geo.computeBoundingBox();
   const bb = geo.boundingBox;
@@ -963,17 +992,8 @@ function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ
   const glow = new THREE.Mesh(_tutGlowGeo, _tutGlowMat);
   glow.position.y = bb.max.y + 1.4;
   mesh.add(glow);
-  const edgeCol = new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.35);
-  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo),
-    new THREE.LineBasicMaterial({ color: edgeCol, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
-  mesh.add(edges);
   const size = bb.getSize(new THREE.Vector3());
-  const ptsMat = new THREE.PointsMaterial({ color: 0xeaffff, transparent: true, opacity: 1,
-    size: Math.max(0.35, Math.min(1.6, Math.max(size.x, size.y, size.z) * 0.05)), sizeAttenuation: true,
-    blending: THREE.AdditiveBlending, depthWrite: false });
-  const pts = new THREE.Points(tutPropPoints(geo), ptsMat);
-  pts.frustumCulled = false;
-  mesh.add(pts);
+  const ptsMat = tutPropDecor(mesh, geo, color, Math.max(size.x, size.y, size.z));
   tut.root.add(mesh);
   const proxy = { mesh, hitR: Math.max(size.x, size.y, size.z) * 0.5, mass, tutObj: true,
     home: { x, y: -bb.min.y, z, ry }, tutHp0: 2 + mass, tutHp: 2 + mass, blinkMat: ptsMat, blinkPhase: x * 0.37 };
@@ -991,6 +1011,7 @@ async function buildTutContainers() {   // 市街の港と同じコンテナを�
   g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
   const cs = 6.2 / Math.max(0.01, b.max.x - b.min.x);   // 市街と同じ実寸6.2m
   g.scale(cs, cs, cs);
+  g.normalizeNormals();   // スケールで縮んだ法線を正規化（しないと照明が薄まり白っぽく見える）
   g.computeBoundingBox();
   const size = g.boundingBox.getSize(new THREE.Vector3());
   for (const ri of [2, 3, 5]) {   // 部屋3(空中戦)・部屋4(念動力)・部屋6(ボス)
