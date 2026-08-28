@@ -5869,6 +5869,7 @@ function heldContact(car, cx, cy, cz, speed, m, bottomY) {   // 振り回し/転
   if (gy != null && by <= gy + 0.3) {
     _hcV.set(cx, gy + 0.2, cz);
     spawnDebrisBurst(_hcV, 'rock', Math.min(1.2, 0.4 + m * speed / 700), Math.min(3, 0.8 + m * 0.06), (car.rollR || 2) * 0.8);
+    if (m >= 3) spawnFirePillar(_hcV, Math.min(3.6, 1.2 + m * 0.06));   // 重量物の叩きつけ=爆発音と同時に大火柱
     playSfxAt(m >= 8 ? 'bakuha.ogg' : 'bomb_short.ogg', _hcV, Math.min(1, 0.4 + m * speed / 900));
     car.fxCd = 0.25;
     return true;
@@ -6148,6 +6149,7 @@ function updateThrown(dt) {
       if (car.ship && spd > 18) shipHit(impact, 3);
       spawnDebrisBurst(impact, hitBld || hitEnemy ? 'bld' : 'rock', Math.min(1.6, 0.5 + m * spd / 500), Math.min(3, 0.8 + m * 0.06), (car.rollR || 2) * 0.7);
       spawnImpactFx(impact, Math.min(2.2, 0.6 + m * spd / 400));
+      if (!hitBld && !hitEnemy) spawnFirePillar(impact, Math.min(3.6, 1.2 + m * 0.06));   // 地面への叩きつけ=爆発音と同時に大火柱
       playSfxAt(m >= 8 ? 'bakuha.ogg' : 'bomb_short.ogg', impact, Math.min(1, 0.5 + m * spd / 800));   // 巨大なものの激突＝崩壊と同じ音
     }
     if (hitEnemy) {   // 敵に激突: 跳ね返る
