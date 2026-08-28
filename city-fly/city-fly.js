@@ -1403,6 +1403,7 @@ async function buildTutorialStage() {
     x += TUT_WALL + r.L;
   }
   tutWallX(geoms, x + TUT_WALL / 2, -TUT_ROOMS[5].W / 2 - TUT_WALL, TUT_ROOMS[5].W / 2 + TUT_WALL, 0, TUT_ROOMS[5].H + TUT_WALL, null);   // 東外壁
+  for (const r of tut.rooms) geoms.push(tutBoxGeo(r.x1 - r.x0, 0.04, r.z1 - r.z0, (r.x0 + r.x1) / 2, 0, (r.z0 + r.z1) / 2));   // 床も壁と同じチェッカー（天面+2cm=地形とZファイトしない。上空からドールが見やすい）
   // 部屋1: 立体迷路のバッフル壁（開口の位置・高さを変えて水平/垂直/斜め移動を促す）
   const R1 = tut.rooms[0], zA = R1.z0 + 40, zB = R1.z1 - 40;
   tutWallX(geoms, R1.x0 + 70, R1.z0, R1.z1, 0, R1.H, { z0: R1.z0 + 40, z1: R1.z0 + 84, y0: 0, y1: 26 });      // 低い左穴
