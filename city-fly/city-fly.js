@@ -977,8 +977,45 @@ function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ
   tut.root.add(mesh);
   const proxy = { mesh, hitR: Math.max(size.x, size.y, size.z) * 0.5, mass, tutObj: true,
     home: { x, y: -bb.min.y, z, ry }, tutHp0: 2 + mass, tutHp: 2 + mass, blinkMat: ptsMat, blinkPhase: x * 0.37 };
+  mesh.userData.car = proxy;   // レイ照準の掴みで直接ヒットできるように
   tutProps.push(proxy);
   return proxy;
+}
+async function buildTutContainers() {   // 市街の港と同じコンテナを部屋3以降へ各10個（掴める・壊せる・数秒で再出現）
+  const loader = new GLTFLoader();
+  const a = bakeModel((await loader.loadAsync(new URL('../models/waterfront_GLB%20format/cargo-container-a.glb', location.href).href)).scene);
+  const g = a.geometry.clone();
+  g.computeBoundingBox();
+  let b = g.boundingBox;
+  if ((b.max.z - b.min.z) > (b.max.x - b.min.x)) { g.rotateY(Math.PI / 2); g.computeBoundingBox(); b = g.boundingBox; }   // 長軸→X
+  g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+  const cs = 6.2 / Math.max(0.01, b.max.x - b.min.x);   // 市街と同じ実寸6.2m
+  g.scale(cs, cs, cs);
+  g.computeBoundingBox();
+  const size = g.boundingBox.getSize(new THREE.Vector3());
+  for (const ri of [2, 3, 5]) {   // 部屋3(空中戦)・部屋4(念動力)・部屋6(ボス)
+    const R = tut.rooms[ri], cx = (R.x0 + R.x1) / 2, W = R.z1 - R.z0;
+    for (let i = 0; i < 10; i++) {
+      const ang = i / 10 * Math.PI * 2 + ri * 0.7;
+      const rad = W * (0.28 + 0.08 * (i % 3));
+      let px = cx + Math.cos(ang) * rad, pz = Math.sin(ang) * rad;
+      if (tut.safety && ri === 2) {   // セーフティエリアは避ける
+        const d = Math.hypot(px - tut.safety.x, pz - tut.safety.z);
+        if (d < tut.safety.r + 12) { px = cx + Math.cos(ang) * rad * 0.55; pz = Math.sin(ang) * rad * 0.55; }
+      }
+      const mesh = new THREE.Mesh(g, a.mat);
+      mesh.position.set(px, 0, pz);
+      mesh.rotation.y = Math.sin(i * 7.3 + ri) * 3;
+      const glow = new THREE.Mesh(_tutGlowGeo, _tutGlowMat);
+      glow.position.y = size.y + 1.2;
+      mesh.add(glow);
+      tut.root.add(mesh);
+      const proxy = { mesh, hitR: 4.2, mass: 3, tutObj: true,
+        home: { x: px, y: 0, z: pz, ry: mesh.rotation.y }, tutHp0: 5, tutHp: 5 };
+      mesh.userData.car = proxy;
+      tutProps.push(proxy);
+    }
+  }
 }
 function buildTutRoom4(geoms) {   // 部屋4: 念動力訓練（要塞＋砲台＋グラブ用オブジェクト群）
   void geoms;
@@ -1457,6 +1494,7 @@ async function buildTutorialStage() {
   tut.root.add(em);
   scene.add(tut.root);
   cityRoot = tut.root;   // タイトル解錠条件（cityRoot && collBoxes.length）を満たす
+  await buildTutContainers().catch((e) => console.warn('コンテナ配置失敗', e));
   const tutMats = new Set();   // 破壊対象の全材質のカーブ版を事前コンパイル（初破壊のヒッチ軽減。街と同じ資産）
   for (const md of bldModels) if (md.near) tutMats.add(md.near.material);
   prewarmCarveMats([...tutMats]);
