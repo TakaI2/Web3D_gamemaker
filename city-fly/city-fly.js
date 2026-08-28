@@ -6131,6 +6131,13 @@ function updateGrab(dt) {
   _grabBox.setFromObject(car.mesh);   // 実AABB中心/下端で判定（回転した船体でも正確）
   _grabBox.getCenter(_rollC);
   heldContact(car, _rollC.x, _rollC.y, _rollC.z, hv.length(), m, _grabBox.min.y);   // 振り回し中もダメージ判定＋接地で破壊音
+  {   // 掴み中も転がり時と同じく地面へは埋まらない（実AABB下端を接地面で止める。AABBは計算済み＝追加コストほぼゼロ）
+    const gyH = groundYAt(mesh.position.x, mesh.position.z, mesh.position.y + 60);
+    if (gyH != null && _grabBox.min.y < gyH) {
+      mesh.position.y += gyH - _grabBox.min.y;
+      if (car.holdVel && car.holdVel.y < 0) car.holdVel.y = 0;   // 下向きの保持速度は殺す（押し付け続けない）
+    }
+  }
   const sp = car.holdSpin;
   if (sp) { mesh.rotation.x += sp.x * dt; mesh.rotation.y += sp.y * dt; mesh.rotation.z += sp.z * dt; }
   else mesh.rotation.y += dt * 2.2 / Math.sqrt(m);
