@@ -1002,6 +1002,7 @@ function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ
   return proxy;
 }
 async function buildTutContainers() {   // 市街の港と同じコンテナを部屋3以降へ各10個（掴める・壊せる・数秒で再出現）
+  // 構築方法もtakeContainerと完全に同一（未スケールのbake済みジオメトリ＋mesh.scale）＝見た目が市街と一致する
   const loader = new GLTFLoader();
   const a = bakeModel((await loader.loadAsync(new URL('../models/waterfront_GLB%20format/cargo-container-a.glb', location.href).href)).scene);
   const g = a.geometry.clone();
@@ -1009,11 +1010,8 @@ async function buildTutContainers() {   // 市街の港と同じコンテナを�
   let b = g.boundingBox;
   if ((b.max.z - b.min.z) > (b.max.x - b.min.x)) { g.rotateY(Math.PI / 2); g.computeBoundingBox(); b = g.boundingBox; }   // 長軸→X
   g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
-  const cs = 6.2 / Math.max(0.01, b.max.x - b.min.x);   // 市街と同じ実寸6.2m
-  g.scale(cs, cs, cs);
-  g.normalizeNormals();   // スケールで縮んだ法線を正規化（しないと照明が薄まり白っぽく見える）
-  g.computeBoundingBox();
-  const size = g.boundingBox.getSize(new THREE.Vector3());
+  const size0 = b.getSize(new THREE.Vector3());
+  const cs = 6.2 / Math.max(0.01, size0.x);   // 市街と同じ実寸6.2m（mesh.scaleで適用）
   for (const ri of [2, 3, 5]) {   // 部屋3(空中戦)・部屋4(念動力)・部屋6(ボス)
     const R = tut.rooms[ri], cx = (R.x0 + R.x1) / 2, W = R.z1 - R.z0;
     for (let i = 0; i < 10; i++) {
@@ -1024,14 +1022,16 @@ async function buildTutContainers() {   // 市街の港と同じコンテナを�
         const d = Math.hypot(px - tut.safety.x, pz - tut.safety.z);
         if (d < tut.safety.r + 12) { px = cx + Math.cos(ang) * rad * 0.55; pz = Math.sin(ang) * rad * 0.55; }
       }
-      const mesh = new THREE.Mesh(g, a.mat);
+      const mesh = new THREE.Mesh(g, a.material);
+      mesh.scale.setScalar(cs);
       mesh.position.set(px, 0, pz);
       mesh.rotation.y = Math.sin(i * 7.3 + ri) * 3;
       const glow = new THREE.Mesh(_tutGlowGeo, _tutGlowMat);
-      glow.position.y = size.y + 1.2;
+      glow.scale.setScalar(1 / cs);   // 親スケールを打ち消し（脈動側もglowBase相対）
+      glow.position.y = size0.y + 1.2 / cs;
       mesh.add(glow);
       tut.root.add(mesh);
-      const proxy = { mesh, hitR: 4.2, mass: 3, tutObj: true,
+      const proxy = { mesh, hitR: 4.2, mass: 3, tutObj: true, glowBase: 1 / cs,
         home: { x: px, y: 0, z: pz, ry: mesh.rotation.y }, tutHp0: 5, tutHp: 5 };
       mesh.userData.car = proxy;
       tutProps.push(proxy);
@@ -1065,13 +1065,11 @@ function buildTutRoom4(geoms) {   // 部屋4: 念動力訓練（要塞＋砲台�
   // グラブ用プロップ（小→船級。質量で慣性/投擲ダメージが変わる）
   const crate = new THREE.BoxGeometry(4, 4, 4); crate.translate(0, 2, 0);
   const block = new THREE.BoxGeometry(6.5, 3.2, 5); block.translate(0, 1.6, 0);
-  const contG = new THREE.BoxGeometry(12, 5, 5); contG.translate(0, 2.5, 0);
   const pillar = new THREE.CylinderGeometry(5, 5, 28, 12); pillar.translate(0, 14, 0);
   const beam = new THREE.BoxGeometry(55, 8, 10); beam.translate(0, 4, 0);
-  const spots = [
+  const spots = [   // コンテナ級はGLBコンテナ(buildTutContainers)に一本化したため箱プロップからは除外
     [crate, -200, -180, 1.2, 0xc9a860], [crate, -160, 200, 1.2, 0xc9a860], [crate, 150, -210, 1.2, 0xc9a860], [crate, 210, 170, 1.2, 0xc9a860],
     [block, -220, 40, 2, 0x7fa6c9], [block, 90, 225, 2, 0x7fa6c9], [block, 200, -60, 2, 0x7fa6c9],
-    [contG, -120, -215, 3, 0xc96f5a], [contG, -230, 130, 3, 0xc96f5a], [contG, 235, 90, 3, 0x5ac9a0], [contG, 120, -170, 3, 0x5ac9a0],
     [pillar, -180, -90, 12, 0x9a90c9], [pillar, 175, 205, 12, 0x9a90c9],
     [beam, -90, 235, 32, 0x8891a5], [beam, 60, -235, 32, 0x8891a5],
   ];
@@ -1378,11 +1376,9 @@ function buildTutRoom6() {   // 部屋6: ボス戦（グラブ可能な巨大オ
   const R = tut.rooms[5], cx = (R.x0 + R.x1) / 2;
   const pillar6 = new THREE.CylinderGeometry(5, 5, 28, 12); pillar6.translate(0, 14, 0);
   const beam6 = new THREE.BoxGeometry(55, 8, 10); beam6.translate(0, 4, 0);
-  const cont6 = new THREE.BoxGeometry(12, 5, 5); cont6.translate(0, 2.5, 0);
-  const spots6 = [
+  const spots6 = [   // コンテナ級はGLBコンテナに一本化
     [beam6, -240, -240, 32, 0x8891a5], [beam6, 240, 240, 32, 0x8891a5], [beam6, -240, 240, 32, 0x8891a5],
     [pillar6, 250, -230, 12, 0x9a90c9], [pillar6, -120, 260, 12, 0x9a90c9],
-    [cont6, 140, -260, 3, 0x5ac9a0], [cont6, -260, 60, 3, 0xc96f5a], [cont6, 260, 40, 3, 0xc96f5a],
   ];
   for (const [g, ox, oz, mass, color] of spots6) tutProp(g.clone(), cx + ox, oz, mass, color, Math.sin(ox * 7.13) * 3);
   buildTutBoss();
@@ -1639,7 +1635,7 @@ function updateTutorial(dt) {
         c.mesh.visible = true; c.thrown = false; c.rolling = false;
       }
     } else if (!c.dead && !c.grabbed && !c.thrown && c.mesh.children[0]) {
-      c.mesh.children[0].scale.setScalar(1 + 0.35 * Math.sin(exhaustT * 4 + c.home.x));
+      c.mesh.children[0].scale.setScalar((c.glowBase || 1) * (1 + 0.35 * Math.sin(exhaustT * 4 + c.home.x)));
     }
     if (c.blinkMat && !c.dead) c.blinkMat.opacity = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(exhaustT * 5 + c.blinkPhase));   // 頂点の点滅
   }
