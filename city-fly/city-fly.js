@@ -834,7 +834,8 @@ function tutBldMd(geo, mat, tier, insts, opts = {}) {   // 単体ジオメトリ
     _e.set(0, it.ry || 0, 0); _q.setFromEuler(_e);
     _p.set(it.x, y0 - bb.min.y * sc, it.z); _s.set(sc, sc, sc);
     _m.compose(_p, _q, _s);
-    md.recs.push({ m: _m.clone(), x: it.x, z: it.z, tier, boxIdx: addCollBox(it.x, it.z, y0, y0 + size.y * sc, size.x * sc * 0.5, size.z * sc * 0.5), dead: false, isFar: false, carve: null });
+    const hHalf = md.cubeHit ? Math.max(size.x, size.z) * sc * 0.5 : null;   // cubeHit=薄い形状でも方向によらず均一の判定
+    md.recs.push({ m: _m.clone(), x: it.x, z: it.z, tier, boxIdx: addCollBox(it.x, it.z, y0, y0 + size.y * sc, hHalf ?? size.x * sc * 0.5, hHalf ?? size.z * sc * 0.5), dead: false, isFar: false, carve: null });
   }
   tut.root.add(near); tut.root.add(far);
   bldModels.push(md);
@@ -892,16 +893,17 @@ function buildTutRoom2(geoms) {   // 部屋2: 強襲訓練（ターゲット＋�
     if (tut.targetsDown >= tut.targetsTotal) { queueTalk('r2_targets'); tutHint('charge'); }
     tutRefreshObjective();
   };
+  const TS = 1.5;   // ターゲットは1.5倍サイズ
   tutBldMd(tutHumanoidGeo(), matTarget, 'target', [
-    { x: xs + 60, z: -20, ry: -1.4 }, { x: xs + 95, z: 30, ry: 2.2 }, { x: xs + 170, z: -95, ry: 0.6 },
-    { x: xs + 230, z: 100, ry: 3.0 }, { x: xs + 300, z: -40, ry: -2.0 },
-    { x: xs + 140, z: -60, y: 46, ry: 1.0 }, { x: xs + 260, z: 55, y: 72, ry: -0.8 }, { x: xs + 200, z: 0, y: 70, ry: 0.2 },
-  ], { onCollapse: onTargetDown });
+    { x: xs + 60, z: -20, ry: -1.4, s: TS }, { x: xs + 95, z: 30, ry: 2.2, s: TS }, { x: xs + 170, z: -95, ry: 0.6, s: TS },
+    { x: xs + 230, z: 100, ry: 3.0, s: TS }, { x: xs + 300, z: -40, ry: -2.0, s: TS },
+    { x: xs + 140, z: -60, y: 46, ry: 1.0, s: TS }, { x: xs + 260, z: 55, y: 72, ry: -0.8, s: TS }, { x: xs + 200, z: 0, y: 70, ry: 0.2, s: TS },
+  ], { cubeHit: true, onCollapse: onTargetDown });   // cubeHit=薄い人型でも全方向で同じ当たり範囲
   const capGeo = new THREE.CapsuleGeometry(1.0, 1.7, 4, 12);
   tutBldMd(capGeo, matCapsule, 'target', [
-    { x: xs + 130, z: 90 }, { x: xs + 180, z: 40 }, { x: xs + 340, z: 100 }, { x: xs + 385, z: -80 },
-    { x: xs + 90, z: -100 }, { x: xs + 360, z: 40 },   // ↑後ろ2つは構造物の中に隠れている
-  ], { onCollapse: onTargetDown });
+    { x: xs + 130, z: 90, s: TS }, { x: xs + 180, z: 40, s: TS }, { x: xs + 340, z: 100, s: TS }, { x: xs + 385, z: -80, s: TS },
+    { x: xs + 90, z: -100, s: TS }, { x: xs + 360, z: 40, s: TS },   // ↑後ろ2つは構造物の中に隠れている
+  ], { cubeHit: true, onCollapse: onTargetDown });
   const structGeo = new THREE.BoxGeometry(22, 55, 22); structGeo.translate(0, 27.5, 0);
   tutBldMd(structGeo, matStruct, 'mid', [
     { x: xs + 90, z: -100 }, { x: xs + 250, z: -20 }, { x: xs + 360, z: 40 },
@@ -1339,7 +1341,7 @@ function updateTutRoom3(dt) {
     const q = j.mesh.position;
     q.x = Math.max(R.x0 + 12, Math.min(R.x1 - 12, q.x));
     q.z = Math.max(R.z0 + 12, Math.min(R.z1 - 12, q.z));
-    q.y = Math.max(12, Math.min(R.H - 14, q.y));
+    if (!j.thrown) q.y = Math.max(12, Math.min(R.H - 14, q.y));   // 撃墜され落下中はY自由（床に届かないと爆発できない）
   }
   const jk = tutJetKills();
   if (jk !== tut._jkShown || tut.rescued !== tut._rsShown) { tut._jkShown = jk; tut._rsShown = tut.rescued; tutRefreshObjective(); }   // 表示を即時更新
@@ -1430,7 +1432,7 @@ async function buildTutorialStage() {
   cityRoot = tut.root;   // タイトル解錠条件（cityRoot && collBoxes.length）を満たす
   tutSpawn = [tut.rooms[0].x0 + 24, 4, 0];
   player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);   // 向きはマント生成後に loadPlayer 側で設定（布結合の回転ずれ防止）
-  Object.assign(JET, { n: 6, spMin: 13, spMax: 22, orbitR: 95, killZone: 140, shotCd: 2.8, shotDmg: 4, bombCd: 1e9, resp: 5 });   // 訓練用戦闘機（低速・爆撃なし・低威力）
+  Object.assign(JET, { n: 6, spMin: 13, spMax: 22, orbitR: 95, killZone: 140, shotCd: 1e9, shotDmg: 0, bombCd: 1e9, resp: 5 });   // 訓練用戦闘機（低速・攻撃なし＝標的ドローン）
   tut.ready = true;
   console.log('tutorial stage:', totalL.toFixed(0) + 'm x', Math.max(...TUT_ROOMS.map((r) => r.W)) + 'm, collBoxes', collBoxes.length);
 }
