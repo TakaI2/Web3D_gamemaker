@@ -38,7 +38,8 @@ let locked = false, recentered = false;
 const KENNEY_CITY = true;   // 実道路網に Kenney 建物を手続き配置（破壊・都市ゲームの土台）
 const PLAYER_NPC = 'nei_v2.npc.json';
 const FACE_OFFSET = Math.PI;   // Joy_reborn は正面が逆焼き→180°補正
-const flight = { accel: 32, drag: 2.4, maxSpeed: 9, turn: 8 };   // TPS-Flight と同じ操作感（ホイールで増速可）
+const flight = { accel: 64, drag: 2.4, maxSpeed: 18, turn: 8 };   // 基準速度2倍（ホイールで増減可）
+const CLOTH_FEEL_MAX = 9;   // マントが感じる相対速度の上限（=旧基準速度。この速度の靡きが最も美しい）
 const cam = { dist: 4.0, height: 1.2, follow: 8, side: 0.75 };   // side=肩越しオフセット(m)。プレイヤーを画面中心よりやや左へ＝クロスヘア/エフェクトが見やすい
 const FADE = 0.18, DESCEND_SIN = 0.3;
 const STATE_DEFS = {   // 飛行アニメ状態（各 timeline→VRMA）。tps-flight と同じ
@@ -2745,6 +2746,14 @@ function updatePlayerAnim(dt) {
     if (player.cloth.setFloorY) {
       const fy = player.grounded ? player.pos.y : (groundYAt(player.pos.x, player.pos.z, player.pos.y) ?? -1e9);
       player.cloth.setFloorY(fy + 0.02);
+    }
+    // 高速飛行時: CLOTH_FEEL_MAX を超える移動分を剛体シフトで打ち消し＝マントは常に「美しい速度」の相対風しか感じない
+    if (player.cloth.addFrameShift) {
+      const sp = player.vel.length();
+      if (sp > CLOTH_FEEL_MAX) {
+        const ex = (sp - CLOTH_FEEL_MAX) / sp * dt;
+        player.cloth.addFrameShift(player.vel.x * ex, player.vel.y * ex, player.vel.z * ex);
+      }
     }
     player.cloth.update(dt, curFrame);
   }
