@@ -1022,7 +1022,7 @@ function updateTutRoom4(dt) {
   if (hp !== tut._fortHpShown) { tut._fortHpShown = hp; tutRefreshObjective(); }
 }
 // ── 部屋6ボス: 回転する正二十面体コア＋惑星のように周回する正八面体の子機 ──
-const BOSS_HP = 130, DRONE_N = 8, DRONE_HP = 3;
+const BOSS_HP = 260, DRONE_N = 8, DRONE_HP = 3;   // HP2倍
 const _bsV0 = new THREE.Vector3(), _bsV1 = new THREE.Vector3(), _bsV2 = new THREE.Vector3();
 function buildTutBoss() {
   const R = tut.rooms[5], cx = (R.x0 + R.x1) / 2;
@@ -1036,10 +1036,10 @@ function buildTutBoss() {
   const droneMat = new THREE.MeshStandardMaterial({ color: 0xb08fc0, emissive: 0x241233, roughness: 0.45, metalness: 0.3, flatShading: true });
   const drones = [];
   for (let i = 0; i < DRONE_N; i++) {
-    const dm = new THREE.Mesh(new THREE.OctahedronGeometry(3.2, 0), droneMat.clone());
+    const dm = new THREE.Mesh(new THREE.OctahedronGeometry(6.4, 0), droneMat.clone());   // 子機2倍
     dm.frustumCulled = false;
     tut.root.add(dm);
-    const proxy = { mesh: dm, hitR: 4.2, mass: 3, drone: true };
+    const proxy = { mesh: dm, hitR: 8.4, mass: 3, drone: true };
     const d = { mesh: dm, proxy, state: 'orbit', hp: DRONE_HP,
       th: i / DRONE_N * Math.PI * 2, w: 0.7 + (i % 3) * 0.25, r: 48 + (i % 4) * 6,   // 2倍コアに合わせて軌道拡大
       tilt: (i % 4) * 0.5, vel: new THREE.Vector3(), t: 0 };
@@ -1112,7 +1112,9 @@ function updateTutBoss(dt) {
   if (b.flash > 0) { b.flash = Math.max(0, b.flash - dt); }
   const fl = Math.min(1, b.flash * 4);
   b.coreMat.emissive.setRGB(0.1 + fl * 0.85, 0.06 * (1 - fl), 0.16 * (1 - fl));   // 被弾で赤フラッシュ
-  if (b.dying) {   // 撃破: ゆっくり降下→接地でディソルブ消滅
+  if (b.dying) {   // 撃破: ゆっくり降下→接地でディソルブ消滅（被弾と同じ赤で点滅しながら）
+    const bl = 0.5 + 0.5 * Math.sin(b.bob * 9);
+    b.coreMat.emissive.setRGB(0.12 + bl * 0.85, 0.05 * (1 - bl), 0.08 * (1 - bl));
     b.grp.position.y -= 9 * dt;
     b.core.rotation.y += dt * 2;
     if (b.grp.position.y <= 30) {
@@ -1275,7 +1277,7 @@ function updateTutBoss(dt) {
       d.t -= dt;
       d.mesh.position.addScaledVector(d.vel, dt);
       _bsV0.copy(player.pos); _bsV0.y += 1;
-      if (d.mesh.position.distanceTo(_bsV0) < 4.6) {
+      if (d.mesh.position.distanceTo(_bsV0) < 7.5) {   // 子機2倍に合わせた体当たり判定
         _bsV1.copy(_bsV0).sub(d.mesh.position).normalize();
         playerDamage(10, _bsV1);
         spawnImpactFx(d.mesh.position.clone(), 1);
