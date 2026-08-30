@@ -1481,8 +1481,10 @@ function updateTutRoom3(dt) {
       tutRefreshObjective();
     }
   }
+  if (!tut.killTalk && tutJetKills() >= 20) { tut.killTalk = true; queueTalk('r3_kills'); }   // 撃墜数達成
   if (!tut.aerialClear && tutJetKills() >= 20 && tut.rescued >= 5) {   // クリア: 隔壁解放＋訓練機撤収
     tut.aerialClear = true;
+    queueTalk('r3_clear');
     ev.spawnAllow.jet = false;
     for (const j of jets) { j.dead = true; j.mesh.visible = false; }
     jets.length = 0;
@@ -1775,11 +1777,24 @@ function loadProg(pct, label) {
     setTimeout(() => { if (loadBarEl) { loadBarEl.style.transition = 'opacity 0.6s'; loadBarEl.style.opacity = '0'; setTimeout(() => { loadBarEl?.remove(); loadBarEl = null; }, 700); } }, 500);
   }
 }
+let titleSleepOn = false;
+function updateTitleSleep() {   // チュートリアルのタイトル: GIF背景+眠るネイ（素材読込は裏で継続）
+  if (!TUTORIAL) return;
+  if (gameMode !== 'title') { titleSleepOn = false; return; }
+  if (!titleSleepOn && player.ready && portraitCam) {
+    titleSleepOn = true;
+    setStageBg('gif/sf-command-ui_640x360_20fps_6s.gif');
+    beginPortraitFor('nei', 'normal', '', true);
+    setGameHudVisible(false);
+  }
+  if (titleSleepOn) { try { player.vrm.expressionManager?.setValue('blink', 1); } catch { /* noop */ } }   // 目を閉じて眠る
+}
 let titleEl = null, goEl = null, paramsEl = null;
 function setupTitle() {
   titleEl = document.createElement('div');
   titleEl.style.cssText = 'position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;'
-    + 'background:linear-gradient(180deg,rgba(6,10,26,0.90),rgba(24,8,34,0.86));color:#eef;';
+    + (TUTORIAL ? 'background:linear-gradient(180deg,rgba(6,10,26,0.42),rgba(24,8,34,0.30));color:#eef;'   // 背景のGIF+眠るネイが透ける
+                : 'background:linear-gradient(180deg,rgba(6,10,26,0.90),rgba(24,8,34,0.86));color:#eef;');
   const btn = 'font:700 20px Meiryo,sans-serif;padding:12px 52px;border-radius:8px;border:1px solid #86f;background:#1b1f3a;color:#dde;cursor:pointer;min-width:340px;';
   titleEl.innerHTML = '<div style="font:900 64px \'Yu Gothic\',\'Arial Black\',Meiryo,sans-serif;letter-spacing:0.08em;text-shadow:0 4px 18px rgba(130,70,255,0.65),0 2px 6px #000;">City-Fly</div>'
     + '<div style="font:14px Meiryo,sans-serif;color:#aab;margin-bottom:14px;">' + (TUTORIAL ? '訓練プログラム — 基本操作を修得せよ' : 'デッドアトモス襲来 — 吸血鬼ネイ、出撃') + '</div>'
@@ -1787,19 +1802,25 @@ function setupTitle() {
     + '<button id="cf-training" style="' + btn + '" disabled>トレーニングモード</button>';
   document.body.appendChild(titleEl);
   const bs = titleEl.querySelector('#cf-start'), bt = titleEl.querySelector('#cf-training');
-  const iv = setInterval(() => {   // 都市生成＋プレイヤー＋会話キャストの先読みが済んだらボタン有効化
+  const iv = setInterval(() => {   // ボタン有効化（チュートリアルの本編はシナリオ素材が揃い次第＝ステージ構築はOP再生の裏で続行）
     const worldOk = cityRoot && collBoxes.length && player.ready;
-    if (worldOk) { bt.disabled = false; loadProg(96, '会話キャストを読込中…'); }   // トレーニングはキャスト不要
-    if (worldOk && guestPreloadDone) {  // 本編はOP直後に会話キャストを使うので待つ
-      bs.disabled = false; bs.textContent = 'ゲームスタート'; clearInterval(iv);
-      loadProg(100);
-    } else if (worldOk) bs.textContent = 'キャスト読込中…';
+    const castOk = player.ready && guestPreloadDone && ev.talks;
+    if (worldOk) { bt.disabled = false; loadProg(96, '会話キャストを読込中…'); }   // トレーニングはステージ必須
+    const startOk = TUTORIAL ? castOk : (worldOk && guestPreloadDone);
+    if (startOk && bs.disabled) { bs.disabled = false; bs.textContent = 'ゲームスタート'; }
+    else if (!startOk && (TUTORIAL ? player.ready : worldOk)) bs.textContent = 'キャスト読込中…';
+    if (worldOk && guestPreloadDone) { loadProg(100); if (!bs.disabled && !bt.disabled) clearInterval(iv); }
   }, 400);
   bs.addEventListener('click', () => startMode('play'));
   bt.addEventListener('click', () => startMode('training'));
 }
 function startMode(mode) {
   gameMode = mode;
+  if (TUTORIAL) {   // タイトルの眠りから覚醒（blink解除）。本編はこのままシナリオへシームレス継続
+    titleSleepOn = false;
+    try { player.vrm.expressionManager?.setValue('blink', 0); } catch { /* noop */ }
+    if (mode === 'training') { portraitStage = false; portraitOn = false; clearStageBg(); setGameHudVisible(true); }
+  }
   if (titleEl) titleEl.style.display = 'none';
   warmDamageParts(3);   // 部位溶解のONパイプラインを実描画で温め直す
   // （起動時の5秒ウォームはタイトル読込中に空費され、プレイヤーが描かれる前に終わっていた
@@ -1863,7 +1884,7 @@ let gameBgm = null;
 function updateGameBgm() {
   const want = gameMode === 'play' && !playerDead;
   if (want) {
-    if (!gameBgm) { gameBgm = new Audio(PUB_ROOT + 'BGM/Sound_Wave.ogg'); gameBgm.loop = true; gameBgm.volume = 0.45; }
+    if (!gameBgm) { gameBgm = new Audio(PUB_ROOT + 'BGM/' + (TUTORIAL ? 'zensen-he-totugekiseyo.ogg' : 'Sound_Wave.ogg')); gameBgm.loop = true; gameBgm.volume = 0.45; }
     if (gameBgm.paused) gameBgm.play().catch(() => { /* 自動再生制限 */ });
   } else if (gameBgm && !gameBgm.paused) gameBgm.pause();
 }
@@ -2800,6 +2821,7 @@ function updateFlight(dt) {
   }
   if (player.eating) { player.vel.set(0, 0, 0); return; }   // 捕食中はその場で静止
   if (gameMode === 'op' || gameMode === 'ed') { player.vel.set(0, 0, 0); return; }   // シナリオ中は移動不可
+  if (TUTORIAL && !tut.ready) { player.vel.set(0, 0, 0); return; }   // ステージ構築中（OPを早く飛ばした場合）はその場で待機
   camForwardRight();
   player.fwdY = _fwd.y;
   _move.set(0, 0, 0);
@@ -7640,6 +7662,7 @@ function eatingSound(on) {   // 吸血ループ音（3.5倍ブースト）
 }
 function startEating(m) {
   eatingSound(true);
+  if (TUTORIAL && m.mannequin === 'pneuma' && !tut.feedTalk) { tut.feedTalk = true; queueTalk('r5_feed'); }   // 吸い始めの一言（初回）
   if (m.speech) m.speech.bark('predation');
   player.eating = true; player.eatT = 0; player.eatIntroDone = false;
   player.vel.set(0, 0, 0);
@@ -9715,6 +9738,7 @@ function tick() {
   updateKillUI(dt);
   evalEvents();
   updateFlowTimer(dt);
+  updateTitleSleep();   // タイトル: 眠るネイ（チュートリアル）
   updateTutorial(dt);   // チュートリアル進行（部屋クリア判定・隔壁・ヒント）
   updateTalk(dt);
   updatePortrait(dt);

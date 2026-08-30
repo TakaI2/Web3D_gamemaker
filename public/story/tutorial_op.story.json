@@ -11,29 +11,65 @@
       "image": "gif/sf-command-ui_640x360_20fps_6s.gif"
     },
     {
+      "op": "say",
+      "actor": "hakase",
+      "face": "normal",
+      "lines": [
+        "ネイ・・・、ネイ！　起きなさい。　出番よ！"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "nei",
+      "face": "tired",
+      "lines": [
+        "ん・・・。"
+      ]
+    },
+    {
       "op": "bgm.play",
       "name": "BGM/crisis_2.ogg",
       "loop": true,
       "volume": 0.55
     },
     {
-      "op": "fade.in",
-      "duration": 700
+      "op": "say",
+      "actor": "hakase",
+      "face": "smile",
+      "lines": [
+        "よく休めたかしら？　相変わらずのお寝坊さんね！"
+      ]
     },
     {
       "op": "say",
-      "actor": "hakase",
-      "face": "normal",
+      "actor": "nei",
+      "face": "tired",
       "lines": [
-        "システム正常、トレーニング環境、オールグリーン"
+        "また、トレーニング？　昨日やったばかりなのに・・・。"
       ]
     },
     {
       "op": "say",
       "actor": "hakase",
-      "face": "normal",
+      "face": "worry",
       "lines": [
-        "これより訓練を開始する。"
+        "悪いけど、あまりゆっくりはしてられない。　急遽、実戦向けの訓練を前倒しで行う必要が出てきたの！"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "hakase",
+      "face": "worry",
+      "lines": [
+        "この街の周辺で、国際犯罪結社“デッドアトモス”の動きが活発化しているのが確認されたわ！"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "nei",
+      "face": "tired",
+      "lines": [
+        "え～、もう？　週末はゆっくりできると思ったのに・・・。"
       ]
     },
     {
@@ -41,7 +77,47 @@
       "actor": "hakase",
       "face": "angry",
       "lines": [
-        "ネイ、起きなさい！　今日のトレーニングをはじめるわよ！"
+        "いつまでも学生気分は困るわね。　市民を守るスーパーヒロインは不定休よ！"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "hakase",
+      "face": "normal",
+      "lines": [
+        "貴女は希少な力を持つサイキッカー。　戦いに身を投じるのは運命だと思って！"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "nei",
+      "face": "normal",
+      "lines": [
+        "もう・・・、やればいいんでしょ・・・？"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "hakase",
+      "face": "smile",
+      "lines": [
+        "物分かりが良いわね。　助かるわ。"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "hakase",
+      "face": "normal",
+      "lines": [
+        "既にシステムは正常、トレーニングシナリオ A-001 スタンバイ。"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "hakase",
+      "face": "normal",
+      "lines": [
+        "これより訓練を開始する。　ネイ、準備しなさい！"
       ]
     },
     {
