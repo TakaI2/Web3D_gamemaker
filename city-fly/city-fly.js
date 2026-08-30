@@ -154,16 +154,22 @@ async function init() {
   pivot = new THREE.Group(); pivot.matrixAutoUpdate = false; scene.add(pivot);
 
   recenterToHachioji();   // 固定原点で即時再中心化
+  loadProg(2, 'マップ地形を読込中…');
   groundGroup = new THREE.Group(); scene.add(groundGroup);
   // map-editor 製 .map.json の自作地形マップ（?map=<name>、既定 mytown）
   let chain = buildMapGround().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)));
+  chain = chain.then(() => loadProg(12, TUTORIAL ? 'ステージを構築中…' : '道路網を構築中…'));
   if (TUTORIAL) {
     chain = chain.then(() => buildTutorialStage());   // チュートリアル: 部屋群を実行時構築（道路/都市/森はなし）
+    chain = chain.then(() => loadProg(62, 'エフェクトを準備中…'));
   } else {
     chain = chain.then(() => loadRoads());
+    chain = chain.then(() => loadProg(25, '建物を配置中…'));
     if (KENNEY_CITY) chain = chain.then(() => buildKenneyCity());   // 実道路網に Kenney 建物を配置
+    chain = chain.then(() => loadProg(52, '公園と森を生成中…'));
     chain = chain.then(() => buildParks().catch((e) => console.warn('公園生成失敗', e)));   // 閉じスプラインの公園
     chain = chain.then(() => buildForest().catch((e) => console.warn('森生成失敗', e)));   // 空き地の森（建物確定後）
+    chain = chain.then(() => loadProg(62, 'エフェクトを準備中…'));
   }
   chain = chain.then(() => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
     try { warmEnemyMats(); } catch (e) { console.warn('敵材質ウォーム失敗:', e); }
@@ -173,6 +179,7 @@ async function init() {
     try { initUltFx(); } catch (e) { console.warn('アルティメットFX準備失敗:', e); }
     if (!NO_NPC) {   // 性能切り分け: ?nonpc=1 で住民NPCと生活エージェントを出さない
       prepareKenAssets().then((ok) => {
+        loadProg(88, 'NPCを準備中…');
         if (ok && !TUTORIAL) setKenCount(KEN_COUNT);
         else if (ok && TUTORIAL && tut.ready) tutSpawnDolls();   // タイトル中にドール生成＝マネキンのパイプラインコンパイルを先に消化
       }).catch((e) => console.warn('ken準備失敗:', e));
@@ -180,7 +187,7 @@ async function init() {
     }
   });
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
-  loadPlayer().then(() => prepareBiteAssets()).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
+  loadPlayer().then(() => { loadProg(78, 'キャラクターを準備中…'); return prepareBiteAssets(); }).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
   try {
     // マルチプレイはMP専用ビルド(window.MP_BUILD)か ?mp=1 のときだけ有効化（通常のCityFlyはシングル専用のまま）
     const mpAvailable = MP_ON || !!window.MP_BUILD;
@@ -1546,7 +1553,9 @@ async function buildTutorialStage() {
   tut.root.add(em);
   scene.add(tut.root);
   cityRoot = tut.root;   // タイトル解錠条件（cityRoot && collBoxes.length）を満たす
+  loadProg(40, 'コンテナを配置中…');
   await buildTutContainers().catch((e) => console.warn('コンテナ配置失敗', e));
+  loadProg(50, 'シェーダを最適化中…');
   const tutMats = new Set();   // 破壊対象の全材質のカーブ版を事前コンパイル（初破壊のヒッチ軽減。街と同じ資産）
   for (const md of bldModels) if (md.near) tutMats.add(md.near.material);
   prewarmCarveMats([...tutMats]);
@@ -1743,6 +1752,29 @@ function enemyAllowed(kind) {   // 敵出現のモード制御（本編の投入
   if (kind === 'jet') return true;
   return !!ev.spawnAllow[kind];   // walker/spider は events.json の投入指示で解禁
 }
+// ── ロード進捗バー（画面下部。ボタンの「準備中…」表示とは独立） ──
+let loadBarEl = null, loadFillEl = null, loadTxtEl = null, loadPct = 0;
+function loadProg(pct, label) {
+  if (loadPct >= 100) return;
+  if (!loadBarEl) {
+    loadBarEl = document.createElement('div');
+    loadBarEl.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:60;pointer-events:none;';
+    loadBarEl.innerHTML = '<div id="ld-txt" style="text-align:center;color:#bfd8ff;font:700 13px Meiryo,sans-serif;text-shadow:0 1px 3px #000;margin-bottom:4px;"></div>'
+      + '<div style="height:12px;background:rgba(10,16,36,0.85);border-top:1px solid rgba(130,180,255,0.4);">'
+      + '<div id="ld-fill" style="height:100%;width:0%;background:linear-gradient(90deg,#3a7bd5,#7fd0ff);transition:width 0.45s ease;box-shadow:0 0 10px rgba(110,190,255,0.8);"></div></div>';
+    document.body.appendChild(loadBarEl);
+    loadFillEl = loadBarEl.querySelector('#ld-fill');
+    loadTxtEl = loadBarEl.querySelector('#ld-txt');
+  }
+  loadPct = Math.max(loadPct, pct);
+  loadFillEl.style.width = Math.min(100, loadPct) + '%';
+  if (label) loadTxtEl.textContent = label + '　' + Math.min(100, Math.round(loadPct)) + '%';
+  else loadTxtEl.textContent = Math.min(100, Math.round(loadPct)) + '%';
+  if (loadPct >= 100) {
+    loadTxtEl.textContent = '準備完了';
+    setTimeout(() => { if (loadBarEl) { loadBarEl.style.transition = 'opacity 0.6s'; loadBarEl.style.opacity = '0'; setTimeout(() => { loadBarEl?.remove(); loadBarEl = null; }, 700); } }, 500);
+  }
+}
 let titleEl = null, goEl = null, paramsEl = null;
 function setupTitle() {
   titleEl = document.createElement('div');
@@ -1757,9 +1789,10 @@ function setupTitle() {
   const bs = titleEl.querySelector('#cf-start'), bt = titleEl.querySelector('#cf-training');
   const iv = setInterval(() => {   // 都市生成＋プレイヤー＋会話キャストの先読みが済んだらボタン有効化
     const worldOk = cityRoot && collBoxes.length && player.ready;
-    if (worldOk) bt.disabled = false;   // トレーニングはキャスト不要
+    if (worldOk) { bt.disabled = false; loadProg(96, '会話キャストを読込中…'); }   // トレーニングはキャスト不要
     if (worldOk && guestPreloadDone) {  // 本編はOP直後に会話キャストを使うので待つ
       bs.disabled = false; bs.textContent = 'ゲームスタート'; clearInterval(iv);
+      loadProg(100);
     } else if (worldOk) bs.textContent = 'キャスト読込中…';
   }, 400);
   bs.addEventListener('click', () => startMode('play'));
@@ -5190,6 +5223,7 @@ async function buildKenneyCity() {
   try { buildWindowGlows(); } catch (e) { console.warn('窓発光生成失敗', e); }   // 窓の光漏れ（夜用）
   prewarmCarveMats(Object.values(kitMat));   // カーブ（欠損）材質のパイプラインを事前コンパイル（初弾のヒッチ軽減）
   // WebGPUパイプラインを事前コンパイル（初回描画のハングをローディング中へ前倒し）
+  loadProg(56, 'シェーダを最適化中…');
   try { setStatus('都市を最適化中…'); if (renderer.compileAsync) await renderer.compileAsync(scene, camera); } catch (e) { console.warn('compileAsync', e); }
   console.log('city models', bldModels.length, 'buildings', gen.instances.length, 'near/far', _lodNearCount, _lodFarCount);
 }
