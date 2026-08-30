@@ -924,8 +924,8 @@ function buildTutRoom3(geoms) {   // 部屋3: 空中戦訓練（下層に破壊�
     { x: xs + 110, z: -140 }, { x: xs + 190, z: 110 }, { x: xs + 300, z: -60 },
     { x: xs + 370, z: 170 }, { x: xs + 420, z: -170 }, { x: xs + 250, z: -220 },
   ]);
-  // セーフティエリア（光の柱＋地面リング）
-  const sx = R.x1 - 90, sz = 120, srad = 16;
+  // セーフティエリア（光の柱＋地面リング）: ステージ中央
+  const sx = (R.x0 + R.x1) / 2, sz = 0, srad = 16;
   const ringG = new THREE.TorusGeometry(srad, 0.9, 10, 40); ringG.rotateX(Math.PI / 2);
   const ring = new THREE.Mesh(ringG, new THREE.MeshBasicMaterial({ color: 0x58ffb0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
   ring.position.set(sx, 1.2, sz);
@@ -1126,7 +1126,7 @@ function buildTutBoss() {
     drones.push(d);
   }
   tut.boss = { grp, core, coreMat, proxy: { mesh: grp, hitR: 34, mass: 999, boss: true, noGrab: true },
-    hp: BOSS_HP, hpMax: BOSS_HP, flash: 0, drones, state: 'roam', t: 4, atkT: 0, atkN: 0,
+    hp: BOSS_HP, hpMax: BOSS_HP, flash: 0, drones, state: 'roam', t: 2, atkT: 0, atkN: 0,
     moveMode: 'float', moveT: 0, vel: new THREE.Vector3(), target: new THREE.Vector3(cx, 120, 0),
     dying: 0, gone: false, droneReT: 0, bob: 0, awake: false };
   for (const d of drones) droneOrbitPos(tut.boss, d, d.mesh.position);   // 初期位置=軌道上
@@ -1204,6 +1204,7 @@ function updateTutBoss(dt) {
       if (sc <= 0.02) {
         b.gone = true;
         b.grp.visible = false;
+        playSfx('Short_Accent17-1_Low_.ogg', 0.95);   // ミッションコンプリート
         setTutDoor(4, true);   // 念のため（既に開いている）
         tutRefreshObjective();
         if (flowRt && flowNode && flowNode.type === 'battle' && !flowTimer) { ev.lastPort = 'win'; flowTimer = { port: 'win', t: 5 }; }   // 本編フロー: 勝利ED
@@ -1268,7 +1269,7 @@ function updateTutBoss(dt) {
         playSfxAt('beam.ogg', _bsV0, 0.45);
       }
     }
-    if (b.t <= 0) { b.state = 'roam'; b.t = 4 + Math.random() * 3; }
+    if (b.t <= 0) { b.state = 'roam'; b.t = 2 + Math.random() * 1.5; }
   } else if (b.state === 'launch') {   // 子機を飛ばして体当たり
     const alive = b.drones.filter((d) => d.state === 'orbit');
     for (let k = 0; k < Math.min(3, alive.length); k++) {
@@ -1279,7 +1280,7 @@ function updateTutBoss(dt) {
       d.vel.copy(_bsV0).sub(d.mesh.position).normalize().multiplyScalar(52);
     }
     playSfxAt('beam.ogg', b.grp.position, 0.6);
-    b.state = 'roam'; b.t = 5 + Math.random() * 3;
+    b.state = 'roam'; b.t = 2.5 + Math.random() * 1.5;
   } else if (b.state === 'bigBeam') {   // 前兆（白熱）→本体から高速極大ビーム連射
     b.tele -= dt;
     b.coreMat.emissive.setRGB(0.9 - b.tele * 0.5, 0.85 - b.tele * 0.5, 1.0 - b.tele * 0.5);
@@ -1294,17 +1295,21 @@ function updateTutBoss(dt) {
         _bsV0.addScaledVector(dir, 36);   // 2倍コアの外から発射
         fireEnemyBolt(_bsV0, dir, { speed: 250, radius: 3.4, len: 30, color: 0xff5a8a, dmg: 16, knock: 40, bldDmg: DMG_SHOT * 2, fxScale: 2.2, range: 900 });
         playSfxAt('bomb.ogg', _bsV0, 0.7);
-        if (b.atkN >= 5) { b.state = 'roam'; b.t = 5 + Math.random() * 3; }
+        if (b.atkN >= 5) { b.state = 'roam'; b.t = 2.5 + Math.random() * 1.5; }
       }
     }
   } else if (b.state === 'jets') {   // 訓練用戦闘機を10機射出
     JET.n = 10;
     ev.spawnAllow.jet = true;
-    b.state = 'roam'; b.t = 8 + Math.random() * 3;
+    b.state = 'roam'; b.t = 4 + Math.random() * 1.5;
     b.jetsOut = true;
   }
-  if (b.jetsOut && jets.length) {   // 射出直後: コア位置から散開させる
-    for (const j of jets) { j.mesh.position.copy(b.grp.position); j.mesh.position.x += (Math.random() - 0.5) * 20; j.mesh.position.y += (Math.random() - 0.5) * 10; j.mesh.position.z += (Math.random() - 0.5) * 20; }
+  if (b.jetsOut && jets.length) {   // 射出直後: コア位置から散開させる（こちらは攻撃あり）
+    for (const j of jets) {
+      j.mesh.position.copy(b.grp.position);
+      j.mesh.position.x += (Math.random() - 0.5) * 20; j.mesh.position.y += (Math.random() - 0.5) * 10; j.mesh.position.z += (Math.random() - 0.5) * 20;
+      j.shotCdOvr = 2.6; j.shotDmgOvr = 6;   // ボス射出機は撃ってくる
+    }
     b.jetsOut = false;
     ev.spawnAllow.jet = false;   // 補充はしない
   }
@@ -1428,18 +1433,34 @@ function updateTutRoom3(dt) {
   const sa = tut.safety;
   sa.ring.rotation.z += dt * 0.8;
   sa.pillar.material.opacity = 0.09 + 0.04 * Math.sin(exhaustT * 2.2);
-  for (const m of kens) {   // 掴んで運んだドールがエリア内→救出
-    if (m.mannequin !== 'dummy' || m.rescued || m._remove || !m.wasGrabbed) continue;
+  for (const m of kens) {   // 掴んで運んだドールがエリア内→救出（トーテムと同じ旋回吸い込みで消える）
+    if (m.mannequin !== 'dummy' || m._remove) continue;
+    if (m.suck) {   // 吸い込み演出中
+      const sk = m.suck;
+      sk.t += dt; sk.ang += dt * TOTEM_SPIN;
+      sk.r += (1.2 - sk.r) * Math.min(1, dt * 1.6);
+      m.vrm.scene.position.set(sa.x + Math.cos(sk.ang) * sk.r, sk.t * 2.4, sa.z + Math.sin(sk.ang) * sk.r);
+      m.vrm.scene.rotation.y += dt * 6;
+      m.vrm.scene.scale.setScalar(Math.max(0.05, 1 - sk.t / TOTEM_CONSUME));
+      m.pos.copy(m.vrm.scene.position);
+      if (sk.t >= TOTEM_CONSUME) {
+        spawnImpactFx(m.vrm.scene.position.clone(), 1);
+        m.vrm.scene.visible = false;
+        m._remove = true;
+        m.suck = null;
+      }
+      continue;
+    }
+    if (m.rescued || !m.wasGrabbed) continue;
     kenCenter(m, _kQ);
     if (Math.hypot(_kQ.x - sa.x, _kQ.z - sa.z) < sa.r) {
       m.rescued = true;
       tut.rescued++;
       m.grabbed = false;
       if (player.prey === m) player.prey = null;
-      spawnImpactFx(_kQ.clone(), 1);
+      if (m.ragdoll.active) setRagdollActive(m.ragdoll, false);
+      m.suck = { t: 0, ang: Math.atan2(_kQ.z - sa.z, _kQ.x - sa.x), r: Math.max(2, Math.hypot(_kQ.x - sa.x, _kQ.z - sa.z)) };
       playSfx('se1.ogg', 0.5);
-      m.vrm.scene.visible = false;
-      m._remove = true;
       if (tut.rescued === 1) queueTalk('r3_mid');
       if (tut.rescued < 5) {   // 補充
         const spot = TUT_DOLL_SPOTS[(Math.random() * TUT_DOLL_SPOTS.length) | 0];
@@ -1578,7 +1599,8 @@ function setTutDoor(i, open) {
   const d = tut.doors[i];
   if (!d || d.open === open) return;
   d.open = open; d.anim = true; d.t = 0;
-  playSfx('bomb_short.ogg', 0.25);
+  if (open) playSfx('Short_Accent17-1_Low_.ogg', 0.9);   // クリア条件達成のアクセント音
+  else playSfx('bomb_short.ogg', 0.25);
   d.lamp.material.color.set(open ? 0x44ff88 : 0xff5a4a);
 }
 const TUT_HINTS = {
@@ -2654,7 +2676,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; },
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating,
   testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
   dmgBldAt: (x, z, dmg = 1) => {   // テスト用: 最寄り建物へダメージ
@@ -4904,9 +4926,10 @@ function setupControls() {
   cv.addEventListener('click', () => { if (!locked && !agentEd.open) cv.requestPointerLock(); });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());   // 右クリックメニュー抑止
   cv.addEventListener('mousedown', (e) => {
-    if (!locked || player.eating) return;   // 捕食中は入力ロック
-    if (e.button === 0) { player.charging = true; player.chargeT = 0; }   // タップ=ビーム / 長押し=チャージ(空中)・トーテム(接地)
-    else if (e.button === 2) grabTarget();                                 // 掴む（ken優先→車）
+    if (!locked) return;
+    if (player.eating) { if (e.button === 0) cancelEating(); return; }   // 吸血中は左クリックで中断（他ボタンは入力ロック）
+    if (e.button === 0) { player.charging = true; player.chargeT = 0; }  // タップ=ビーム / 長押し=チャージ(空中)・トーテム(接地)
+    else if (e.button === 2) grabTarget();                               // 掴む（ken優先→車）
   });
   window.addEventListener('mouseup', (e) => {
     if (e.button === 0) {
@@ -5792,7 +5815,16 @@ function updateUltimate(dt) {
   }
 }
 
+let lgBeamSnd = null;
+function largeBeamSound(on) {   // 照射中のレーザーループ音
+  if (on) {
+    if (!lgBeamSnd) { lgBeamSnd = new Audio('../sound/' + encodeURIComponent('銃火器・レーザーガン06.ogg')); lgBeamSnd.loop = true; lgBeamSnd.volume = 0.65; }
+    lgBeamSnd.currentTime = 0;
+    lgBeamSnd.play().catch(() => { /* 自動再生制限 */ });
+  } else if (lgBeamSnd && !lgBeamSnd.paused) lgBeamSnd.pause();
+}
 function fireLargeBeam() {
+  largeBeamSound(true);
   triggerOneShot('large');
   largeBeam.dur = Math.max(1.0, Math.min(player.chargeT || 0, ULT_CHARGE_TIME));   // 照射時間＝チャージした秒数（最低1秒）
   if (player.oneShot) player.oneShot.until = largeBeam.dur;   // 照射時間ぶんポーズ保持
@@ -5873,7 +5905,7 @@ function updateAttacks(dt) {
       if (rayHitSphere(_muzzle, _camDir, _vk, 0.85, LARGE_BEAM_RANGE) < Infinity) hitKenBeam(m, KEN_DMG_LARGE_TICK);
     }
   }
-  if (largeBeam.t >= (largeBeam.dur || LARGE_BEAM_DUR)) { largeBeam.active = false; mesh.visible = false; attackAimActive = false; }
+  if (largeBeam.t >= (largeBeam.dur || LARGE_BEAM_DUR)) { largeBeam.active = false; mesh.visible = false; attackAimActive = false; largeBeamSound(false); }
 }
 
 function spawnBeam(from, to, impact, colorHex = 0xffb040, thick = false) {
@@ -6321,7 +6353,7 @@ function updateThrown(dt) {
 
 function breakCar(car, point) {
   spawnBreakFx(point);
-  playSfxAt(car.trainCar ? 'bakuha.ogg' : 'bomb.ogg', point, car.trainCar ? 1.0 : 0.85);   // 破壊音（ビーム撃破と同じ）
+  playSfxAt(car.trainCar ? 'bakuha.ogg' : 'bomb_short.ogg', point, car.trainCar ? 1.0 : 0.85);   // 破壊音
   if (car.trainCar) {   // 列車車両: 当たった車両は爆散、残りは脱線して落下
     addWanted(1.0, point);
     spawnImpactFx(point, 1.8);
@@ -7039,11 +7071,11 @@ function updateKenAgentFollow(m, dt) {
   m.pos.y = groundYAt(m.pos.x, m.pos.z, m.pos.y);
   m.vrm.scene.position.copy(m.pos);
   faceKenMove(m, dt);
-  if (m.action) m.action.timeScale = Math.max(0.4, Math.min(2.2, Math.hypot(m.vel.x, m.vel.z) / KEN_WALK_SPEED));
+  if (m.action) m.action.timeScale = Math.max(0.4, Math.min(2.2, Math.hypot(m.vel.x, m.vel.z) / 2.6));   // 走りアニメの natural speed 基準
 }
 
 // ── Phase 4: 地上NPC ken（tps-flight から移植・DEM地形対応）＋捕食 ──
-const KEN_COUNT = 6, KEN_WALK_VRMA = 'Catwalk_Walk_Forward.vrma';   // プール=通勤者の実体化にも使う
+const KEN_COUNT = 6, KEN_WALK_VRMA = 'HumanM@Run01_Forward.vrma';   // プール=通勤者の実体化にも使う（走りアニメ）
 const KEN_WALK_SPEED = 1.6, KEN_RUN_SPEED = 4.4, KEN_FLEE_RADIUS = 9, KEN_STEER_TAU = 0.45;
 const KEN_MAX_HP = 100, KEN_RECOVER_DELAY = 2.5, KEN_RAGDOLL_IMPULSE = 0.3, KEN_GRAB_RANGE = 45;
 const KEN_DISSOLVE_DURATION = 1.8, KEN_DISSOLVE_LINGER = 1.4;
@@ -7421,7 +7453,7 @@ function updateKenGround(m, dt) {   // 地形上を逃走/うろつき
   faceKenMove(m, dt);
   if (m.action) {
     const sp = Math.hypot(m.vel.x, m.vel.z);
-    m.action.timeScale = Math.max(0.4, Math.min(2.2, sp / KEN_WALK_SPEED));
+    m.action.timeScale = Math.max(0.4, Math.min(2.2, sp / 2.6));   // 走りアニメの natural speed 基準
   }
 }
 function faceKenMove(m, dt) {
@@ -7442,6 +7474,7 @@ function updateKens(dt) {
 }
 function updateOneKen(m, dt) {
   updateHpBar(m);
+  if (m.suck) return;   // セーフティエリア吸い込み演出中（updateTutRoom3が駆動）
   if (m.eating) { updateEatingVictim(m, dt); return; }
   if (m.dissolving) { updateKenDissolve(m, dt); return; }
   if (m.tornado) { updateKenTornado(m, dt); return; }
@@ -7534,7 +7567,16 @@ function startVictimAnim(m) {
     m.victimAction = act;
   } catch (e) { console.warn('victim anim 生成失敗:', e); }
 }
+let eatSnd = null;
+function eatingSound(on) {
+  if (on) {
+    if (!eatSnd) { eatSnd = new Audio('../sound/chuchu1.ogg'); eatSnd.loop = true; eatSnd.volume = 0.75; }
+    eatSnd.currentTime = 0;
+    eatSnd.play().catch(() => { /* 自動再生制限 */ });
+  } else if (eatSnd && !eatSnd.paused) eatSnd.pause();
+}
 function startEating(m) {
+  eatingSound(true);
   if (m.speech) m.speech.bark('predation');
   player.eating = true; player.eatT = 0; player.eatIntroDone = false;
   player.vel.set(0, 0, 0);
@@ -7671,6 +7713,7 @@ function updatePlayerEating(dt) {
 function finishEating() {
   const m = player.prey;
   player.eating = false; player.eatT = 0; player.prey = null;
+  eatingSound(false);
   if (bite.sound) { try { bite.sound.pause(); } catch { /* noop */ } }
   if (m) {
     m.eating = false;
@@ -7687,6 +7730,25 @@ function finishEating() {
   if (idle) {
     idle.action.reset(); idle.action.setEffectiveWeight(1); idle.action.enabled = true; idle.action.play();
     if (bite.feedAction) bite.feedAction.crossFadeTo(idle.action, bite.cfg.align.blendOut ?? 0.2, false);
+    player.current = 'idle';
+    if (player.cloth) player.cloth.setTimeline(idle.timeline);
+  }
+}
+function cancelEating() {   // 吸血の中断（左クリック）: 対象は溶かさず解放して起き上がらせる
+  const m = player.prey;
+  player.eating = false; player.eatT = 0; player.prey = null;
+  eatingSound(false);
+  if (bite.sound) { try { bite.sound.pause(); } catch { /* noop */ } }
+  if (m) {
+    m.eating = false;
+    m.eatBlend = 0;
+    m.pos.copy(m.vrm.scene.position);
+    m.recoverTimer = KEN_RECOVER_DELAY;
+  }
+  const idle = player.states.idle;
+  if (idle) {
+    idle.action.reset(); idle.action.setEffectiveWeight(1); idle.action.enabled = true; idle.action.play();
+    if (bite.feedAction) bite.feedAction.crossFadeTo(idle.action, 0.2, false);
     player.current = 'idle';
     if (player.cloth) player.cloth.setTimeline(idle.timeline);
   }
@@ -8521,7 +8583,7 @@ function jetFireShot(jet) {   // 正面ショット: 筒形ポリゴンのビー
   spawnBeam(from.clone(), end, minT !== Infinity, 0xc46bff, true);   // 紫の筒ビーム
   playSfxAt('beam.ogg', jet.mesh.position, 0.35);
   if (minT === Infinity) return;
-  if (minT === plT) { playerDamage(JET.shotDmg, dir); spawnImpactFx(end, 0.8); }
+  if (minT === plT) { playerDamage(jet.shotDmgOvr ?? JET.shotDmg, dir); spawnImpactFx(end, 0.8); }
   else if (bh) hitBoxBuilding(bh.bi, end.x, end.y, end.z, 0.5);   // 外れて建物に当たった分は軽微
 }
 const _bombGlowGeo = new THREE.SphereGeometry(0.3, 8, 6);
@@ -8673,7 +8735,7 @@ function updateJets(dt) {
       _jV4b.y = Math.max(player.pos.y + 4, groundYAt(p.x, p.z, p.y + 300) + 18);
       _jV3.copy(jet.flyVel).normalize();
       const align = _jV3.dot(_jV2.subVectors(player.pos, p).normalize());
-      if (jet.shotT <= 0 && align > 0.86 && pd < JET.shotRange) { jet.shotT = JET.shotCd + Math.random() * 0.8; jetFireShot(jet); }
+      if (jet.shotT <= 0 && align > 0.86 && pd < JET.shotRange) { jet.shotT = (jet.shotCdOvr ?? JET.shotCd) + Math.random() * 0.8; jetFireShot(jet); }
     } else if (jet.bombT <= 0 && p.y > groundYAt(p.x, p.z, p.y + 300) + 25) {   // 外: 町へ爆撃
       jet.bombT = JET.bombCd + Math.random() * 3;
       jetDropBomb(jet);
