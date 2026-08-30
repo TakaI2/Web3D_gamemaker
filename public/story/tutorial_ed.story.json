@@ -5,12 +5,48 @@
   "mode": "2d",
   "actors": [],
   "script": [
-    { "op": "bg", "color": "#0a1024" },
-    { "op": "bgm.play", "name": "BGM/crisis_2.ogg", "loop": true, "volume": 0.55 },
-    { "op": "fade.in", "duration": 700 },
-    { "op": "say", "actor": "hakase", "face": "smile", "lines": ["お疲れ様、ネイ！　なかなか良かったわよ！"] },
-    { "op": "say", "actor": "hakase", "face": "normal", "lines": ["いつ、デッドアトモスが攻めてくるかわからない。　これからも訓練を怠らないようにね。"] },
-    { "op": "say", "actor": "nei", "face": "tired", "lines": ["いたた・・・、いつまでこんなこと続くんだろう。"] },
-    { "op": "fade.out", "duration": 700 }
+    {
+      "op": "bg",
+      "color": "#0a1024",
+      "image": "gif/sf-command-ui_640x360_20fps_6s.gif"
+    },
+    {
+      "op": "bgm.play",
+      "name": "BGM/crisis_2.ogg",
+      "loop": true,
+      "volume": 0.55
+    },
+    {
+      "op": "fade.in",
+      "duration": 700
+    },
+    {
+      "op": "say",
+      "actor": "hakase",
+      "face": "smile",
+      "lines": [
+        "お疲れ様、ネイ！　なかなか良かったわよ！"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "hakase",
+      "face": "normal",
+      "lines": [
+        "いつ、デッドアトモスが攻めてくるかわからない。　これからも訓練を怠らないようにね。"
+      ]
+    },
+    {
+      "op": "say",
+      "actor": "nei",
+      "face": "tired",
+      "lines": [
+        "いたた・・・、いつまでこんなこと続くんだろう。"
+      ]
+    },
+    {
+      "op": "fade.out",
+      "duration": 700
+    }
   ]
 }

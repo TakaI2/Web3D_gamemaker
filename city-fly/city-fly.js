@@ -1640,11 +1640,16 @@ function updateTutorial(dt) {
     if (tut.hintEl) tut.hintEl.style.display = 'none';
     return;
   }
-  if (!tut.started) {
+  // 本編モードではOPシナリオが終わって戦闘ノードに入るまで開始しない
+  // （startFlowのfetch待ちの数フレームはgameMode='play'のため、ここで started が先行発火して
+  //   ステージ内会話がシナリオ中に消化されてしまっていた）
+  const tutCanStart = gameMode === 'training' || (flowNode && flowNode.type === 'battle') || (gameMode === 'play' && flowFallback);
+  if (!tut.started && tutCanStart) {
     tut.started = true; tut.room = 1;
     queueTalk('r1_start'); tutHint('move'); tutRefreshObjective();
     if (!tut.dollsSpawned && kenAssets.ready) tutSpawnDolls();   // ドールは開始直後に先読み生成（部屋3入室時のVRMロードヒッチを避ける）
   } else if (!tut.dollsSpawned && kenAssets.ready) tutSpawnDolls();
+  if (!tut.started) return;
   const px = player.pos.x;
   let roomIdx = -1;   // 現在の部屋（1-based）
   for (let i = 0; i < tut.rooms.length; i++) if (px >= tut.rooms[i].x0 - TUT_WALL && px <= tut.rooms[i].x1 + TUT_WALL) { roomIdx = i; break; }
@@ -1887,13 +1892,13 @@ async function playScenario(name, after = 'play') {   // after: 'play'=本編へ
   scn.play(story, { onEnd: () => { if (after === 'title') location.reload(); else gameMode = 'play'; } });
 }
 // ── フロー統合（public/flow/cityfly.flow.json。start→story(OP)→battle→win/bad/lose→story(ED)→end）──
-let flowRt = null, flowNode = null, flowBattleDone = false, flowTimer = null;   // flowTimer={port,t}=ポート発火の遅延（撃破演出を見せてからED）
+let flowRt = null, flowNode = null, flowBattleDone = false, flowTimer = null, flowFallback = false;   // flowTimer={port,t}=ポート発火の遅延（撃破演出を見せてからED）
 async function startFlow() {
   if (!flowRt) {
     try { flowRt = createFlow(await (await fetch('../flow/' + (TUTORIAL ? 'tutorial' : 'cityfly') + '.flow.json')).json()); }
     catch (err) { console.warn('フロー読込失敗（本編へ直行）:', err); }
   }
-  if (!flowRt) { gameMode = 'play'; return; }
+  if (!flowRt) { flowFallback = true; gameMode = 'play'; return; }   // フロー読込失敗＝本編直行
   flowNode = flowRt.getStart();
   flowAdvance('next');
 }
@@ -2158,7 +2163,8 @@ function updatePortrait(dt) {
   const dist = ov.dist ?? base.dist, upOff = ov.up ?? base.up, fwdOff = ov.fwd ?? base.fwd, fov = ov.fov ?? base.fov;
   _ptEye.copy(_ptV1).addScaledVector(up, upOff).addScaledVector(fwd, fwdOff);   // 頭ボーン=首元→目の高さへ
   portraitCam.position.copy(_ptEye).addScaledVector(fwd, dist);
-  portraitCam.up.copy(up);
+  if (portraitStage) portraitCam.up.set(0, 1, 0);   // 全画面シナリオ: 頭の傾き(呼吸)にロールが連動して背景が揺れて見えるためワールド上方向へ固定
+  else portraitCam.up.copy(up);
   portraitCam.lookAt(_ptEye);
   const rr = portraitRect();
   const asp = rr && rr.height > 0 ? rr.width / rr.height : 1;
@@ -2732,6 +2738,7 @@ function updateFlight(dt) {
     return;
   }
   if (player.eating) { player.vel.set(0, 0, 0); return; }   // 捕食中はその場で静止
+  if (gameMode === 'op' || gameMode === 'ed') { player.vel.set(0, 0, 0); return; }   // シナリオ中は移動不可
   camForwardRight();
   player.fwdY = _fwd.y;
   _move.set(0, 0, 0);
