@@ -158,10 +158,11 @@ async function init() {
   groundGroup = new THREE.Group(); scene.add(groundGroup);
   // map-editor 製 .map.json の自作地形マップ（?map=<name>、既定 mytown）
   let chain = buildMapGround().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)));
-  chain = chain.then(() => loadProg(12, TUTORIAL ? 'ステージを構築中…' : '道路網を構築中…'));
+  chain = chain.then(() => loadProg(12, TUTORIAL ? 'シナリオ素材を読込中…' : '道路網を構築中…'));
   if (TUTORIAL) {
-    chain = chain.then(() => buildTutorialStage());   // チュートリアル: 部屋群を実行時構築（道路/都市/森はなし）
-    chain = chain.then(() => loadProg(62, 'エフェクトを準備中…'));
+    chain = chain.then(() => tutWaitScenarioAssets());   // ネイ+会話キャストを先に読み切る（タイトルは眠りネイ表示へ）
+    chain = chain.then(() => buildTutorialStage());      // ステージ構築はその後＝タイトル/OP再生の裏で進行
+    chain = chain.then(() => loadProg(72, 'エフェクトを準備中…'));
   } else {
     chain = chain.then(() => loadRoads());
     chain = chain.then(() => loadProg(25, '建物を配置中…'));
@@ -187,7 +188,7 @@ async function init() {
     }
   });
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
-  loadPlayer().then(() => { loadProg(78, 'キャラクターを準備中…'); return prepareBiteAssets(); }).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
+  loadPlayer().then(() => { loadProg(TUTORIAL ? 30 : 78, 'キャラクターを準備中…'); return prepareBiteAssets(); }).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
   try {
     // マルチプレイはMP専用ビルド(window.MP_BUILD)か ?mp=1 のときだけ有効化（通常のCityFlyはシングル専用のまま）
     const mpAvailable = MP_ON || !!window.MP_BUILD;
@@ -1555,9 +1556,9 @@ async function buildTutorialStage() {
   tut.root.add(em);
   scene.add(tut.root);
   cityRoot = tut.root;   // タイトル解錠条件（cityRoot && collBoxes.length）を満たす
-  loadProg(40, 'コンテナを配置中…');
+  loadProg(55, 'コンテナを配置中…');
   await buildTutContainers().catch((e) => console.warn('コンテナ配置失敗', e));
-  loadProg(50, 'シェーダを最適化中…');
+  loadProg(62, 'シェーダを最適化中…');
   const tutMats = new Set();   // 破壊対象の全材質のカーブ版を事前コンパイル（初破壊のヒッチ軽減。街と同じ資産）
   for (const md of bldModels) if (md.near) tutMats.add(md.near.material);
   prewarmCarveMats([...tutMats]);
@@ -1756,6 +1757,15 @@ function enemyAllowed(kind) {   // 敵出現のモード制御（本編の投入
 }
 // ── ロード進捗バー（画面下部。ボタンの「準備中…」表示とは独立） ──
 let loadBarEl = null, loadFillEl = null, loadTxtEl = null, loadPct = 0;
+async function tutWaitScenarioAssets() {   // シナリオ素材(ネイ+キャスト)を先に読み切る（上限20秒＝失敗時もステージへ進む）
+  const t0 = performance.now();
+  await new Promise((res) => {
+    const iv = setInterval(() => {
+      if ((player.ready && guestPreloadDone) || performance.now() - t0 > 20000) { clearInterval(iv); res(); }
+    }, 150);
+  });
+  loadProg(38, 'ステージを構築中…');
+}
 function loadProg(pct, label) {
   if (loadPct >= 100) return;
   if (!loadBarEl) {
@@ -1786,6 +1796,7 @@ function updateTitleSleep() {   // チュートリアルのタイトル: GIF背�
     setStageBg('gif/sf-command-ui_640x360_20fps_6s.gif');
     beginPortraitFor('nei', 'normal', '', true);
     setGameHudVisible(false);
+    if (titleEl) titleEl.style.background = 'linear-gradient(180deg,rgba(6,10,26,0.42),rgba(24,8,34,0.30))';   // GIF+眠るネイが透けるように
   }
   if (titleSleepOn) { try { player.vrm.expressionManager?.setValue('blink', 1); } catch { /* noop */ } }   // 目を閉じて眠る
 }
@@ -1793,8 +1804,8 @@ let titleEl = null, goEl = null, paramsEl = null;
 function setupTitle() {
   titleEl = document.createElement('div');
   titleEl.style.cssText = 'position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;'
-    + (TUTORIAL ? 'background:linear-gradient(180deg,rgba(6,10,26,0.42),rgba(24,8,34,0.30));color:#eef;'   // 背景のGIF+眠るネイが透ける
-                : 'background:linear-gradient(180deg,rgba(6,10,26,0.90),rgba(24,8,34,0.86));color:#eef;');
+    + 'background:linear-gradient(180deg,rgba(6,10,26,0.96),rgba(24,8,34,0.94));color:#eef;';   // 眠りネイ表示までは不透明（構築中のステージを見せない）
+  titleEl.style.transition = 'background 0.8s';
   const btn = 'font:700 20px Meiryo,sans-serif;padding:12px 52px;border-radius:8px;border:1px solid #86f;background:#1b1f3a;color:#dde;cursor:pointer;min-width:340px;';
   titleEl.innerHTML = '<div style="font:900 64px \'Yu Gothic\',\'Arial Black\',Meiryo,sans-serif;letter-spacing:0.08em;text-shadow:0 4px 18px rgba(130,70,255,0.65),0 2px 6px #000;">City-Fly</div>'
     + '<div style="font:14px Meiryo,sans-serif;color:#aab;margin-bottom:14px;">' + (TUTORIAL ? '訓練プログラム — 基本操作を修得せよ' : 'デッドアトモス襲来 — 吸血鬼ネイ、出撃') + '</div>'
