@@ -7162,7 +7162,11 @@ async function spawnKen(opts = {}) {
   const hpBar = makeHpBar();
   scene.add(hpBar.group);
   let dis = null;   // ディソルブを事前生成（死亡時のシェーダ再コンパイルによるカクつき回避）
-  try { dis = createDissolve(vrm.scene, { ...KEN_DISSOLVE_OPTS, groundY: pos.y, armed: false }); dis.setProgress(0); } catch (e) { console.warn('kenディソルブ事前生成失敗:', e); }
+  // マネキン（プネウマ等）は明るいチェッカー床でも見えるよう、液溜まりを大径・濃色・高不透明度に
+  const disOpts = opts.mannequin
+    ? { ...KEN_DISSOLVE_OPTS, puddleScale: 3.2, puddleAlpha: 0.95, liquidColor: '#49d4ff' }
+    : KEN_DISSOLVE_OPTS;
+  try { dis = createDissolve(vrm.scene, { ...disOpts, groundY: pos.y, armed: false }); dis.setProgress(0); } catch (e) { console.warn('kenディソルブ事前生成失敗:', e); }
   let speech = null;   // 状況セリフ（頭上バブル）
   if (kenAssets.speechChar) {
     const holder = {};   // バブルの所有者キー（下で m に差し替え）
@@ -7350,7 +7354,7 @@ function startKenDissolve(m) {
   if (m.dis) m.dis.setArmed(true);
   else m.dis = createDissolve(m.vrm.scene, KEN_DISSOLVE_OPTS);
   m.dis.setProgress(0);
-  m.dis.setGroundY(m.floorY != null ? m.floorY : groundYAt(_kQ.x, _kQ.z, _kQ.y));   // 地形or屋内床へパドルを固定
+  m.dis.setGroundY((m.floorY != null ? m.floorY : groundYAt(_kQ.x, _kQ.z, _kQ.y)) + (TUTORIAL ? 0.03 : 0));   // 地形or屋内床へパドルを固定（チュートリアルは床チェッカースラブ天面+2cmの上へ）
   m.dis.setPuddleCenter(_kQ.x, _kQ.z);
   spawnImpactFx(_kQ);
 }
