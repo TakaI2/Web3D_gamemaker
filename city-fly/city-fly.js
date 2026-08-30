@@ -2727,7 +2727,8 @@ window.__fly = { get player() { return player; }, get camera() { return camera; 
     damageBuildingRec(bb.rec, bb.md, new THREE.Vector3(b.x, (b.bottom + b.top) / 2, b.z), dmg, 1, 'player');
     return bb.rec.carve ? { hp: bb.rec.carve.hp, hpMax: bb.rec.carve.hpMax } : null;
   },
-  grabTest: (car) => {   // テスト用: 掴み状態を直接作る
+  grabTest: (car) => {   // テスト用: 掴み状態を直接作る（投げ中なら解除してから）
+    if (car.thrown) { const ti = thrownCars.indexOf(car); if (ti >= 0) thrownCars.splice(ti, 1); car.thrown = false; car.rolling = false; if (car.vel) car.vel.set(0, 0, 0); }
     car.grabbed = true; grabbedCar = car;
     car.holdVel = car.holdVel || new THREE.Vector3(); car.holdVel.set(0, 0, 0);
     computeHoldDims(car);
@@ -6181,7 +6182,8 @@ function grabTarget() {
   // 車（照準レイ→無ければ前方近傍の最寄り）。パトカー/電車/客船もプロキシ経由で対象
   if (!carsAndJets().length) return;
   _grabRay.set(_muzzle, _camDir); _grabRay.far = GRAB_RANGE;
-  const meshes = carsAndJets().filter((c) => !c.grabbed && !c.thrown && !c.dead && !c.tornado && !c.noGrab).map((c) => c.mesh);
+  const grabbableNow = (c) => !c.grabbed && !c.dead && !c.tornado && !c.noGrab && (!c.thrown || (!c.trainCar && !c.shotDown));   // 投げ/転がり中も掴み直せる（列車・撃墜機は除く）
+  const meshes = carsAndJets().filter(grabbableNow).map((c) => c.mesh);
   if (portCont) meshes.push(portCont.im);   // コンテナも掴める（インスタンス→命中時に単体化）
   const hit = _grabRay.intersectObjects(meshes, true)[0];
   let car = null;
@@ -6191,7 +6193,7 @@ function grabTarget() {
   if (!car) {
     _tmpV.copy(_muzzle).addScaledVector(_camDir, HOLD_DIST + 8);
     let best = GRAB_RANGE, contPick = -1;
-    for (const c of carsAndJets()) { if (c.grabbed || c.thrown || c.dead || c.tornado || c.noGrab) continue; const d = c.mesh.position.distanceTo(_tmpV); if (d < best) { best = d; car = c; } }
+    for (const c of carsAndJets()) { if (!grabbableNow(c)) continue; const d = c.mesh.position.distanceTo(_tmpV); if (d < best) { best = d; car = c; } }
     if (portCont) for (let i = 0; i < portCont.spots.length; i++) {
       const sp = portCont.spots[i];
       if (sp.gone) continue;
@@ -6201,6 +6203,12 @@ function grabTarget() {
     if (contPick >= 0) car = takeContainer(contPick);
   }
   if (car) {
+    if (car.thrown) {   // 転がり/飛翔中を掴んだ: 投げ状態を解除して保持へ移行
+      const ti = thrownCars.indexOf(car);
+      if (ti >= 0) thrownCars.splice(ti, 1);
+      car.thrown = false; car.rolling = false;
+      if (car.vel) car.vel.set(0, 0, 0);
+    }
     car.grabbed = true; grabbedCar = car; car.holdVel = car.holdVel || new THREE.Vector3(); car.holdVel.set(0, 0, 0);
     computeHoldDims(car);
     const mSpin = 1 / Math.sqrt(massOf(car));   // 重いほどゆっくり回る
