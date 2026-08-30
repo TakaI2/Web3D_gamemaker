@@ -2255,7 +2255,9 @@ function updatePortrait(dt) {
   const dist = ov.dist ?? base.dist, upOff = ov.up ?? base.up, fwdOff = ov.fwd ?? base.fwd, fov = ov.fov ?? base.fov;
   _ptEye.copy(_ptV1).addScaledVector(up, upOff).addScaledVector(fwd, fwdOff);   // 頭ボーン=首元→目の高さへ
   portraitCam.position.copy(_ptEye).addScaledVector(fwd, dist);
-  if (portraitStage) portraitCam.up.set(0, 1, 0);   // 全画面シナリオ: 頭の傾き(呼吸)にロールが連動して背景が揺れて見えるためワールド上方向へ固定
+  // 全画面シナリオ: 頭の傾き(呼吸)にロールが連動して背景が揺れて見えるためワールド上方向へ固定。
+  // 死亡中のネイも同様（ラグドールで倒れると頭ボーン基準では顔が逆さまに映る）
+  if (portraitStage || (playerDead && portraitWho === PORTRAIT_ACTOR)) portraitCam.up.set(0, 1, 0);
   else portraitCam.up.copy(up);
   portraitCam.lookAt(_ptEye);
   const rr = portraitRect();
@@ -2363,7 +2365,10 @@ function beginPortraitFor(who, face, text, stage, extra) {   // 話者の立体�
   if (NO_PORTRAIT || !portraitCam) return false;
   portraitWho = who;
   let live = false;
-  if (who === PORTRAIT_ACTOR) live = player.ready && !playerDead;
+  // 死亡中も立体表示を続ける（VRMはラグドールで残っており頭ボーンも有効）。
+  // 2Dフォールバック用の face/nei/*.png は存在しないため、ここでfalseにすると
+  // ゲームオーバー直後の会話が頭文字プレースホルダになってしまう
+  if (who === PORTRAIT_ACTOR) live = player.ready;
   else {
     const a = (ev.talks && ev.talks.actors && ev.talks.actors[who]) || {};
     const g = portraitGuests.get(who);
