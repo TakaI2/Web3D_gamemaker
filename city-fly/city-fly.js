@@ -1388,6 +1388,7 @@ function buildTutRoom6() {   // 部屋6: ボス戦（グラブ可能な巨大オ
   for (const [g, ox, oz, mass, color] of spots6) tutProp(g.clone(), cx + ox, oz, mass, color, Math.sin(ox * 7.13) * 3);
   buildTutBoss();
 }
+const TUT_SUCK_DUR = 4.5;   // セーフティエリア吸い込みの所要秒（ゆっくり）
 const TUT_DOLL_SPOTS = [[-180, -60], [-120, 150], [-40, -180], [30, 60], [90, -90], [160, 30], [230, -160], [300, 90]];
 function tutSpawnDolls() {   // 部屋3のダミードール（走り回る救出対象）
   const R = tut.rooms[2];
@@ -1435,15 +1436,17 @@ function updateTutRoom3(dt) {
   sa.pillar.material.opacity = 0.09 + 0.04 * Math.sin(exhaustT * 2.2);
   for (const m of kens) {   // 掴んで運んだドールがエリア内→救出（トーテムと同じ旋回吸い込みで消える）
     if (m.mannequin !== 'dummy' || m._remove) continue;
-    if (m.suck) {   // 吸い込み演出中
+    if (m.suck) {   // 吸い込み演出中: 現在位置（掴んでいた手元）からゆっくり離れて旋回上昇
       const sk = m.suck;
-      sk.t += dt; sk.ang += dt * TOTEM_SPIN;
-      sk.r += (1.2 - sk.r) * Math.min(1, dt * 1.6);
-      m.vrm.scene.position.set(sa.x + Math.cos(sk.ang) * sk.r, sk.t * 2.4, sa.z + Math.sin(sk.ang) * sk.r);
-      m.vrm.scene.rotation.y += dt * 6;
-      m.vrm.scene.scale.setScalar(Math.max(0.05, 1 - sk.t / TOTEM_CONSUME));
+      sk.t += dt;
+      sk.ang += dt * 1.6;                                   // ゆっくり旋回
+      sk.r += (0.8 - sk.r) * Math.min(1, dt * 0.8);         // ゆっくり中心へ
+      const y = sk.y0 + sk.t * 1.1;                          // 保持していた高さから緩やかに上昇
+      m.vrm.scene.position.set(sa.x + Math.cos(sk.ang) * sk.r, y, sa.z + Math.sin(sk.ang) * sk.r);
+      m.vrm.scene.rotation.y += dt * 3;
+      m.vrm.scene.scale.setScalar(Math.max(0.05, 1 - sk.t / TUT_SUCK_DUR));
       m.pos.copy(m.vrm.scene.position);
-      if (sk.t >= TOTEM_CONSUME) {
+      if (sk.t >= TUT_SUCK_DUR) {
         spawnImpactFx(m.vrm.scene.position.clone(), 1);
         m.vrm.scene.visible = false;
         m._remove = true;
@@ -1459,7 +1462,9 @@ function updateTutRoom3(dt) {
       m.grabbed = false;
       if (player.prey === m) player.prey = null;
       if (m.ragdoll.active) setRagdollActive(m.ragdoll, false);
-      m.suck = { t: 0, ang: Math.atan2(_kQ.z - sa.z, _kQ.x - sa.x), r: Math.max(2, Math.hypot(_kQ.x - sa.x, _kQ.z - sa.z)) };
+      m.vrm.scene.position.set(_kQ.x, _kQ.y, _kQ.z);   // 開始位置＝いまの体の中心（掴んでいた手元）。テレポートさせない
+      m.pos.copy(m.vrm.scene.position);
+      m.suck = { t: 0, y0: _kQ.y, ang: Math.atan2(_kQ.z - sa.z, _kQ.x - sa.x), r: Math.max(0.5, Math.hypot(_kQ.x - sa.x, _kQ.z - sa.z)) };
       playSfx('se1.ogg', 0.5);
       if (tut.rescued === 1) queueTalk('r3_mid');
       if (tut.rescued < 5) {   // 補充
