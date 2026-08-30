@@ -1826,9 +1826,6 @@ function updateGameBgm() {
   const want = gameMode === 'play' && !playerDead;
   if (want) {
     if (!gameBgm) { gameBgm = new Audio(PUB_ROOT + 'BGM/Sound_Wave.ogg'); gameBgm.loop = true; gameBgm.volume = 0.45; }
-    // 吸血(chuchu1)・チャージビーム(レーザー)中はBGMをダッキングして専用音を立たせる
-    const duck = (typeof eatSnd !== 'undefined' && eatSnd && !eatSnd.paused) || (typeof lgBeamSnd !== 'undefined' && lgBeamSnd && !lgBeamSnd.paused);
-    gameBgm.volume = duck ? 0.12 : 0.45;
     if (gameBgm.paused) gameBgm.play().catch(() => { /* 自動再生制限 */ });
   } else if (gameBgm && !gameBgm.paused) gameBgm.pause();
 }
@@ -5818,10 +5815,25 @@ function updateUltimate(dt) {
   }
 }
 
+let sfxCtx = null;
+function boostAudio(el, gain) {   // HTMLAudioをWebAudioのGainNodeで>1.0倍に増幅（初回のみ接続）
+  try {
+    if (!sfxCtx) sfxCtx = new AudioContext();
+    if (sfxCtx.state === 'suspended') sfxCtx.resume();
+    if (!el._boosted) {
+      const src = sfxCtx.createMediaElementSource(el);
+      const g = sfxCtx.createGain();
+      g.gain.value = gain;
+      src.connect(g).connect(sfxCtx.destination);
+      el._boosted = true;
+    }
+  } catch (e) { console.warn('audio boost失敗', e); }
+}
 let lgBeamSnd = null;
-function largeBeamSound(on) {   // 照射中のレーザーループ音
+function largeBeamSound(on) {   // 照射中のレーザーループ音（3倍ブースト）
   if (on) {
     if (!lgBeamSnd) { lgBeamSnd = new Audio('../sound/' + encodeURIComponent('銃火器・レーザーガン06.ogg')); lgBeamSnd.loop = true; lgBeamSnd.volume = 1.0; }
+    boostAudio(lgBeamSnd, 3.0);
     lgBeamSnd.currentTime = 0;
     lgBeamSnd.play().catch(() => { /* 自動再生制限 */ });
   } else if (lgBeamSnd && !lgBeamSnd.paused) lgBeamSnd.pause();
@@ -7571,9 +7583,10 @@ function startVictimAnim(m) {
   } catch (e) { console.warn('victim anim 生成失敗:', e); }
 }
 let eatSnd = null;
-function eatingSound(on) {
+function eatingSound(on) {   // 吸血ループ音（3.5倍ブースト）
   if (on) {
     if (!eatSnd) { eatSnd = new Audio('../sound/chuchu1.ogg'); eatSnd.loop = true; eatSnd.volume = 1.0; }
+    boostAudio(eatSnd, 3.5);
     eatSnd.currentTime = 0;
     eatSnd.play().catch(() => { /* 自動再生制限 */ });
   } else if (eatSnd && !eatSnd.paused) eatSnd.pause();
