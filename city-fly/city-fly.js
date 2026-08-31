@@ -1826,10 +1826,8 @@ function setupTitle() {
       + '<span style="' + logoBase + 'background-image:linear-gradient(180deg,#ffffff 8%,#9fe4ff 46%,#2f8fe0 62%,#1a4f9c 100%);">CYBER</span>'
       + '<span style="' + logoBase + 'background-image:linear-gradient(180deg,#fff0f2 8%,#ff8090 44%,#e0203c 62%,#8c0a20 100%);">BAT</span>'
     + '</div>'
-    + '<div style="font:700 13px Meiryo,sans-serif;color:#bcd8f5;letter-spacing:0.42em;margin-top:4px;'
-      + 'text-shadow:0 2px 6px #000,0 0 14px rgba(0,0,0,0.95);">' + (TUTORIAL ? 'TRAINING PROGRAM' : 'DEAD ATMOS ASSAULT') + '</div>'
-    + '<div style="font:700 14px Meiryo,sans-serif;color:#dce8f7;margin-top:8px;'
-      + 'text-shadow:0 2px 6px #000,0 0 14px rgba(0,0,0,0.95);">' + (TUTORIAL ? '訓練プログラム — 基本操作を修得せよ' : 'デッドアトモス襲来 — 吸血鬼ネイ、出撃') + '</div>'
+    + "<div style=\"font:700 26px Orbitron,'Arial Black',Impact,sans-serif;color:#cfe4ff;letter-spacing:0.34em;margin-top:2px;"
+      + 'text-shadow:0 2px 8px #000,0 0 18px rgba(0,0,0,0.95),0 0 26px rgba(80,170,255,0.45);">' + (TUTORIAL ? 'TRAINING PROGRAM' : 'DEAD ATMOS ASSAULT') + '</div>'
     + '<button id="cf-start" style="' + btn + 'margin-top:64px;" disabled>準備中…</button>';
   document.body.appendChild(titleEl);
   const bs = titleEl.querySelector('#cf-start');
