@@ -250,6 +250,16 @@ export default defineConfig({
           res.end(JSON.stringify(files));
         });
 
+        // 会話一覧（public/cityfly/*talks.json）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/cityfly/talks-manifest.json')) return next();
+          const dir = path.join(pub, 'cityfly');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('talks.json')) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
         // ステージ一覧（public/stages/*.stage.json）
         server.middlewares.use((req, res, next) => {
           const url = (req.url || '').split('?')[0];

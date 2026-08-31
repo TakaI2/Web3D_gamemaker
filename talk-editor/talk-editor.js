@@ -1,16 +1,32 @@
-// talk-editor.js — City-Fly ゲーム内会話(public/cityfly/talks.json)の編集。
+// talk-editor.js — City-Fly ゲーム内会話(public/cityfly/*talks.json)の編集。
+// ステージごとに会話ファイルが分かれている（本編=talks.json / チュートリアル=tutorial_talks.json）ため、
+// 上部のセレクタで対象ファイルを切り替える。
 // 話者マスタ(actors)＋会話ID→行配列(talks)。プレビューはゲームの会話ウィンドウと同じ見た目・同じ表示時間。
 const $ = (id) => document.getElementById(id);
 const TALK_MIN_SEC = 3.2, TALK_CPS = 9;   // ゲーム(city-fly.js)と同じ自動送り時間
 
 let data = { format: 'cityfly-talks', version: 1, actors: {}, talks: {} };
 let curTalk = null, selLine = null, playTimer = null;
+let talkFile = new URLSearchParams(location.search).get('file') || 'talks.json';   // 編集対象の会話ファイル
 
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 1800); }
 
+async function buildFilePanel() {   // 会話ファイルの切替（public/cityfly/*talks.json）
+  const sel = $('talk-file');
+  if (!sel) return;
+  let files = [];
+  try { const r = await fetch('../cityfly/talks-manifest.json'); if (r.ok) files = await r.json(); } catch { /* 一覧APIなし */ }
+  if (!files.length) files = ['talks.json', 'tutorial_talks.json'];
+  if (!files.includes(talkFile)) files = [talkFile, ...files];
+  sel.innerHTML = files.map((f) => `<option value="${f}">${f}</option>`).join('');
+  sel.value = talkFile;
+  sel.onchange = () => { talkFile = sel.value; load(); };
+}
+
 async function load() {
+  await buildFilePanel();
   try {
-    const j = await (await fetch('../cityfly/talks.json?ts=' + Date.now())).json();
+    const j = await (await fetch('../cityfly/' + talkFile + '?ts=' + Date.now())).json();
     data = Object.assign({ format: 'cityfly-talks', version: 1 }, j);
     data.actors = data.actors || {}; data.talks = data.talks || {};
   } catch (e) { toast('読込失敗（新規扱い）: ' + e); }
@@ -23,9 +39,9 @@ async function save() {
   try {
     const r = await fetch('../api/save', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dir: 'cityfly', filename: 'talks.json', content: JSON.stringify(data, null, 2) }),
+      body: JSON.stringify({ dir: 'cityfly', filename: talkFile, content: JSON.stringify(data, null, 2) }),
     });
-    if (r.ok) { toast('保存しました: cityfly/talks.json'); return; }
+    if (r.ok) { toast('保存しました: cityfly/' + talkFile); return; }
     toast('保存失敗: ' + r.status);
   } catch (e) { toast('保存失敗: ' + e); }
 }
