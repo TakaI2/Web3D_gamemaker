@@ -11,9 +11,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const src  = path.join(root, 'city-fly');
 const MP_BUILD = process.env.MP === '1';   // MP=1 → マルチプレイ専用ビルド（別出力・ログイン画面つき）
-const dest = path.join(root, MP_BUILD ? 'dist-cityfly-mp' : 'dist-cityfly');
 const pub  = path.join(root, 'public');
 const DEFAULT_MAP = process.env.MAP || 'mytown';   // 既定マップ（MAP=名前 npm run build:cityfly で変更可）
+// OUT=名前 で出力先を変更（例: CyberBat配信ビルド → OUT=dist-cyberbat MAP=tutorial）
+const dest = path.join(root, process.env.OUT || (MP_BUILD ? 'dist-cityfly-mp' : 'dist-cityfly'));
+const OUT_NAME = path.basename(dest);
+// チュートリアル専用ビルド: 街（道路網・Kenney建物・車・公園/森・家具）は一切使わないので同梱しない
+const TUT = DEFAULT_MAP === 'tutorial';
 
 fs.rmSync(dest, { recursive: true, force: true });
 fs.mkdirSync(dest, { recursive: true });
@@ -55,7 +59,9 @@ const mapsSrc = path.join(pub, 'maps');
 const forestModels = new Set();
 if (fs.existsSync(mapsSrc)) {
   const mapsDest = path.join(dest, 'maps'); fs.mkdirSync(mapsDest, { recursive: true });
-  for (const f of fs.readdirSync(mapsSrc).filter((f) => f.endsWith('.map.json'))) {
+  const mapFiles = fs.readdirSync(mapsSrc).filter((f) => f.endsWith('.map.json'))
+    .filter((f) => !TUT || f === DEFAULT_MAP + '.map.json');   // 専用ビルドは既定マップだけ同梱
+  for (const f of mapFiles) {
     fs.copyFileSync(path.join(mapsSrc, f), path.join(mapsDest, f));
     try {
       const fm = JSON.parse(fs.readFileSync(path.join(mapsSrc, f), 'utf8')).forest?.model;
@@ -66,7 +72,7 @@ if (fs.existsSync(mapsSrc)) {
 }
 
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js', 'vrm-expressions.js', 'vrm-tk.js', 'pose-kit.js']) {
+for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js', 'vrm-expressions.js', 'vrm-tk.js', 'pose-kit.js', 'grab-shapes.js']) {
   const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8')
     .replace(/\.\.\/lib\//g, './')
     .replace(/\.\.\/speech\//g, './speech/');   // speech-set.js は import.meta.url 相対（distではlibがルート直下）
@@ -126,11 +132,12 @@ for (const v of vrmaSet) {
   console.log(`copied: vrma/${v}`);
 }
 // セリフ（ken住民）。speech-set.js は lib 相対 '../speech/' を見るので dist ルートに speech/ を置く
-const spSrc = path.join(pub, 'speech', 'ken.speech.json');
-if (fs.existsSync(spSrc)) {
-  fs.mkdirSync(path.join(dest, 'speech'), { recursive: true });
-  fs.copyFileSync(spSrc, path.join(dest, 'speech', 'ken.speech.json'));
-  console.log('copied: speech/ken.speech.json');
+fs.mkdirSync(path.join(dest, 'speech'), { recursive: true });
+for (const sp of ['ken.speech.json', ...(TUT ? ['dummydoll.speech.json', 'pneuma.speech.json'] : [])]) {
+  const spSrc = path.join(pub, 'speech', sp);
+  if (!fs.existsSync(spSrc)) { console.warn(`skip missing speech: ${sp}`); continue; }
+  fs.copyFileSync(spSrc, path.join(dest, 'speech', sp));
+  console.log(`copied: speech/${sp}`);
 }
 
 // ラグドール調整値（ken＋プレイヤー nei_vamp）
@@ -160,7 +167,7 @@ if (fs.existsSync(sndSrc)) {
 fs.mkdirSync(path.join(dest, 'cityfly'), { recursive: true });
 // 会話ポートレート用VRM（talks.json の actor.vrm）
 try {
-  const tj = JSON.parse(fs.readFileSync(path.join(pub, 'cityfly', 'talks.json'), 'utf8'));
+  const tj = JSON.parse(fs.readFileSync(path.join(pub, 'cityfly', TUT ? 'tutorial_talks.json' : 'talks.json'), 'utf8'));
   const acts = Object.values(tj.actors || {});
   const needVrm = [...new Set(acts.map((a) => a && a.vrm).filter(Boolean))];
   const needNpc = [...new Set(acts.map((a) => a && a.npc).filter(Boolean))];   // .npc.json バンドル（マント付き）
@@ -190,18 +197,25 @@ for (const dir of ['BGM', 'gif']) {   // BGM・シナリオ背景GIF
     console.log('copied: ' + dir + '/*');
   }
 }
-for (const f of ['events.json', 'talks.json', 'expressions.json']) {
-  fs.copyFileSync(path.join(pub, 'cityfly', f), path.join(dest, 'cityfly', f));
+const cityflyJson = TUT
+  ? ['tutorial_events.json', 'tutorial_talks.json', 'expressions.json', 'grabhit.json']
+  : ['events.json', 'talks.json', 'expressions.json', 'grabhit.json'];
+for (const f of cityflyJson) {
+  const src2 = path.join(pub, 'cityfly', f);
+  if (!fs.existsSync(src2)) { console.warn(`skip missing cityfly/${f}`); continue; }
+  fs.copyFileSync(src2, path.join(dest, 'cityfly', f));
   console.log(`copied: cityfly/${f}`);
 }
 fs.mkdirSync(path.join(dest, 'story'), { recursive: true });
-for (const f of fs.readdirSync(path.join(pub, 'story')).filter((f) => f.startsWith('cityfly_') && f.endsWith('.story.json'))) {
+const storyPrefix = TUT ? 'tutorial_' : 'cityfly_';
+for (const f of fs.readdirSync(path.join(pub, 'story')).filter((f) => f.startsWith(storyPrefix) && f.endsWith('.story.json'))) {
   fs.copyFileSync(path.join(pub, 'story', f), path.join(dest, 'story', f));
   console.log(`copied: story/${f}`);
 }
 fs.mkdirSync(path.join(dest, 'flow'), { recursive: true });
-fs.copyFileSync(path.join(pub, 'flow', 'cityfly.flow.json'), path.join(dest, 'flow', 'cityfly.flow.json'));
-console.log('copied: flow/cityfly.flow.json');
+const flowFile = TUT ? 'tutorial.flow.json' : 'cityfly.flow.json';
+fs.copyFileSync(path.join(pub, 'flow', flowFile), path.join(dest, 'flow', flowFile));
+console.log(`copied: flow/${flowFile}`);
 // 2D素材（顔グラ/背景。まだ無ければスキップ=ゲーム側が仮表示にフォールバック）
 const s2dSrc = path.join(pub, 'scenario2d');
 if (fs.existsSync(s2dSrc)) {
@@ -225,14 +239,33 @@ for (const name of texPngs) {
 }
 // 追加 lib（fx-mesh/fx-tornado/fx-particles/fx-dissolve/vrm-ragdoll）
 
+// 掴み対象のコンテナ（チュートリアルのプロップ／街の港。lib/grab-shapes.js が参照）
+{
+  const wfSrc = path.join(pub, 'models', 'waterfront_GLB format');
+  if (fs.existsSync(wfSrc)) {
+    const wfDest = path.join(dest, 'models', 'waterfront_GLB format');
+    fs.mkdirSync(path.join(wfDest, 'Textures'), { recursive: true });
+    const wfModels = TUT ? ['cargo-container-a'] : fs.readdirSync(wfSrc).filter((f) => f.endsWith('.glb')).map((f) => f.replace(/\.glb$/, ''));
+    for (const m of wfModels) {
+      const f = path.join(wfSrc, m + '.glb');
+      if (fs.existsSync(f)) fs.copyFileSync(f, path.join(wfDest, m + '.glb'));
+    }
+    const wfTex = path.join(wfSrc, 'Textures', 'colormap.png');
+    if (fs.existsSync(wfTex)) fs.copyFileSync(wfTex, path.join(wfDest, 'Textures', 'colormap.png'));
+    console.log(`copied: ${wfModels.length} waterfront models`);
+  }
+}
+
 // 車モデル（CAR_KIT）＋ 共有 colormap テクスチャ
 const CAR_KIT = ['sedan', 'sedan-sports', 'suv', 'suv-luxury', 'taxi', 'police', 'van', 'delivery', 'truck', 'hatchback-sports'];
-const carSrc = path.join(pub, 'models', 'car_GLB format');
-const carDest = path.join(dest, 'models', 'car_GLB format');
-fs.mkdirSync(path.join(carDest, 'Textures'), { recursive: true });
-for (const c of CAR_KIT) fs.copyFileSync(path.join(carSrc, c + '.glb'), path.join(carDest, c + '.glb'));
-fs.copyFileSync(path.join(carSrc, 'Textures', 'colormap.png'), path.join(carDest, 'Textures', 'colormap.png'));
-console.log(`copied: ${CAR_KIT.length} car models + colormap.png`);
+if (!TUT) {   // 車は道路網（loadRoads→finishRoads→spawnCars）専用＝チュートリアルでは出ない
+  const carSrc = path.join(pub, 'models', 'car_GLB format');
+  const carDest = path.join(dest, 'models', 'car_GLB format');
+  fs.mkdirSync(path.join(carDest, 'Textures'), { recursive: true });
+  for (const c of CAR_KIT) fs.copyFileSync(path.join(carSrc, c + '.glb'), path.join(carDest, c + '.glb'));
+  fs.copyFileSync(path.join(carSrc, 'Textures', 'colormap.png'), path.join(carDest, 'Textures', 'colormap.png'));
+  console.log(`copied: ${CAR_KIT.length} car models + colormap.png`);
+}
 
 // Kenney 建物キット（KENNEY_CITY モード用）＋ 各キットの colormap
 // suburban には街路樹(tree-large/small)も追加。roads キットは道路実体化・交差点・信号で使用
@@ -242,7 +275,7 @@ const BLD = [
   { dir: 'kenney_city-kit-suburban_20/Models/GLB format', models: [...letters('a', 'u').map((c) => 'building-type-' + c), 'tree-large', 'tree-small'] },
   { dir: 'kenney_city-kit-roads/Models/GLB format', models: ['road-straight', 'light-curved', 'light-square', 'road-crossroad-path', 'road-intersection-path', 'road-bend-sidewalk', 'road-crossing', 'road-straight-barrier'] },
 ];
-for (const kit of BLD) {
+for (const kit of (TUT ? [] : BLD)) {   // Kenney建物/道路キットは街専用
   const s = path.join(pub, 'models', kit.dir);
   const d = path.join(dest, 'models', kit.dir);
   fs.mkdirSync(path.join(d, 'Textures'), { recursive: true });
@@ -251,8 +284,8 @@ for (const kit of BLD) {
   console.log(`copied: ${kit.models.length} building models from ${kit.dir}`);
 }
 
-// 公園モデル（生垣/ゲート/噴水/ランタン＝buildParksが固定参照）
-for (const m of ['hedge', 'hedge-gate', 'fountain-round-detail', 'fountain-square-detail', 'lantern']) {
+// 公園モデル（生垣/ゲート/噴水/ランタン＝buildParksが固定参照。チュートリアルは公園なし）
+if (!TUT) for (const m of ['hedge', 'hedge-gate', 'fountain-round-detail', 'fountain-square-detail', 'lantern']) {
   forestModels.add('fantasy_GLB format/' + m + '.glb');
 }
 // 森の木モデル（マップの forest.model が参照）＋公園モデル。同キットの colormap もあれば同梱
@@ -286,7 +319,7 @@ console.log('written: models/manifest.json (hk entries)');
 
 // 家具キット（建物内装の生成用）＋進入マーカー
 const furnSrc = path.join(pub, 'models', 'kenney_furniture-kit', 'Models', 'GLTF format');
-if (fs.existsSync(furnSrc)) {
+if (!TUT && fs.existsSync(furnSrc)) {   // 建物内装＝街専用（チュートリアルは進入なし）
   const furnDest = path.join(dest, 'models', 'kenney_furniture-kit', 'Models', 'GLTF format');
   fs.mkdirSync(furnDest, { recursive: true });
   let n = 0;
@@ -299,10 +332,10 @@ if (fs.existsSync(entriesSrc)) { fs.copyFileSync(entriesSrc, path.join(dest, 'mo
 // 道路グラフ + 静的 manifest（本番は vite ミドルウェアが無いので静的ファイルが必須）
 const roadSrc = path.join(pub, 'roads');
 const roadDest = path.join(dest, 'roads'); fs.mkdirSync(roadDest, { recursive: true });
-const roadFiles = fs.existsSync(roadSrc) ? fs.readdirSync(roadSrc).filter((f) => f.endsWith('.json') && f !== 'manifest.json') : [];
+const roadFiles = (!TUT && fs.existsSync(roadSrc)) ? fs.readdirSync(roadSrc).filter((f) => f.endsWith('.json') && f !== 'manifest.json') : [];
 for (const f of roadFiles) fs.copyFileSync(path.join(roadSrc, f), path.join(roadDest, f));
 fs.writeFileSync(path.join(roadDest, 'manifest.json'), JSON.stringify(roadFiles));
 console.log(`copied: ${roadFiles.length} road tiles + static manifest.json`);
 
-console.log('\n' + (MP_BUILD ? 'dist-cityfly-mp' : 'dist-cityfly') + '/ ready for deployment（既定マップ: ' + DEFAULT_MAP + '）');
+console.log('\n' + OUT_NAME + '/ ready for deployment（既定マップ: ' + DEFAULT_MAP + (TUT ? ' / チュートリアル専用構成' : '') + '）');
 if (MP_BUILD) console.log('マルチプレイ配信:  node scripts/cityfly-server.mjs');
