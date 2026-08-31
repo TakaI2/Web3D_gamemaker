@@ -50,7 +50,7 @@ const jsSrc = fs.readFileSync(path.join(src, 'city-fly.js'), 'utf8')
   .replace(/\.\.\/scenario2d/g, './scenario2d')   // 顔グラ・背景（未配置なら404→仮表示）
   .replace(/\.\.\/api\//g, './api/')   // api/save は開発サーバ専用（本番は保存ボタンが失敗表示になるだけ）
   .replace(/const PUB_ROOT = '\.\.\/'/, "const PUB_ROOT = './'")   // BGM/gif等の動的パスの基点
-  .replace(/\.\.\/([\w\-]+\.png)/g, './$1');   // コード直参照のテクスチャ（electric.png等）
+  .replace(/\.\.\/([\w\-]+\.png)/g, './tex/$1');   // コード直参照のテクスチャ（electric.png等）は tex/ へ
 fs.writeFileSync(path.join(dest, 'city-fly.js'), jsSrc);
 console.log('copied: city-fly.js (paths rewritten)');
 
@@ -71,11 +71,16 @@ if (fs.existsSync(mapsSrc)) {
   console.log('copied: maps/*.map.json');
 }
 
+// timeline/fx が参照する public 直下のテクスチャpng（例 ../electric.png）を集めて同梱し、パスを ./ へ書き換え
+const texPngs = new Set(['electric.png']);   // アルティメット乱射のシート（コードから直接参照）
+const rewriteTexPaths = (text) => text.replace(/\.\.\/([\w\-. %@]+\.png)/g, (_, name) => { texPngs.add(name); return './tex/' + name; });
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
 for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js', 'vrm-expressions.js', 'vrm-tk.js', 'pose-kit.js', 'grab-shapes.js']) {
-  const libSrc = fs.readFileSync(path.join(root, 'lib', f), 'utf8')
+  const libSrc = rewriteTexPaths(fs.readFileSync(path.join(root, 'lib', f), 'utf8')
     .replace(/\.\.\/lib\//g, './')
-    .replace(/\.\.\/speech\//g, './speech/');   // speech-set.js は import.meta.url 相対（distではlibがルート直下）
+    .replace(/\.\.\/speech\//g, './speech/'));   // speech-set.js は import.meta.url 相対（distではlibがルート直下）
+  // ↑ lib内のテクスチャ既定値（fx-beam.js の '../electric.png' 等）も tex/ へ書き換える。
+  //   ここを忘れると本番でアプリの1つ上の階層を探しに行って404になる
   fs.writeFileSync(path.join(dest, f), libSrc);
   console.log(`copied: ${f}`);
 }
@@ -102,9 +107,6 @@ const vrmaDest = path.join(dest, 'vrma'); fs.mkdirSync(vrmaDest, { recursive: tr
 // T ポーズになる事故を防ぐ）
 const kenWalkVrma = (jsSrc.match(/KEN_WALK_VRMA = '([^']+)'/) || [])[1] || 'Catwalk_Walk_Forward.vrma';
 const vrmaSet = new Set([kenWalkVrma, 'hit_front.vrma', 'dead03.vrma', 'HumanM@Idle01.vrma']);   // ken歩行＋プレイヤー被弾/死亡
-// timeline/fx が参照する public 直下のテクスチャpng（例 ../electric.png）を集めて同梱し、パスを ./ へ書き換え
-const texPngs = new Set(['electric.png']);   // アルティメット乱射のシート（コードから直接参照）
-const rewriteTexPaths = (text) => text.replace(/\.\.\/([\w\-. %@]+\.png)/g, (_, name) => { texPngs.add(name); return './' + name; });
 for (const t of timelines) {
   const file = path.join(pub, 'timeline', t + '.timeline.json');
   const text = rewriteTexPaths(fs.readFileSync(file, 'utf8'));
@@ -205,9 +207,13 @@ const cityflyJson = TUT
   : ['events.json', 'talks.json', 'expressions.json', 'grabhit.json'];
 for (const f of cityflyJson) {
   const src2 = path.join(pub, 'cityfly', f);
-  if (!fs.existsSync(src2)) { console.warn(`skip missing cityfly/${f}`); continue; }
-  fs.copyFileSync(src2, path.join(dest, 'cityfly', f));
-  console.log(`copied: cityfly/${f}`);
+  if (fs.existsSync(src2)) {
+    fs.copyFileSync(src2, path.join(dest, 'cityfly', f));
+    console.log(`copied: cityfly/${f}`);
+  } else if (f === 'grabhit.json') {   // 未保存でも空で置く（本番で404を出さない）
+    fs.writeFileSync(path.join(dest, 'cityfly', f), JSON.stringify({ format: 'grabhit', version: 1, kinds: {} }));
+    console.log('written: cityfly/grabhit.json (空)');
+  } else console.warn(`skip missing cityfly/${f}`);
 }
 fs.mkdirSync(path.join(dest, 'story'), { recursive: true });
 const storyPrefix = TUT ? 'tutorial_' : 'cityfly_';
@@ -234,10 +240,11 @@ if (fs.existsSync(fxSrcDir)) {
   }
   console.log('copied: fx/*.fx.json');
 }
-// 参照テクスチャpng を dist 直下へ
+// 参照テクスチャpng を dist/tex/ へ（全アセットをフォルダ配下に揃える＝FTPでの取りこぼし防止）
+const texDest = path.join(dest, 'tex'); fs.mkdirSync(texDest, { recursive: true });
 for (const name of texPngs) {
   const src = path.join(pub, name);
-  if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(dest, name)); console.log(`copied: ${name}`); }
+  if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(texDest, name)); console.log(`copied: tex/${name}`); }
   else console.warn(`skip missing texture: ${name}`);
 }
 // 追加 lib（fx-mesh/fx-tornado/fx-particles/fx-dissolve/vrm-ragdoll）
