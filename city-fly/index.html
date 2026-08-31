@@ -3,14 +3,17 @@
 <head>
   <title>CyberBat</title>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1220; color: #e6ecf5; font-family: system-ui, sans-serif; }
-    #app { position: fixed; inset: 0; }
+    /* iOS Safari はツールバーの出入りで 100% / 100vh が実表示とズレる。JSが測った --vh を優先する */
+    html, body { margin: 0; height: var(--vh, 100%); overflow: hidden; overscroll-behavior: none;
+      background: #0e1220; color: #e6ecf5; font-family: system-ui, sans-serif;
+      -webkit-text-size-adjust: 100%; touch-action: none; }
+    #app { position: fixed; left: 0; top: 0; width: 100%; height: var(--vh, 100%); }
     #app canvas { display: block; }
     #topbar { position: fixed; top: 8px; left: 8px; z-index: 20; display: flex; gap: 8px; align-items: center; }
     #topbar a { background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
@@ -50,7 +53,7 @@
     #rotate-hint { display: none; }
     @media (orientation: portrait) and (pointer: coarse) {
       #rotate-hint {
-        position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column;
+        position: fixed; left: 0; top: 0; width: 100%; height: var(--vh, 100%); z-index: 70; display: flex; flex-direction: column;
         align-items: center; justify-content: center; gap: 18px; text-align: center;
         background: #070b18; color: #dbe8ff; font: 700 17px Meiryo, sans-serif; padding: 24px;
       }

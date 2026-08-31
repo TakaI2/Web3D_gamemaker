@@ -107,21 +107,43 @@ const _desiredTarget = new THREE.Vector3(), _desiredPos = new THREE.Vector3();
 
 function $(id) { return document.getElementById(id); }
 function showError(msg) { const e = $('err'); if (e) { e.style.display = 'block'; e.textContent = String(msg); } console.error(msg); }
+let _firstErrShown = false;
+function reportFatal(msg) {   // スマホ用: コンソールが見られない環境でも原因が分かるように画面へ出す
+  if (_firstErrShown) return;
+  _firstErrShown = true;
+  showError(String(msg).slice(0, 300));
+}
+window.addEventListener('error', (e) => reportFatal('エラー: ' + (e.message || e.error)));
+window.addEventListener('unhandledrejection', (e) => reportFatal('未処理の失敗: ' + (e.reason?.message || e.reason)));
 function setStatus(msg) { const e = $('status'); if (e) e.textContent = msg; }
 
 async function init() {
   const app = $('app');
-  if (!navigator.gpu) { showError('WebGPU 非対応のブラウザです'); return; }
+  if (!navigator.gpu) { showError('WebGPU 非対応のブラウザです（iOS は Safari 18 以降 / 設定でWebGPU有効化が必要な場合があります）'); return; }
   // powerPreference: 既定だとブラウザが省電力＝内蔵GPU(Intel)を選ぶことがある。明示して外付けGPU(GeForce等)を要求する。
-  renderer = new THREE.WebGPURenderer({
+  // requiredLimits: マント(GPUクロス)は頂点ステージのストレージバッファを使う。iOS等この上限が0の端末では
+  // requestDevice が失敗して起動できないため、失敗したらマント無しで作り直す（真っ白で止まるより動く方を選ぶ）
+  const mkRenderer = (limits) => new THREE.WebGPURenderer({
     antialias: !NO_AA,
     powerPreference: LOW_POWER ? 'low-power' : 'high-performance',
-    requiredLimits: { maxStorageBuffersInVertexStage: 1 },   // マント(GPUクロス)に必要
+    ...(limits ? { requiredLimits: limits } : {}),
   });
+  renderer = mkRenderer({ maxStorageBuffersInVertexStage: 1 });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, DPR_CAP || (LOW ? 1 : 2)));   // ?dpr=1 / ?low=1 で等倍（塗り面積↓）
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  await renderer.init();
+  try {
+    await renderer.init();
+  } catch (e) {
+    console.warn('WebGPU 初期化に失敗（頂点ストレージバッファ非対応の可能性）→ マント無しで再試行:', e);
+    GPU_CLOTH_OK = false;
+    try { renderer.dispose?.(); } catch { /* noop */ }
+    renderer = mkRenderer(null);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, DPR_CAP || (LOW ? 1 : 2)));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    await renderer.init();   // ここでも失敗したら下の catch がエラー表示する
+  }
   await collectGpuInfo();   // 診断: 実際に使われている GPU（ソフトウェアフォールバックだと極端に遅い）
   app.appendChild(renderer.domElement);
 
@@ -203,6 +225,9 @@ async function init() {
   } catch (e) { console.warn('マルチプレイ初期化失敗:', e); }
   setupControls();
   window.addEventListener('resize', onResize);
+  window.addEventListener('orientationchange', () => setTimeout(onResize, 250));   // 回転直後はサイズが確定していない
+  window.visualViewport?.addEventListener('resize', onResize);
+  onResize();
   renderer.setAnimationLoop(tick);
   const li = $('loading'); if (li) li.style.display = 'none';
   setStatus('クリックで視点ロック / WASD飛行 / Space上昇 Shift下降 / マウスで視点 / ホイール速度');
@@ -243,7 +268,8 @@ if (TUTORIAL) {   // スポーン位置と向きを非同期処理が走る前�
 // 性能切り分け用スイッチ。?diag=1 で GPU名/drawCall/三角数まで表示。
 //   ?nocape=1 マント無効 / ?nocity=1 建物無効 / ?nonpc=1 NPC(ken)と車を無効 / ?dpr=1 解像度を下げる
 const _qs = new URLSearchParams(location.search);
-const NO_CAPE = _qs.get('nocape') === '1';
+let NO_CAPE = _qs.get('nocape') === '1';
+let GPU_CLOTH_OK = true;   // 頂点ステージのストレージバッファが使えるか（使えない端末はマントを出さない）
 const NO_PORTRAIT = _qs.get('noportrait') === '1';   // 会話ウィンドウの立体ポートレートを無効化（負荷比較用）
 const NO_CITY = _qs.get('nocity') === '1';
 const NO_NPC = _qs.get('nonpc') === '1';
@@ -1901,6 +1927,24 @@ function updateTitleSleep() {   // チュートリアルのタイトル: GIF背�
   if (titleSleepOn) { try { player.vrm.expressionManager?.setValue('blink', 1); } catch { /* noop */ } }   // 目を閉じて眠る
 }
 let titleEl = null, goEl = null, paramsEl = null;
+function loadWatchdog() {   // 一定時間たっても起動しない場合、欠けている工程を画面に出す（スマホでの原因切り分け用）
+  const t0 = performance.now();
+  const iv = setInterval(() => {
+    const bs = titleEl && titleEl.querySelector('#cf-start');
+    if (bs && !bs.disabled) { clearInterval(iv); return; }
+    const sec = (performance.now() - t0) / 1000;
+    if (sec < 40) return;
+    clearInterval(iv);
+    const miss = [];
+    if (!renderer) miss.push('描画初期化');
+    if (!player.ready) miss.push('プレイヤーVRM');
+    if (!ev.talks) miss.push('会話データ');
+    if (!guestPreloadDone) miss.push('会話キャストVRM');
+    if (!(cityRoot && collBoxes.length)) miss.push('ステージ構築');
+    reportFatal('読み込みが完了しません（未完: ' + (miss.join(' / ') || '不明') + '）。'
+      + '通信が不安定か、端末のメモリ不足の可能性があります。');
+  }, 2000);
+}
 function setupTitle() {
   titleEl = document.createElement('div');
   titleEl.style.cssText = 'position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;'
@@ -1909,7 +1953,9 @@ function setupTitle() {
   const btn = 'font:700 20px Meiryo,sans-serif;padding:13px 52px;border-radius:8px;border:1px solid #86f;background:rgba(20,24,52,0.88);color:#dde;cursor:pointer;min-width:340px;';
   // ロゴ: CYBER=シアン / BAT=クリムゾン のグラデ文字（背景クリップ）。発光はdrop-shadowで乗せる
   // フォント名の引用符はHTML属性(")と衝突するのでシングルクォートを使う（二重引用符だと属性が途中で閉じて指定が丸ごと無効になる）
-  const logoBase = "font:900 96px Orbitron,'Arial Black',Impact,'Yu Gothic',sans-serif;letter-spacing:0.10em;"
+  const logoPx = Math.round(Math.max(38, Math.min(96, window.innerHeight * 0.20)));   // 横持ちスマホ(高さ390px)でも収まる
+  const subPx = Math.round(Math.max(11, Math.min(26, window.innerHeight * 0.055)));
+  const logoBase = "font:900 " + logoPx + "px Orbitron,'Arial Black',Impact,'Yu Gothic',sans-serif;letter-spacing:0.10em;"
     + '-webkit-background-clip:text;background-clip:text;color:transparent;';
   titleEl.innerHTML = '<div style="display:flex;align-items:baseline;line-height:1;padding:18px 60px 10px;'
       + 'background:radial-gradient(ellipse at center,rgba(4,8,20,0.82) 30%,rgba(4,8,20,0) 72%);'
@@ -1917,7 +1963,7 @@ function setupTitle() {
       + '<span style="' + logoBase + 'background-image:linear-gradient(180deg,#ffffff 8%,#9fe4ff 46%,#2f8fe0 62%,#1a4f9c 100%);">CYBER</span>'
       + '<span style="' + logoBase + 'background-image:linear-gradient(180deg,#fff0f2 8%,#ff8090 44%,#e0203c 62%,#8c0a20 100%);">BAT</span>'
     + '</div>'
-    + "<div style=\"font:700 26px Orbitron,'Arial Black',Impact,sans-serif;color:#cfe4ff;letter-spacing:0.34em;margin-top:2px;"
+    + "<div style=\"font:700 " + subPx + "px Orbitron,'Arial Black',Impact,sans-serif;color:#cfe4ff;letter-spacing:0.34em;margin-top:2px;"
       + 'text-shadow:0 2px 8px #000,0 0 18px rgba(0,0,0,0.95),0 0 26px rgba(80,170,255,0.45);">' + (TUTORIAL ? 'TRAINING PROGRAM' : 'DEAD ATMOS ASSAULT') + '</div>'
     + '<button id="cf-start" style="' + btn + 'margin-top:64px;" disabled>準備中…</button>';
   document.body.appendChild(titleEl);
@@ -1932,6 +1978,7 @@ function setupTitle() {
     if (worldOk && guestPreloadDone) { loadProg(100); if (!bs.disabled) clearInterval(iv); }
   }, 400);
   bs.addEventListener('click', () => startMode('play'));
+  loadWatchdog();
 }
 // スマホ: ゲーム開始時に全画面化＋横向きロックを試す。
 // Androidは screen.orientation.lock が効く（全画面が前提）。iOSは両方とも非対応なので
@@ -2012,7 +2059,7 @@ let gameBgm = null;
 function updateGameBgm() {
   const want = gameMode === 'play' && !playerDead;
   if (want) {
-    if (!gameBgm) { gameBgm = new Audio(PUB_ROOT + 'BGM/' + (TUTORIAL ? 'zensen-he-totugekiseyo.ogg' : 'Sound_Wave.ogg')); gameBgm.loop = true; gameBgm.volume = 0.45; }
+    if (!gameBgm) { gameBgm = new Audio(audioSrc(PUB_ROOT + 'BGM/' + (TUTORIAL ? 'zensen-he-totugekiseyo.ogg' : 'Sound_Wave.ogg'))); gameBgm.loop = true; gameBgm.volume = 0.45; }
     if (gameBgm.paused) gameBgm.play().catch(() => { /* 自動再生制限 */ });
   } else if (gameBgm && !gameBgm.paused) gameBgm.pause();
 }
@@ -2322,12 +2369,14 @@ let guestPreloadDone = false;
 async function preloadGuestVrms() {
   for (let i = 0; i < 40 && !(ev.talks && ev.talks.actors); i++) await new Promise((r) => setTimeout(r, 500));   // talks.json 待ち
   const actors = (ev.talks && ev.talks.actors) || {};
-  for (const [aid, a] of Object.entries(actors)) {
-    const file = a && (a.npc || a.vrm);
-    if (!file || aid === PORTRAIT_ACTOR) continue;
-    await ensureGuestVrm(aid, file);   // 直列＝読込集中で本編がカクつかないように
-  }
-  guestPreloadDone = true;
+  try {
+    for (const [aid, a] of Object.entries(actors)) {
+      const file = a && (a.npc || a.vrm);
+      if (!file || aid === PORTRAIT_ACTOR) continue;
+      // 1体の失敗で全体を止めない（その話者は2D顔グラにフォールバックする）
+      try { await ensureGuestVrm(aid, file); } catch (e) { console.warn('ゲスト先読み失敗:', aid, e); }
+    }
+  } finally { guestPreloadDone = true; }
 }
 function headNodeOf(vrm) {
   const hm = vrm && vrm.humanoid;
@@ -2374,7 +2423,7 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
     scene.add(vrm.scene);
     vrm.scene.updateMatrixWorld(true);
     g.vrm = vrm;
-    if (bundle && bundle.cloth && !NO_CAPE) {   // マント（GPUクロス）。プレイヤーと同じ正準化を適用
+    if (bundle && bundle.cloth && !NO_CAPE && GPU_CLOTH_OK) {   // マント（GPUクロス）。プレイヤーと同じ正準化を適用
       try {
         const gripFlip = Math.cos(faceOff) > 0;
         const _flipO = (o) => { if (Array.isArray(o) && o.length >= 3) { o[0] = -o[0]; o[2] = -o[2]; } };
@@ -2881,7 +2930,7 @@ async function loadPlayer() {
     player.mixer = new THREE.AnimationMixer(vrm.scene);
     // マント（GPUクロス）。空中でも落ちないよう floorY 無効化
     // ?nocape=1 でマントを生成しない（性能切り分け用: マントが重さの原因かを比較できる）
-    if (bundle.cloth && !NO_CAPE) {
+    if (bundle.cloth && !NO_CAPE && GPU_CLOTH_OK) {
       try {
         // lib/vrm-cloth の初期配置は editorTransform.ry しか回さず、モデルの向き(yaw+faceOffset)を知らない。
         // アンカーは初期配置から再導出されるため、向きを ry に合成しないと首元が180°破綻する
@@ -6191,7 +6240,7 @@ function boostAudio(el, gain) {   // HTMLAudioをWebAudioのGainNodeで>1.0倍�
 let lgBeamSnd = null;
 function largeBeamSound(on) {   // 照射中のレーザーループ音（3倍ブースト）
   if (on) {
-    if (!lgBeamSnd) { lgBeamSnd = new Audio('../sound/' + encodeURIComponent('銃火器・レーザーガン06.ogg')); lgBeamSnd.loop = true; lgBeamSnd.volume = 1.0; }
+    if (!lgBeamSnd) { lgBeamSnd = new Audio(audioSrc('../sound/' + encodeURIComponent('銃火器・レーザーガン06.ogg'))); lgBeamSnd.loop = true; lgBeamSnd.volume = 1.0; }
     boostAudio(lgBeamSnd, 3.0);
     lgBeamSnd.currentTime = 0;
     lgBeamSnd.play().catch(() => { /* 自動再生制限 */ });
@@ -6459,6 +6508,10 @@ function debugThrow(car, vx, vy, vz) {   // 自動テスト用: 掴み→投げ�
   thrownCars.push(car);
 }
 // ── 効果音（sound/*.ogg。cloneNodeで多重再生）──
+// iOS/macOS Safari は Ogg Vorbis を再生できない。同名の .m4a があればそちらへ差し替える
+// （用意できていない音は無音になるだけで、他の動作には影響しない）
+const _canOgg = (() => { try { return !!new Audio().canPlayType('audio/ogg; codecs=vorbis'); } catch { return false; } })();
+function audioSrc(url) { return _canOgg ? url : url.replace(/\.ogg(\?|$)/i, '.m4a$1'); }
 const _sfxCache = new Map(), _sfxTimes = new Map();
 function playSfx(name, vol = 0.7) {
   try {
@@ -6470,7 +6523,7 @@ function playSfx(name, vol = 0.7) {
     if (ts.length >= 4 || (ts.length && now - ts[ts.length - 1] < 70)) return;
     ts.push(now);
     let b = _sfxCache.get(name);
-    if (!b) { b = new Audio('../sound/' + name); _sfxCache.set(name, b); }
+    if (!b) { b = new Audio(audioSrc('../sound/' + name)); _sfxCache.set(name, b); }
     const a = b.cloneNode();
     a.volume = Math.max(0, Math.min(1, vol));
     a.play().catch(() => {});
@@ -7982,7 +8035,7 @@ async function prepareBiteAssets() {
     }
   } catch (e) { console.warn('feed VRMA 読込失敗:', e); }
   if (bite.cfg.anim?.sound) {
-    try { bite.sound = new Audio('../audio/' + encodeURIComponent(bite.cfg.anim.sound)); bite.sound.loop = true; bite.sound.load(); }
+    try { bite.sound = new Audio(audioSrc('../audio/' + encodeURIComponent(bite.cfg.anim.sound))); bite.sound.loop = true; bite.sound.load(); }
     catch { bite.sound = null; }
   }
   bite.ready = !!(bite.cfg && bite.victimAnim && bite.feedAction);
@@ -8013,7 +8066,7 @@ function startVictimAnim(m) {
 let eatSnd = null;
 function eatingSound(on) {   // 吸血ループ音（3.5倍ブースト）
   if (on) {
-    if (!eatSnd) { eatSnd = new Audio('../sound/chuchu1.ogg'); eatSnd.loop = true; eatSnd.volume = 1.0; }
+    if (!eatSnd) { eatSnd = new Audio(audioSrc('../sound/chuchu1.ogg')); eatSnd.loop = true; eatSnd.volume = 1.0; }
     boostAudio(eatSnd, 3.5);
     eatSnd.currentTime = 0;
     eatSnd.play().catch(() => { /* 自動再生制限 */ });
@@ -10143,8 +10196,13 @@ function tick() {
 }
 
 function onResize() {
-  camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  // iOS Safari はツールバーの表示/非表示や回転で表示領域が変わる。visualViewport があればそちらを信用する
+  const vv = window.visualViewport;
+  const w = Math.round(vv?.width || window.innerWidth);
+  const h = Math.round(vv?.height || window.innerHeight);
+  document.documentElement.style.setProperty('--vh', h + 'px');   // CSS側の全画面要素もこの高さに合わせる
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
 }
 
 setupTitle();

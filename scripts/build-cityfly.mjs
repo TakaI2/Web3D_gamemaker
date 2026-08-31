@@ -165,7 +165,8 @@ const sndSrc = path.join(pub, 'sound');
 if (fs.existsSync(sndSrc)) {
   const sDest = path.join(dest, 'sound'); fs.mkdirSync(sDest, { recursive: true });
   let n = 0;
-  for (const f of fs.readdirSync(sndSrc).filter((f) => f.endsWith('.ogg'))) { fs.copyFileSync(path.join(sndSrc, f), path.join(sDest, f)); n++; }
+  // .m4a も同梱（iOS/Safari は Ogg Vorbis を再生できないため audioSrc() が .m4a を参照する）
+  for (const f of fs.readdirSync(sndSrc).filter((f) => /\.(ogg|m4a)$/i.test(f))) { fs.copyFileSync(path.join(sndSrc, f), path.join(sDest, f)); n++; }
   console.log(`copied: ${n} sound files`);
 }
 // ゲームループ定義（イベント・会話・2Dシナリオ・フロー）
