@@ -975,9 +975,11 @@ function tutBldMd(geo, mat, tier, insts, opts = {}) {   // 単体ジオメトリ
 function tutObjective(text) {   // 画面右上の目標表示
   if (!tut.objEl) {
     tut.objEl = document.createElement('div');
-    tut.objEl.style.cssText = 'position:fixed;right:12px;top:96px;z-index:24;pointer-events:none;'
-      + 'background:rgba(8,14,30,0.6);border:1px solid rgba(255,205,110,0.5);border-radius:6px;padding:6px 14px;'
-      + 'color:#ffe6b0;font:700 14px Meiryo,sans-serif;text-shadow:0 1px 3px #000;';
+    tut.objEl.style.cssText = 'position:fixed;right:' + (IS_TOUCH ? 8 : 12) + 'px;top:' + (IS_TOUCH ? 34 : 96) + 'px;'
+      + 'z-index:24;pointer-events:none;max-width:' + (IS_TOUCH ? '46vw' : 'none') + ';text-align:right;'
+      + 'background:rgba(8,14,30,0.6);border:1px solid rgba(255,205,110,0.5);border-radius:6px;'
+      + (IS_TOUCH ? 'padding:3px 8px;font:700 12px Meiryo,sans-serif;' : 'padding:6px 14px;font:700 14px Meiryo,sans-serif;')
+      + 'color:#ffe6b0;text-shadow:0 1px 3px #000;';
     document.body.appendChild(tut.objEl);
   }
   if (!text) { tut.objEl.style.display = 'none'; return; }
@@ -1810,9 +1812,11 @@ function tutHint(key) {
   if (!h) return;
   if (!tut.hintEl) {
     tut.hintEl = document.createElement('div');
-    tut.hintEl.style.cssText = 'position:fixed;left:50%;top:' + (IS_TOUCH ? 106 : 64) + 'px;transform:translateX(-50%);z-index:24;pointer-events:none;'
-      + 'background:rgba(8,14,30,0.72);border:1px solid rgba(120,190,255,0.55);border-radius:8px;padding:10px 22px;'
-      + 'color:#dff2ff;font:700 15px Meiryo,sans-serif;text-shadow:0 1px 3px #000;max-width:82vw;text-align:center;';
+    tut.hintEl.style.cssText = 'position:fixed;z-index:24;pointer-events:none;'
+      + (IS_TOUCH ? 'right:8px;top:64px;max-width:52vw;padding:4px 9px;font:700 12px/1.4 Meiryo,sans-serif;text-align:right;'
+        : 'left:50%;top:64px;transform:translateX(-50%);max-width:82vw;padding:10px 22px;font:700 15px Meiryo,sans-serif;text-align:center;')
+      + 'background:rgba(8,14,30,0.72);border:1px solid rgba(120,190,255,0.55);border-radius:8px;'
+      + 'color:#dff2ff;text-shadow:0 1px 3px #000;';
     document.body.appendChild(tut.hintEl);
   }
   tut.hintEl.textContent = '＜' + (typeof h === 'string' ? h : (IS_TOUCH ? h.sp : h.pc)) + '＞';
