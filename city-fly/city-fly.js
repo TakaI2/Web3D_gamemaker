@@ -10,6 +10,7 @@ import { VRMLoaderPlugin, MToonMaterialLoaderPlugin } from 'https://esm.sh/@pixi
 import { MToonNodeMaterial } from 'https://esm.sh/@pixiv/three-vrm@3.5.3/nodes?deps=three@0.184.0';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from 'https://esm.sh/@pixiv/three-vrm-animation@3.5.3?deps=three@0.184.0,@pixiv/three-vrm@3.5.3';
 import { createVRMCloth } from '../lib/vrm-cloth.js';
+import { GRAB_SHAPES, makeGrabGeo } from '../lib/grab-shapes.js';   // 掴みプロップの形状（grab-editorと共有）
 import { createCityflyMp } from '../lib/cityfly-mp.js';
 import { createMeshFx } from '../lib/fx-mesh.js';
 import { createBeamFx } from '../lib/fx-beam.js';
@@ -990,7 +991,7 @@ function tutPropDecor(mesh, geo, color, maxDim) {   // 太さのある発光エ�
   mesh.add(vIM);
   return vMat;   // 点滅制御用
 }
-function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ（不透明本体+太い発光エッジ+点滅する頂点球。既存の掴み/投擲/転がり物理に乗る）
+function tutProp(geo, x, z, mass, color, ry = 0, kind = 'prop') {   // グラブ用プロップ（不透明本体+太い発光エッジ+点滅する頂点球。既存の掴み/投擲/転がり物理に乗る）
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.25 });
   const mesh = new THREE.Mesh(geo, mat);
   geo.computeBoundingBox();
@@ -1003,8 +1004,9 @@ function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ
   const size = bb.getSize(new THREE.Vector3());
   const ptsMat = tutPropDecor(mesh, geo, color, Math.max(size.x, size.y, size.z));
   tut.root.add(mesh);
-  const proxy = { mesh, hitR: Math.max(size.x, size.y, size.z) * 0.5, mass, tutObj: true,
-    home: { x, y: -bb.min.y, z, ry }, tutHp0: 2 + mass, tutHp: 2 + mass, blinkMat: ptsMat, blinkPhase: x * 0.37 };
+  const hbC = bb.getCenter(new THREE.Vector3()), hbH = size.clone().multiplyScalar(0.5);
+  const proxy = regGrabObj({ mesh, hbKind: kind, hitBox: { c: hbC, h: hbH }, hitR: hbC.length() + hbH.length(), mass, tutObj: true,
+    home: { x, y: -bb.min.y, z, ry }, tutHp0: 2 + mass, tutHp: 2 + mass, blinkMat: ptsMat, blinkPhase: x * 0.37 });
   mesh.userData.car = proxy;   // レイ照準の掴みで直接ヒットできるように
   tutProps.push(proxy);
   return proxy;
@@ -1012,14 +1014,15 @@ function tutProp(geo, x, z, mass, color, ry = 0) {   // グラブ用プロップ
 async function buildTutContainers() {   // 市街の港と同じコンテナを部屋3以降へ各10個（掴める・壊せる・数秒で再出現）
   // 構築方法もtakeContainerと完全に同一（未スケールのbake済みジオメトリ＋mesh.scale）＝見た目が市街と一致する
   const loader = new GLTFLoader();
-  const a = bakeModel((await loader.loadAsync(new URL('../models/waterfront_GLB%20format/cargo-container-a.glb', location.href).href)).scene);
+  const a = bakeModel((await loader.loadAsync(new URL('../models/' + GRAB_SHAPES.container.glb.split('/').map(encodeURIComponent).join('/'), location.href).href)).scene);
   const g = a.geometry.clone();
   g.computeBoundingBox();
   let b = g.boundingBox;
   if ((b.max.z - b.min.z) > (b.max.x - b.min.x)) { g.rotateY(Math.PI / 2); g.computeBoundingBox(); b = g.boundingBox; }   // 長軸→X
   g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
   const size0 = b.getSize(new THREE.Vector3());
-  const cs = 6.2 / Math.max(0.01, size0.x);   // 市街と同じ実寸6.2m（mesh.scaleで適用）
+  const cBoxC = b.getCenter(new THREE.Vector3()), cBoxH = size0.clone().multiplyScalar(0.5);   // ローカル(未スケール)の実寸箱
+  const cs = GRAB_SHAPES.container.fitX / Math.max(0.01, size0.x);   // 市街と同じ実寸6.2m（mesh.scaleで適用）
   for (const ri of [2, 3, 5]) {   // 部屋3(空中戦)・部屋4(念動力)・部屋6(ボス)
     const R = tut.rooms[ri], cx = (R.x0 + R.x1) / 2, W = R.z1 - R.z0;
     for (let i = 0; i < 10; i++) {
@@ -1039,8 +1042,8 @@ async function buildTutContainers() {   // 市街の港と同じコンテナを�
       glow.position.y = size0.y + 1.2 / cs;
       mesh.add(glow);
       tut.root.add(mesh);
-      const proxy = { mesh, hitR: 4.2, mass: 3, tutObj: true, glowBase: 1 / cs,
-        home: { x: px, y: 0, z: pz, ry: mesh.rotation.y }, tutHp0: 5, tutHp: 5 };
+      const proxy = regGrabObj({ mesh, hbKind: 'container', hitBox: { c: cBoxC.clone(), h: cBoxH.clone() }, hitR: (cBoxC.length() + cBoxH.length()) * cs, mass: 3, tutObj: true, glowBase: 1 / cs,
+        home: { x: px, y: 0, z: pz, ry: mesh.rotation.y }, tutHp0: 5, tutHp: 5 });
       mesh.userData.car = proxy;
       tutProps.push(proxy);
     }
@@ -1071,17 +1074,15 @@ function buildTutRoom4(geoms) {   // 部屋4: 念動力訓練（要塞＋砲台�
   ], { noDecay: true, noEnemyDmg: true });
   tut.turrets = tut.turMd.recs.map((rec, i) => ({ rec, x: rec.x, z: rec.z, y: 15, cd: 2 + i * 0.9 }));
   // グラブ用プロップ（小→船級。質量で慣性/投擲ダメージが変わる）
-  const crate = new THREE.BoxGeometry(4, 4, 4); crate.translate(0, 2, 0);
-  const block = new THREE.BoxGeometry(6.5, 3.2, 5); block.translate(0, 1.6, 0);
-  const pillar = new THREE.CylinderGeometry(5, 5, 28, 12); pillar.translate(0, 14, 0);
-  const beam = new THREE.BoxGeometry(55, 8, 10); beam.translate(0, 4, 0);
+  const crate = makeGrabGeo(THREE, 'crate'), block = makeGrabGeo(THREE, 'block');   // 形状はlib/grab-shapes.js＝grab-editorと同一
+  const pillar = makeGrabGeo(THREE, 'pillar'), beam = makeGrabGeo(THREE, 'beam');
   const spots = [   // コンテナ級はGLBコンテナ(buildTutContainers)に一本化したため箱プロップからは除外
-    [crate, -200, -180, 1.2, 0xc9a860], [crate, -160, 200, 1.2, 0xc9a860], [crate, 150, -210, 1.2, 0xc9a860], [crate, 210, 170, 1.2, 0xc9a860],
-    [block, -220, 40, 2, 0x7fa6c9], [block, 90, 225, 2, 0x7fa6c9], [block, 200, -60, 2, 0x7fa6c9],
-    [pillar, -180, -90, 12, 0x9a90c9], [pillar, 175, 205, 12, 0x9a90c9],
-    [beam, -90, 235, 32, 0x8891a5], [beam, 60, -235, 32, 0x8891a5],
+    [crate, -200, -180, 1.2, 0xc9a860, 'crate'], [crate, -160, 200, 1.2, 0xc9a860, 'crate'], [crate, 150, -210, 1.2, 0xc9a860, 'crate'], [crate, 210, 170, 1.2, 0xc9a860, 'crate'],
+    [block, -220, 40, 2, 0x7fa6c9, 'block'], [block, 90, 225, 2, 0x7fa6c9, 'block'], [block, 200, -60, 2, 0x7fa6c9, 'block'],
+    [pillar, -180, -90, 12, 0x9a90c9, 'pillar'], [pillar, 175, 205, 12, 0x9a90c9, 'pillar'],
+    [beam, -90, 235, 32, 0x8891a5, 'beam'], [beam, 60, -235, 32, 0x8891a5, 'beam'],
   ];
-  for (const [g, ox, oz, mass, color] of spots) tutProp(g.clone(), cx2 + ox * 0.95, oz * 0.95, mass, color, Math.sin(ox * 12.9898) * 3);
+  for (const [g, ox, oz, mass, color, kind] of spots) tutProp(g.clone(), cx2 + ox * 0.95, oz * 0.95, mass, color, Math.sin(ox * 12.9898) * 3, kind);
   tut.fortDown = false;
 }
 function tutFortHp() {
@@ -1126,7 +1127,7 @@ function buildTutBoss() {
     const dm = new THREE.Mesh(new THREE.OctahedronGeometry(6.4, 0), droneMat.clone());   // 子機2倍
     dm.frustumCulled = false;
     tut.root.add(dm);
-    const proxy = { mesh: dm, hitR: 8.4, mass: 3, drone: true };
+    const proxy = regGrabObj({ mesh: dm, hbKind: 'drone', hitR: 8.4, mass: 3, drone: true });
     const d = { mesh: dm, proxy, state: 'orbit', hp: DRONE_HP,
       th: i / DRONE_N * Math.PI * 2, w: 0.7 + (i % 3) * 0.25, r: 48 + (i % 4) * 6,   // 2倍コアに合わせて軌道拡大
       tilt: (i % 4) * 0.5, vel: new THREE.Vector3(), t: 0 };
@@ -1387,13 +1388,12 @@ function updateTutBoss(dt) {
 }
 function buildTutRoom6() {   // 部屋6: ボス戦（グラブ可能な巨大オブジェクトも多数）
   const R = tut.rooms[5], cx = (R.x0 + R.x1) / 2;
-  const pillar6 = new THREE.CylinderGeometry(5, 5, 28, 12); pillar6.translate(0, 14, 0);
-  const beam6 = new THREE.BoxGeometry(55, 8, 10); beam6.translate(0, 4, 0);
+  const pillar6 = makeGrabGeo(THREE, 'pillar'), beam6 = makeGrabGeo(THREE, 'beam');
   const spots6 = [   // コンテナ級はGLBコンテナに一本化
-    [beam6, -240, -240, 32, 0x8891a5], [beam6, 240, 240, 32, 0x8891a5], [beam6, -240, 240, 32, 0x8891a5],
-    [pillar6, 250, -230, 12, 0x9a90c9], [pillar6, -120, 260, 12, 0x9a90c9],
+    [beam6, -240, -240, 32, 0x8891a5, 'beam'], [beam6, 240, 240, 32, 0x8891a5, 'beam'], [beam6, -240, 240, 32, 0x8891a5, 'beam'],
+    [pillar6, 250, -230, 12, 0x9a90c9, 'pillar'], [pillar6, -120, 260, 12, 0x9a90c9, 'pillar'],
   ];
-  for (const [g, ox, oz, mass, color] of spots6) tutProp(g.clone(), cx + ox, oz, mass, color, Math.sin(ox * 7.13) * 3);
+  for (const [g, ox, oz, mass, color, kind] of spots6) tutProp(g.clone(), cx + ox, oz, mass, color, Math.sin(ox * 7.13) * 3, kind);
   buildTutBoss();
 }
 const TUT_SUCK_DUR = 4.5;   // セーフティエリア吸い込みの所要秒（ゆっくり）
@@ -1495,6 +1495,7 @@ function updateTutRoom3(dt) {
   }
 }
 async function buildTutorialStage() {
+  grabHitCfg = await grabHitP;   // 当たり判定の上書き（エディタ保存分）
   const geoms = [], emGeoms = [];
   const totalL = TUT_ROOMS.reduce((a, r) => a + r.L, 0) + TUT_WALL * (TUT_ROOMS.length + 1);
   let x = -totalL / 2;   // 西外壁の西端
@@ -2752,6 +2753,7 @@ async function loadPlayer() {
 }
 
 window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating,
+  hitTest: (car, ox, oy, oz, dx, dy, dz, maxT = 500) => rayHitObj(new THREE.Vector3(ox, oy, oz), new THREE.Vector3(dx, dy, dz).normalize(), car, maxT),
   testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
   dmgBldAt: (x, z, dmg = 1) => {   // テスト用: 最寄り建物へダメージ
@@ -3301,7 +3303,7 @@ function takeContainer(i) {   // インスタンス→単体メッシュ化（�
   mesh.scale.setScalar(portCont.s);
   mesh.position.set(sp.x, sp.y + 1.3, sp.z);
   scene.add(mesh);
-  const proxy = { mesh, hitR: 4.2, mass: 3, container: true };
+  const proxy = regGrabObj({ mesh, hbKind: 'cityContainer', hitR: 4.2, mass: 3, container: true });
   mesh.userData.car = proxy;
   takenConts.push(proxy);   // 静止後も再び掴めるよう常設リストへ
   return proxy;
@@ -5003,6 +5005,7 @@ function setupControls() {
   cv.addEventListener('click', () => { if (!locked && !agentEd.open) cv.requestPointerLock(); });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());   // 右クリックメニュー抑止
   cv.addEventListener('mousedown', (e) => {
+    if (hitEd.on) { if (e.button === 0) hitEdPick(e.clientX, e.clientY); return; }   // 当たり判定エディタ中は選択に使う
     if (!locked) return;
     if (player.eating) { if (e.button === 0) cancelEating(); return; }   // 吸血中は左クリックで中断（他ボタンは入力ロック）
     if (e.button === 0) { player.charging = true; player.chargeT = 0; }  // タップ=ビーム / 長押し=チャージ(空中)・トーテム(接地)
@@ -5019,6 +5022,12 @@ function setupControls() {
   });
   document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === cv; });
   document.addEventListener('mousemove', (e) => {
+    if (hitEd.on) {   // 当たり判定エディタ中はポインタロックなし＝右ドラッグで視点を回す
+      if (!(e.buttons & 2)) return;
+      camYaw -= e.movementX * 0.0024; camPitch -= e.movementY * 0.0024;
+      camPitch = Math.max(-1.25, Math.min(1.35, camPitch));
+      return;
+    }
     if (!locked) return;
     camYaw -= e.movementX * 0.0024; camPitch -= e.movementY * 0.0024;
     camPitch = Math.max(-1.25, Math.min(1.35, camPitch));
@@ -5028,6 +5037,7 @@ function setupControls() {
     if (e.code === 'KeyM') { toggleAgentEd(); return; }
     if (agentEd.open) return;   // エディタ表示中はゲーム操作を止める
     keysDown[e.code] = true;
+    if (e.code === 'KeyH') { toggleHitEd(); return; }   // 当たり判定エディタ（掴み対象の判定を可視化・調整・保存）
     if (e.code === 'KeyE' && locked) onInteract();
     if (e.code === 'KeyT') timeScale = timeScale === 1 ? 10 : timeScale === 10 ? 60 : 1;   // 時間の早送り（動作確認用）
   });
@@ -5591,6 +5601,213 @@ function rayHitSphere(o, d, center, radius, maxT) {   // レイ上の命中距�
   const perp2 = _rayToC.lengthSq() - t * t;
   return perp2 <= radius * radius ? t : Infinity;
 }
+const _obbInv = new THREE.Matrix4(), _obbO = new THREE.Vector3(), _obbD = new THREE.Vector3(), _obbP = new THREE.Vector3();
+function rayHitObj(o, d, car, maxT) {   // 掴み対象への射線判定: hitBox(ローカル中心+半径)があれば実寸の直方体、無ければ従来の球
+  const hb = car.hitBox;
+  if (!hb) return rayHitSphere(o, d, car.mesh.position, car.hitR || 2.4, maxT);
+  if (rayHitSphere(o, d, car.mesh.position, car.hitR || 2.4, maxT) === Infinity) return Infinity;   // 外接球で早期棄却
+  car.mesh.updateMatrixWorld();
+  _obbInv.copy(car.mesh.matrixWorld).invert();
+  _obbO.copy(o).applyMatrix4(_obbInv);
+  _obbD.copy(d).transformDirection(_obbInv);
+  let tmin = -Infinity, tmax = Infinity;
+  for (const ax of ['x', 'y', 'z']) {
+    const oc = _obbO[ax] - hb.c[ax], dd = _obbD[ax], h = hb.h[ax];
+    if (Math.abs(dd) < 1e-9) { if (Math.abs(oc) > h) return Infinity; continue; }
+    let t1 = (-h - oc) / dd, t2 = (h - oc) / dd;
+    if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; }
+    if (t1 > tmin) tmin = t1;
+    if (t2 < tmax) tmax = t2;
+    if (tmin > tmax) return Infinity;
+  }
+  const tl = tmin > 0 ? tmin : (tmax > 0 ? tmax : Infinity);
+  if (tl === Infinity) return Infinity;
+  _obbP.copy(_obbO).addScaledVector(_obbD, tl).applyMatrix4(car.mesh.matrixWorld);   // ローカル→ワールドで実距離に直す（スケール対応）
+  const tw = _obbP.distanceTo(o);
+  return tw <= maxT ? tw : Infinity;
+}
+// ── 掴み対象の登録: grab-editor で保存した当たり判定を適用する（列挙はしない＝本編は軽いまま）──
+function regGrabObj(car) {
+  if (car.mesh && car.hitScale == null) car.hitScale = car.mesh.scale.x || 1;   // ローカル→世界の倍率
+  return applyGrabHit(car);
+}
+// ── 点→掴み対象の表面距離（hitBoxがあれば実寸の直方体、無ければ球）──
+const _sdInv = new THREE.Matrix4(), _sdP = new THREE.Vector3();
+function carSurfDist(car, px, py, pz) {
+  const hb = car.hitBox;
+  if (!hb) return Math.hypot(px - car.mesh.position.x, py - car.mesh.position.y, pz - car.mesh.position.z) - (car.hitR || 2.5);
+  car.mesh.updateMatrixWorld();
+  _sdInv.copy(car.mesh.matrixWorld).invert();
+  _sdP.set(px, py, pz).applyMatrix4(_sdInv);
+  _sdP.set(   // ローカル空間で箱にクランプ＝最近点
+    Math.max(hb.c.x - hb.h.x, Math.min(hb.c.x + hb.h.x, _sdP.x)),
+    Math.max(hb.c.y - hb.h.y, Math.min(hb.c.y + hb.h.y, _sdP.y)),
+    Math.max(hb.c.z - hb.h.z, Math.min(hb.c.z + hb.h.z, _sdP.z)),
+  );
+  _sdP.applyMatrix4(car.mesh.matrixWorld);   // 世界へ戻して実距離（スケール込みで正確）
+  return Math.hypot(px - _sdP.x, py - _sdP.y, pz - _sdP.z);
+}
+// ── 当たり判定の上書き（public/cityfly/grabhit.json＝Hキーのエディタが保存）──
+let grabHitCfg = null;
+const grabHitP = fetch('../cityfly/grabhit.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+// ═════════ 当たり判定エディタ（Hキー）: 掴み対象のOBB/球を可視化して調整・保存 ═════════
+const hitEd = { on: false, sel: null, kind: null, wires: [], el: null };
+const _hedBoxGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+const _hedSphGeo = new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(1, 1));
+const _hedMat = new THREE.LineBasicMaterial({ color: 0x36ff9a, transparent: true, opacity: 0.85, depthTest: false });
+const _hedMatSel = new THREE.LineBasicMaterial({ color: 0xffdc3a, transparent: true, opacity: 1, depthTest: false });
+function hitEdWireOf(car) {   // 当たり判定の形をワイヤーフレームで（メッシュの子＝回転/スケールに追従）
+  const inv = 1 / (car.mesh.scale.x || 1);
+  let w;
+  if (car.hitBox) {
+    w = new THREE.LineSegments(_hedBoxGeo, _hedMat);
+    w.scale.set(car.hitBox.h.x * 2, car.hitBox.h.y * 2, car.hitBox.h.z * 2);
+    w.position.copy(car.hitBox.c);
+  } else {
+    w = new THREE.LineSegments(_hedSphGeo, _hedMat);
+    w.scale.setScalar((car.hitR || 2.4) * inv);
+  }
+  w.renderOrder = 999;
+  w.frustumCulled = false;
+  car.mesh.add(w);
+  return w;
+}
+function hitEdRefreshWires() {
+  for (const w of hitEd.wires) { if (w.parent) w.parent.remove(w); }
+  hitEd.wires.length = 0;
+  if (!hitEd.on) return;
+  for (const c of grabObjs) {
+    if (!c.mesh || c.dead) continue;
+    const w = hitEdWireOf(c);
+    w.material = (hitEd.kind && c.hbKind === hitEd.kind) || c === hitEd.sel ? _hedMatSel : _hedMat;
+    hitEd.wires.push(w);
+  }
+}
+function toggleHitEd() {
+  hitEd.on = !hitEd.on;
+  if (hitEd.on) { try { document.exitPointerLock(); } catch { /* noop */ } }
+  else { hitEd.sel = null; hitEd.kind = null; }
+  hitEdRefreshWires();
+  hitEdUI();
+}
+const _hedRay = new THREE.Raycaster(), _hedNdc = new THREE.Vector2(), _hedO = new THREE.Vector3(), _hedD = new THREE.Vector3();
+function hitEdPick(clientX, clientY) {   // 画面座標から掴み対象を選択（実寸OBBで判定）
+  _hedNdc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+  _hedRay.setFromCamera(_hedNdc, camera);
+  _hedO.copy(_hedRay.ray.origin); _hedD.copy(_hedRay.ray.direction);
+  let best = Infinity, sel = null;
+  for (const c of grabObjs) {
+    if (!c.mesh || c.dead || !c.mesh.visible) continue;
+    const t = rayHitObj(_hedO, _hedD, c, 4000);
+    if (t < best) { best = t; sel = c; }
+  }
+  if (!sel) return;
+  hitEd.sel = sel; hitEd.kind = sel.hbKind || null;
+  hitEdRefreshWires();
+  hitEdUI();
+}
+function hitEdApply(field, val) {   // 同じ種類(hbKind)の全個体へ反映＝実プレイと同じ状態で確認できる
+  const sel = hitEd.sel;
+  if (!sel) return;
+  const targets = sel.hbKind ? grabObjs.filter((c) => c.hbKind === sel.hbKind) : [sel];
+  for (const c of targets) {
+    const k = c.hitScale || 1;
+    if (c.hitBox) {
+      if (field === 'hx') c.hitBox.h.x = val / 2 / k;
+      else if (field === 'hy') c.hitBox.h.y = val / 2 / k;
+      else if (field === 'hz') c.hitBox.h.z = val / 2 / k;
+      else if (field === 'cy') c.hitBox.c.y = val / k;
+      c.hitR = (c.hitBox.c.length() + c.hitBox.h.length()) * k;
+    } else if (field === 'r') c.hitR = val;
+  }
+  hitEdRefreshWires();
+  hitEdUI();
+}
+function hitEdFit() {   // 見た目の実寸（ジオメトリのbbox）に合わせる
+  const sel = hitEd.sel;
+  if (!sel || !sel.mesh.geometry) return;
+  const g = sel.mesh.geometry;
+  if (!g.boundingBox) g.computeBoundingBox();
+  const bb = g.boundingBox, sz = bb.getSize(new THREE.Vector3()), ct = bb.getCenter(new THREE.Vector3());
+  const targets = sel.hbKind ? grabObjs.filter((c) => c.hbKind === sel.hbKind) : [sel];
+  for (const c of targets) {
+    if (!c.hitBox) continue;
+    c.hitBox.h.set(sz.x / 2, sz.y / 2, sz.z / 2);
+    c.hitBox.c.copy(ct);
+    c.hitR = (c.hitBox.c.length() + c.hitBox.h.length()) * (c.hitScale || 1);
+  }
+  hitEdRefreshWires();
+  hitEdUI();
+}
+async function hitEdSave() {
+  const kinds = (grabHitCfg && grabHitCfg.kinds) || {};
+  for (const c of grabObjs) {
+    if (!c.hbKind || !c.hitBox) continue;
+    const k = c.hitScale || 1;
+    kinds[c.hbKind] = { hx: +(c.hitBox.h.x * k).toFixed(3), hy: +(c.hitBox.h.y * k).toFixed(3), hz: +(c.hitBox.h.z * k).toFixed(3), cy: +(c.hitBox.c.y * k).toFixed(3) };
+  }
+  grabHitCfg = { format: 'grabhit', version: 1, kinds };
+  try {
+    const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: 'cityfly', filename: 'grabhit.json', content: JSON.stringify(grabHitCfg, null, 2) }) });
+    hitEdUI(r.ok ? '保存しました: cityfly/grabhit.json' : '保存失敗: ' + r.status);
+  } catch (e) { hitEdUI('保存失敗: ' + (e?.message || e)); }
+}
+function hitEdUI(msg) {
+  if (!hitEd.el) {
+    hitEd.el = document.createElement('div');
+    hitEd.el.style.cssText = 'position:fixed;right:12px;top:150px;z-index:41;width:250px;'
+      + 'background:rgba(8,14,30,0.92);border:1px solid rgba(120,220,180,0.6);border-radius:8px;padding:10px 12px;'
+      + 'color:#dff5ea;font:12px Meiryo,sans-serif;';
+    document.body.appendChild(hitEd.el);
+  }
+  hitEd.el.style.display = hitEd.on ? '' : 'none';
+  if (!hitEd.on) return;
+  const sel = hitEd.sel;
+  const row = (label, field, val, step) => '<div style="display:flex;align-items:center;gap:4px;margin:3px 0;">'
+    + '<span style="width:44px;color:#9fd;">' + label + '</span>'
+    + '<button data-f="' + field + '" data-d="' + (-step) + '" style="width:22px;">-</button>'
+    + '<input data-f="' + field + '" type="number" step="' + step + '" value="' + val.toFixed(2) + '" style="width:70px;background:#0d1524;color:#eff;border:1px solid #486;border-radius:3px;padding:2px 4px;">'
+    + '<button data-f="' + field + '" data-d="' + step + '" style="width:22px;">+</button></div>';
+  let body = '';
+  if (!sel) body = '<div style="color:#9ab;">対象を左クリックで選択</div>';
+  else {
+    const k = sel.hitScale || 1;
+    const n = sel.hbKind ? grabObjs.filter((c) => c.hbKind === sel.hbKind).length : 1;
+    body = '<div style="margin-bottom:6px;color:#ffd;">' + (sel.hbKind || '(種類なし)') + '　質量' + (sel.mass ?? 1) + '　×' + n + '個</div>';
+    if (sel.hitBox) {
+      body += row('幅 X', 'hx', sel.hitBox.h.x * 2 * k, 0.5)
+        + row('高 Y', 'hy', sel.hitBox.h.y * 2 * k, 0.5)
+        + row('奥 Z', 'hz', sel.hitBox.h.z * 2 * k, 0.5)
+        + row('中心Y', 'cy', sel.hitBox.c.y * k, 0.5)
+        + '<div style="display:flex;gap:6px;margin-top:8px;"><button id="hed-fit" style="flex:1;">実寸に合わせる</button><button id="hed-save" style="flex:1;">保存</button></div>';
+    } else body += row('半径', 'r', sel.hitR || 2.4, 0.5) + '<div style="color:#9ab;margin-top:6px;">球判定（保存対象外）</div>';
+  }
+  hitEd.el.innerHTML = '<div style="font-weight:700;color:#7fe;margin-bottom:6px;">当たり判定エディタ（H で閉じる）</div>'
+    + body
+    + '<div style="margin-top:8px;color:#9ab;line-height:1.5;">左クリック=選択／右ドラッグ=視点<br>変更は同じ種類すべてに反映</div>'
+    + (msg ? '<div style="margin-top:6px;color:#ffd76a;">' + msg + '</div>' : '');
+  for (const b of hitEd.el.querySelectorAll('button[data-f]')) {
+    b.onclick = () => {
+      const inp = hitEd.el.querySelector('input[data-f="' + b.dataset.f + '"]');
+      hitEdApply(b.dataset.f, parseFloat(inp.value) + parseFloat(b.dataset.d));
+    };
+  }
+  for (const inp of hitEd.el.querySelectorAll('input[data-f]')) {
+    inp.onchange = () => hitEdApply(inp.dataset.f, parseFloat(inp.value) || 0);
+  }
+  const fit = hitEd.el.querySelector('#hed-fit'); if (fit) fit.onclick = hitEdFit;
+  const sv = hitEd.el.querySelector('#hed-save'); if (sv) sv.onclick = hitEdSave;
+}
+function applyGrabHit(car) {   // kind別の保存値を適用（値は世界寸法。hitBoxはローカルなのでスケールで割る）
+  const ov = grabHitCfg && car.hbKind && grabHitCfg.kinds && grabHitCfg.kinds[car.hbKind];
+  if (!ov || !car.hitBox) return car;
+  const k = car.hitScale || 1;
+  if (ov.hx != null) car.hitBox.h.set(ov.hx / k, ov.hy / k, ov.hz / k);
+  if (ov.cy != null) car.hitBox.c.y = ov.cy / k;
+  car.hitR = (car.hitBox.c.length() + car.hitBox.h.length()) * k;   // 外接球（早期棄却/フォールバック）も追従
+  return car;
+}
 function applyHitToBuilding(hit, dmg, fxScale = 1, src = null) {
   if (hit.object.isInstancedMesh && hit.instanceId != null) damageBuilding(hit.object, hit.instanceId, hit.point, dmg, fxScale, src);
   else if (hit.object.userData && hit.object.userData.rec) applyCarve(hit.object.userData.rec, hit.point, dmg, fxScale, src);
@@ -5628,7 +5845,7 @@ function fireBeam(bldDmg, kenDmg, colorHex, thick) {
   let carBest = null, carT = Infinity;
   for (const car of carsAndJets()) {
     if (car.dead || car.grabbed || car.tornado) continue;
-    const t = rayHitSphere(_muzzle, _camDir, car.mesh.position, car.hitR || 2.4, SHOOT_RANGE);
+    const t = rayHitObj(_muzzle, _camDir, car, SHOOT_RANGE);
     if (t < carT) { carT = t; carBest = car; }
   }
   let kenBest = null, kenT = Infinity;
@@ -5762,7 +5979,7 @@ function fireSuperPierce() {
   }
   for (const car of carsAndJets()) {
     if (car.dead || car.grabbed || car.tornado) continue;
-    if (rayHitSphere(_muzzle, _camDir, car.mesh.position, car.hitR || 2.4, endT) < Infinity) hitCarBeam(car);
+    if (rayHitObj(_muzzle, _camDir, car, endT) < Infinity) hitCarBeam(car);
   }
   for (const m of kens) {
     if (m.dissolving || m.eating || m.grabbed || m.tornado) continue;
@@ -5979,7 +6196,7 @@ function updateAttacks(dt) {
     }
     for (const car of carsAndJets()) {
       if (car.dead || car.grabbed || car.tornado) continue;
-      if (rayHitSphere(_muzzle, _camDir, car.mesh.position, car.hitR || 2.4, LARGE_BEAM_RANGE) < Infinity) hitCarBeam(car);
+      if (rayHitObj(_muzzle, _camDir, car, LARGE_BEAM_RANGE) < Infinity) hitCarBeam(car);
     }
     if (walker && !walker.dying) {   // 敵ウォーカーも削れる
       const tw = rayHitSphere(_muzzle, _camDir, _wkV4.set(walker.pos.x, walker.pos.y + 2, walker.pos.z), 13, LARGE_BEAM_RANGE);
@@ -6083,7 +6300,7 @@ function heldContact(car, cx, cy, cz, speed, m, bottomY) {   // 振り回し/転
   for (const c of carsAndJets()) {   // 戦闘機・車・パトカー・列車を薙ぎ払う
     if (c === car || c.grabbed || c.thrown || c.dead || !c.mesh.visible) continue;
     const q = c.mesh.position;
-    if (Math.hypot(cx - q.x, cy - q.y, cz - q.z) >= sweepR + (c.hitR || 2.5)) continue;
+    if (carSurfDist(c, cx, cy, cz) >= sweepR) continue;
     if (c.boss) { bossHit(Math.max(3, Math.min(45, m * speed / 20)), _hcV.set(cx, cy, cz).clone()); car.fxCd = 0.5; return true; }
     if (c.ship) { shipHit(_hcV.set(cx, cy, cz).clone(), Math.max(1, Math.round(m * speed / 60))); car.fxCd = 0.3; return true; }
     breakCar(c, q.clone());
@@ -6231,7 +6448,7 @@ function grabTarget() {
   if (!car) {
     _tmpV.copy(_muzzle).addScaledVector(_camDir, HOLD_DIST + 8);
     let best = GRAB_RANGE, contPick = -1;
-    for (const c of carsAndJets()) { if (!grabbableNow(c)) continue; const d = c.mesh.position.distanceTo(_tmpV); if (d < best) { best = d; car = c; } }
+    for (const c of carsAndJets()) { if (!grabbableNow(c)) continue; const d = carSurfDist(c, _tmpV.x, _tmpV.y, _tmpV.z); if (d < best) { best = d; car = c; } }
     if (portCont) for (let i = 0; i < portCont.spots.length; i++) {
       const sp = portCont.spots[i];
       if (sp.gone) continue;
@@ -6393,7 +6610,7 @@ function updateThrown(dt) {
       for (const c of carsAndJets()) {
         if (c === car || c.grabbed || c.thrown || c.dead || c.ship || !c.mesh.visible) continue;
         const q = c.mesh.position;
-        if (Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) >= (car.rollR || car.hitR || 2) + (c.hitR || 2.5)) continue;
+        if (carSurfDist(c, p.x, p.y, p.z) >= (car.rollR || car.hitR || 2)) continue;
         if (c.boss) { if ((car.fxCd || 0) <= 0) { bossHit(Math.max(3, Math.min(45, m * car.vel.length() / 20)), q.clone()); car.fxCd = 0.5; } continue; }
         breakCar(c, q.clone());
       }
@@ -8322,7 +8539,7 @@ async function spawnPolice() {
     return s;
   };
   const p = { mesh, node: e.aId, path: null, seg: 0, segT: 0, repathT: 0, lightR: mkLight(0xff2020, 0.35), lightB: mkLight(0x2040ff, -0.35), flashT: 0 };
-  p.proxy = { mesh, hitR: 2.8, policeCar: true, pRef: p };   // 攻撃/掴み対象にする cars 互換の最小プロキシ
+  p.proxy = regGrabObj({ mesh, hbKind: 'police', hitR: 2.8, policeCar: true, pRef: p });   // 攻撃/掴み対象にする cars 互換の最小プロキシ
   mesh.userData.car = p.proxy;   // 照準レイの掴み対応
   scene.add(mesh);
   police.push(p);
