@@ -1629,8 +1629,9 @@ const TUT_HINTS = {
   aerial: { pc: 'PC：右クリック長押し＝ドールを掴む→運んで光の柱の中で離す　／　訓練機はビームで撃墜', sp: 'スマホ：長押し＝ドールを掴む→光の柱まで運ぶ　／　右タップで撃墜' },
   grab: { pc: 'PC：右クリック長押し＝光る物を掴む／マウスを振って離すと投擲　重い物ほど破壊力大・持っている間は盾になる', sp: 'スマホ：長押し＝光る物を掴む／指を離すと投擲　重い物ほど破壊力大・盾にもなる' },
   feed: { pc: 'PC：右クリック長押し＝ドールを掴む→持ったまま着地すると捕食（HP回復・服とマントも修復）', sp: 'スマホ：長押し＝ドールを掴む→持ったまま着地すると捕食（HP回復・服とマントも修復）' },
+  special: { pc: '必殺技：ゲージMAXまで溜めて放つ　空中＝電撃乱射／地上＝トーテム設置', sp: '必殺技：ゲージMAXまで溜めて放つ　空中＝電撃乱射／地上＝トーテム設置' },
 };
-const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial', 4: 'grab', 5: 'feed' };
+const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial', 4: 'grab', 5: 'feed', 6: 'special' };
 function tutHurtLine() {   // 被弾時のランダム一言（連発しないようクールダウン）
   if (tut.hurtCd > 0) return;
   tut.hurtCd = 8;
@@ -1698,6 +1699,7 @@ function updateTutorial(dt) {
     tut.room = roomIdx + 1;
     const talk = TUT_ROOM_TALK[tut.room];
     if (talk) queueTalk(talk);
+    if (tut.room === 6 && !special.ult) { unlockSpecial('all'); queueTalk('r6_special'); }   // 最終訓練で必殺技を解放
     const hk = TUT_ROOM_HINT[tut.room];
     if (hk) tutHint(hk);
     tutRefreshObjective();
@@ -1745,6 +1747,12 @@ function updateTutorial(dt) {
 let gameMode = 'title';   // 'title' | 'training' | 'play'（'op'/'ed' はP2で追加）
 const gp = { destroyed: 0, attritionPts: 0 };          // 都市被害・敵損耗の実測値
 const ATTR_PTS = { jet: 3, walker: 20, spider: 35 };   // 撃破ポイント（想定総量100pt=100%）
+// 必殺技: ゲージMAXでのみ発動できる大技。解放前は使えない（空中=電撃乱射 / 接地=トーテム）
+const special = { ult: !TUTORIAL, totem: !TUTORIAL };   // 街は従来どおり最初から使用可
+function unlockSpecial(name) {
+  if (name === 'all') { special.ult = true; special.totem = true; return; }
+  if (name in special) special[name] = true;
+}
 function cityDamagePct() { return cityInfo && cityInfo.count ? Math.min(100, gp.destroyed / cityInfo.count * 100) : 0; }
 function attritionPct() { return Math.min(100, gp.attritionPts); }
 function enemyAllowed(kind) {   // 敵出現のモード制御（本編の投入は events.json 駆動）
@@ -2067,6 +2075,7 @@ function runEvAction(a) {
   if (a.type === 'talk') queueTalk(a.talk);
   else if (a.type === 'spawn') ev.spawnAllow[a.enemy] = true;   // 投入指示（enemyAllowed が参照）
   else if (a.type === 'flag') ev.flags[a.flag] = true;
+  else if (a.type === 'unlock') unlockSpecial(a.skill || 'all');   // 必殺技の解放
   else if (a.type === 'scenario') playScenario(a.scenario, a.after || 'play');
   else if (a.type === 'flow') {
     ev.lastPort = a.port;
@@ -2752,7 +2761,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating,
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial,
   hitTest: (car, ox, oy, oz, dx, dy, dz, maxT = 500) => rayHitObj(new THREE.Vector3(ox, oy, oz), new THREE.Vector3(dx, dy, dz).normalize(), car, maxT),
   testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
@@ -2946,8 +2955,8 @@ function updatePlayerAnim(dt) {
   }
   if (player.charging) {
     player.chargeT = Math.min(ULT_CHARGE_TIME, player.chargeT + dt);   // 1.5s超も蓄積＝ゲージ（満タンでアルティメット）
-    // 接地中＋捕食対象なし＝長押しがトーテム設置に化ける（空中はチャージ→large_beam/アルティメット）
-    if (player.chargeT >= TAP_THRESHOLD && player.grounded && !player.prey && !grabbedCar && !totemCast) {
+    // 必殺技(接地): ゲージMAXまで溜めるとトーテム設置に化ける（空中でMAXなら電撃乱射）。未解放なら発動しない
+    if (special.totem && player.chargeT >= ULT_CHARGE_TIME - 0.01 && player.grounded && !player.prey && !grabbedCar && !totemCast) {
       player.charging = false;
       startTotemCast();
     }
@@ -5005,7 +5014,6 @@ function setupControls() {
   cv.addEventListener('click', () => { if (!locked && !agentEd.open) cv.requestPointerLock(); });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());   // 右クリックメニュー抑止
   cv.addEventListener('mousedown', (e) => {
-    if (hitEd.on) { if (e.button === 0) hitEdPick(e.clientX, e.clientY); return; }   // 当たり判定エディタ中は選択に使う
     if (!locked) return;
     if (player.eating) { if (e.button === 0) cancelEating(); return; }   // 吸血中は左クリックで中断（他ボタンは入力ロック）
     if (e.button === 0) { player.charging = true; player.chargeT = 0; }  // タップ=ビーム / 長押し=チャージ(空中)・トーテム(接地)
@@ -5016,18 +5024,12 @@ function setupControls() {
       if (player.eating || !player.charging) { player.charging = false; return; }
       player.charging = false;
       if (player.chargeT < TAP_THRESHOLD) normalShot();
-      else if (player.chargeT >= ULT_CHARGE_TIME - 0.01) fireUltimate();   // ゲージ満タン＝電撃乱射
+      else if (player.chargeT >= ULT_CHARGE_TIME - 0.01 && special.ult) fireUltimate();   // 必殺技(解放済み)＝ゲージ満タンで電撃乱射
       else fireLargeBeam();   // チャージ解放＝5秒貫通ビーム
     } else if (e.button === 2) releaseGrab();   // 離すと投擲（tps-flight同様の振り回し投げ）
   });
   document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === cv; });
   document.addEventListener('mousemove', (e) => {
-    if (hitEd.on) {   // 当たり判定エディタ中はポインタロックなし＝右ドラッグで視点を回す
-      if (!(e.buttons & 2)) return;
-      camYaw -= e.movementX * 0.0024; camPitch -= e.movementY * 0.0024;
-      camPitch = Math.max(-1.25, Math.min(1.35, camPitch));
-      return;
-    }
     if (!locked) return;
     camYaw -= e.movementX * 0.0024; camPitch -= e.movementY * 0.0024;
     camPitch = Math.max(-1.25, Math.min(1.35, camPitch));
@@ -5037,7 +5039,6 @@ function setupControls() {
     if (e.code === 'KeyM') { toggleAgentEd(); return; }
     if (agentEd.open) return;   // エディタ表示中はゲーム操作を止める
     keysDown[e.code] = true;
-    if (e.code === 'KeyH') { toggleHitEd(); return; }   // 当たり判定エディタ（掴み対象の判定を可視化・調整・保存）
     if (e.code === 'KeyE' && locked) onInteract();
     if (e.code === 'KeyT') timeScale = timeScale === 1 ? 10 : timeScale === 10 ? 60 : 1;   // 時間の早送り（動作確認用）
   });
@@ -5127,7 +5128,7 @@ function setupTouchControls(cv) {
           $('touch-charge').style.display = 'none';
           if (!player.eating) {
             if (player.chargeT < TAP_THRESHOLD) normalShot();
-            else if (player.chargeT >= ULT_CHARGE_TIME - 0.01) fireUltimate();
+            else if (player.chargeT >= ULT_CHARGE_TIME - 0.01 && special.ult) fireUltimate();
             else fireLargeBeam();
           }
         } else if (!holdFired && moved < 18 && !player.eating) normalShot();   // 短タップ=通常ビーム
@@ -5140,7 +5141,9 @@ function setupTouchControls(cv) {
   // 長押し判定は移動が無くても発火させる（ポーリング）
   setInterval(() => {
     if (lookId != null && !holdFired && moved < 18 && performance.now() - downT >= TOUCH_HOLD * 1000) holdCheck();
-    if (player.charging) $('touch-charge').textContent = player.chargeT >= ULT_CHARGE_TIME - 0.01 ? 'MAX!! 離して乱射' : `チャージ ${(Math.min(player.chargeT / ULT_CHARGE_TIME, 1) * 100) | 0}%`;
+    if (player.charging) $('touch-charge').textContent = player.chargeT >= ULT_CHARGE_TIME - 0.01
+      ? (special.ult ? 'MAX!! 離して必殺技' : 'チャージ MAX')
+      : `チャージ ${(Math.min(player.chargeT / ULT_CHARGE_TIME, 1) * 100) | 0}%`;
     else $('touch-charge').style.display = 'none';   // トーテム分岐などでチャージが解除された場合も消す
     const be = $('btn-enter');
     if (be) be.style.display = entryPrompt ? 'flex' : 'none';   // 入退室ボタンはプロンプトが出ている時だけ
@@ -5445,8 +5448,11 @@ function groundCollide() {
   _rayFrom.set(player.pos.x, player.pos.y + 60, player.pos.z);
   _groundRay.set(_rayFrom, _DOWN); _groundRay.far = 100000;
   const hit = _groundRay.intersectObject(groundGroup, true)[0];
-  if (hit && player.pos.y < hit.point.y) {
-    player.pos.y = hit.point.y;
+  // 接地は「めり込んだ瞬間」ではなく地表のごく近傍で判定する。
+  // 完全に平坦な床（チュートリアル）ではぴったり y=地表 で静止するため、
+  // 旧条件(y < 地表)だと永久に grounded にならず、トーテム等の接地技が出せなかった
+  if (hit && player.pos.y < hit.point.y + 0.06) {
+    if (player.pos.y < hit.point.y) player.pos.y = hit.point.y;
     if (player.vel.y < 0) player.vel.y = 0;
     player.grounded = true;
   }
@@ -5650,155 +5656,6 @@ function carSurfDist(car, px, py, pz) {
 // ── 当たり判定の上書き（public/cityfly/grabhit.json＝Hキーのエディタが保存）──
 let grabHitCfg = null;
 const grabHitP = fetch('../cityfly/grabhit.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
-// ═════════ 当たり判定エディタ（Hキー）: 掴み対象のOBB/球を可視化して調整・保存 ═════════
-const hitEd = { on: false, sel: null, kind: null, wires: [], el: null };
-const _hedBoxGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
-const _hedSphGeo = new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(1, 1));
-const _hedMat = new THREE.LineBasicMaterial({ color: 0x36ff9a, transparent: true, opacity: 0.85, depthTest: false });
-const _hedMatSel = new THREE.LineBasicMaterial({ color: 0xffdc3a, transparent: true, opacity: 1, depthTest: false });
-function hitEdWireOf(car) {   // 当たり判定の形をワイヤーフレームで（メッシュの子＝回転/スケールに追従）
-  const inv = 1 / (car.mesh.scale.x || 1);
-  let w;
-  if (car.hitBox) {
-    w = new THREE.LineSegments(_hedBoxGeo, _hedMat);
-    w.scale.set(car.hitBox.h.x * 2, car.hitBox.h.y * 2, car.hitBox.h.z * 2);
-    w.position.copy(car.hitBox.c);
-  } else {
-    w = new THREE.LineSegments(_hedSphGeo, _hedMat);
-    w.scale.setScalar((car.hitR || 2.4) * inv);
-  }
-  w.renderOrder = 999;
-  w.frustumCulled = false;
-  car.mesh.add(w);
-  return w;
-}
-function hitEdRefreshWires() {
-  for (const w of hitEd.wires) { if (w.parent) w.parent.remove(w); }
-  hitEd.wires.length = 0;
-  if (!hitEd.on) return;
-  for (const c of grabObjs) {
-    if (!c.mesh || c.dead) continue;
-    const w = hitEdWireOf(c);
-    w.material = (hitEd.kind && c.hbKind === hitEd.kind) || c === hitEd.sel ? _hedMatSel : _hedMat;
-    hitEd.wires.push(w);
-  }
-}
-function toggleHitEd() {
-  hitEd.on = !hitEd.on;
-  if (hitEd.on) { try { document.exitPointerLock(); } catch { /* noop */ } }
-  else { hitEd.sel = null; hitEd.kind = null; }
-  hitEdRefreshWires();
-  hitEdUI();
-}
-const _hedRay = new THREE.Raycaster(), _hedNdc = new THREE.Vector2(), _hedO = new THREE.Vector3(), _hedD = new THREE.Vector3();
-function hitEdPick(clientX, clientY) {   // 画面座標から掴み対象を選択（実寸OBBで判定）
-  _hedNdc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
-  _hedRay.setFromCamera(_hedNdc, camera);
-  _hedO.copy(_hedRay.ray.origin); _hedD.copy(_hedRay.ray.direction);
-  let best = Infinity, sel = null;
-  for (const c of grabObjs) {
-    if (!c.mesh || c.dead || !c.mesh.visible) continue;
-    const t = rayHitObj(_hedO, _hedD, c, 4000);
-    if (t < best) { best = t; sel = c; }
-  }
-  if (!sel) return;
-  hitEd.sel = sel; hitEd.kind = sel.hbKind || null;
-  hitEdRefreshWires();
-  hitEdUI();
-}
-function hitEdApply(field, val) {   // 同じ種類(hbKind)の全個体へ反映＝実プレイと同じ状態で確認できる
-  const sel = hitEd.sel;
-  if (!sel) return;
-  const targets = sel.hbKind ? grabObjs.filter((c) => c.hbKind === sel.hbKind) : [sel];
-  for (const c of targets) {
-    const k = c.hitScale || 1;
-    if (c.hitBox) {
-      if (field === 'hx') c.hitBox.h.x = val / 2 / k;
-      else if (field === 'hy') c.hitBox.h.y = val / 2 / k;
-      else if (field === 'hz') c.hitBox.h.z = val / 2 / k;
-      else if (field === 'cy') c.hitBox.c.y = val / k;
-      c.hitR = (c.hitBox.c.length() + c.hitBox.h.length()) * k;
-    } else if (field === 'r') c.hitR = val;
-  }
-  hitEdRefreshWires();
-  hitEdUI();
-}
-function hitEdFit() {   // 見た目の実寸（ジオメトリのbbox）に合わせる
-  const sel = hitEd.sel;
-  if (!sel || !sel.mesh.geometry) return;
-  const g = sel.mesh.geometry;
-  if (!g.boundingBox) g.computeBoundingBox();
-  const bb = g.boundingBox, sz = bb.getSize(new THREE.Vector3()), ct = bb.getCenter(new THREE.Vector3());
-  const targets = sel.hbKind ? grabObjs.filter((c) => c.hbKind === sel.hbKind) : [sel];
-  for (const c of targets) {
-    if (!c.hitBox) continue;
-    c.hitBox.h.set(sz.x / 2, sz.y / 2, sz.z / 2);
-    c.hitBox.c.copy(ct);
-    c.hitR = (c.hitBox.c.length() + c.hitBox.h.length()) * (c.hitScale || 1);
-  }
-  hitEdRefreshWires();
-  hitEdUI();
-}
-async function hitEdSave() {
-  const kinds = (grabHitCfg && grabHitCfg.kinds) || {};
-  for (const c of grabObjs) {
-    if (!c.hbKind || !c.hitBox) continue;
-    const k = c.hitScale || 1;
-    kinds[c.hbKind] = { hx: +(c.hitBox.h.x * k).toFixed(3), hy: +(c.hitBox.h.y * k).toFixed(3), hz: +(c.hitBox.h.z * k).toFixed(3), cy: +(c.hitBox.c.y * k).toFixed(3) };
-  }
-  grabHitCfg = { format: 'grabhit', version: 1, kinds };
-  try {
-    const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dir: 'cityfly', filename: 'grabhit.json', content: JSON.stringify(grabHitCfg, null, 2) }) });
-    hitEdUI(r.ok ? '保存しました: cityfly/grabhit.json' : '保存失敗: ' + r.status);
-  } catch (e) { hitEdUI('保存失敗: ' + (e?.message || e)); }
-}
-function hitEdUI(msg) {
-  if (!hitEd.el) {
-    hitEd.el = document.createElement('div');
-    hitEd.el.style.cssText = 'position:fixed;right:12px;top:150px;z-index:41;width:250px;'
-      + 'background:rgba(8,14,30,0.92);border:1px solid rgba(120,220,180,0.6);border-radius:8px;padding:10px 12px;'
-      + 'color:#dff5ea;font:12px Meiryo,sans-serif;';
-    document.body.appendChild(hitEd.el);
-  }
-  hitEd.el.style.display = hitEd.on ? '' : 'none';
-  if (!hitEd.on) return;
-  const sel = hitEd.sel;
-  const row = (label, field, val, step) => '<div style="display:flex;align-items:center;gap:4px;margin:3px 0;">'
-    + '<span style="width:44px;color:#9fd;">' + label + '</span>'
-    + '<button data-f="' + field + '" data-d="' + (-step) + '" style="width:22px;">-</button>'
-    + '<input data-f="' + field + '" type="number" step="' + step + '" value="' + val.toFixed(2) + '" style="width:70px;background:#0d1524;color:#eff;border:1px solid #486;border-radius:3px;padding:2px 4px;">'
-    + '<button data-f="' + field + '" data-d="' + step + '" style="width:22px;">+</button></div>';
-  let body = '';
-  if (!sel) body = '<div style="color:#9ab;">対象を左クリックで選択</div>';
-  else {
-    const k = sel.hitScale || 1;
-    const n = sel.hbKind ? grabObjs.filter((c) => c.hbKind === sel.hbKind).length : 1;
-    body = '<div style="margin-bottom:6px;color:#ffd;">' + (sel.hbKind || '(種類なし)') + '　質量' + (sel.mass ?? 1) + '　×' + n + '個</div>';
-    if (sel.hitBox) {
-      body += row('幅 X', 'hx', sel.hitBox.h.x * 2 * k, 0.5)
-        + row('高 Y', 'hy', sel.hitBox.h.y * 2 * k, 0.5)
-        + row('奥 Z', 'hz', sel.hitBox.h.z * 2 * k, 0.5)
-        + row('中心Y', 'cy', sel.hitBox.c.y * k, 0.5)
-        + '<div style="display:flex;gap:6px;margin-top:8px;"><button id="hed-fit" style="flex:1;">実寸に合わせる</button><button id="hed-save" style="flex:1;">保存</button></div>';
-    } else body += row('半径', 'r', sel.hitR || 2.4, 0.5) + '<div style="color:#9ab;margin-top:6px;">球判定（保存対象外）</div>';
-  }
-  hitEd.el.innerHTML = '<div style="font-weight:700;color:#7fe;margin-bottom:6px;">当たり判定エディタ（H で閉じる）</div>'
-    + body
-    + '<div style="margin-top:8px;color:#9ab;line-height:1.5;">左クリック=選択／右ドラッグ=視点<br>変更は同じ種類すべてに反映</div>'
-    + (msg ? '<div style="margin-top:6px;color:#ffd76a;">' + msg + '</div>' : '');
-  for (const b of hitEd.el.querySelectorAll('button[data-f]')) {
-    b.onclick = () => {
-      const inp = hitEd.el.querySelector('input[data-f="' + b.dataset.f + '"]');
-      hitEdApply(b.dataset.f, parseFloat(inp.value) + parseFloat(b.dataset.d));
-    };
-  }
-  for (const inp of hitEd.el.querySelectorAll('input[data-f]')) {
-    inp.onchange = () => hitEdApply(inp.dataset.f, parseFloat(inp.value) || 0);
-  }
-  const fit = hitEd.el.querySelector('#hed-fit'); if (fit) fit.onclick = hitEdFit;
-  const sv = hitEd.el.querySelector('#hed-save'); if (sv) sv.onclick = hitEdSave;
-}
 function applyGrabHit(car) {   // kind別の保存値を適用（値は世界寸法。hitBoxはローカルなのでスケールで割る）
   const ov = grabHitCfg && car.hbKind && grabHitCfg.kinds && grabHitCfg.kinds[car.hbKind];
   if (!ov || !car.hitBox) return car;
