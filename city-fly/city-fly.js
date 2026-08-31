@@ -147,12 +147,15 @@ if (DEBUG_LOG) {   // console も画面へ流す
   dbg('debug on', navigator.userAgent.slice(0, 90));
   dbg('WebGPU:', !!navigator.gpu, '/ DPR', window.devicePixelRatio, '/ 画面', window.innerWidth + 'x' + window.innerHeight);
   if (navigator.deviceMemory) dbg('deviceMemory:', navigator.deviceMemory + 'GB');
-  if (navigator.gpu) navigator.gpu.requestAdapter().then((ad) => {   // 端末のWebGPU上限（マント要件の可否も分かる）
-    if (!ad) { dbg('[error] requestAdapter が null'); return; }
+  // WebGPUアダプタの上限（マント=頂点ステージのストレージバッファが使えるかの判定材料）
+  if (navigator.gpu) navigator.gpu.requestAdapter().then((ad) => {
+    if (!ad) { dbg('requestAdapter が null（WebGPU利用不可）'); return; }
     const L = ad.limits || {};
-    dbg('adapter: vtxStorageBuf=' + L.maxStorageBuffersInVertexStage + ' storageBuf=' + L.maxStorageBuffersPerShaderStage
-      + ' buf=' + Math.round((L.maxBufferSize || 0) / 1048576) + 'MB tex2D=' + L.maxTextureDimension2D);
-  }).catch((e) => dbg('[error] requestAdapter:', e.message));
+    dbg('adapter: 頂点ストレージバッファ=' + L.maxStorageBuffersInVertexStage
+      + ' / ストレージバッファ=' + L.maxStorageBuffersPerShaderStage
+      + ' / 最大バッファ=' + Math.round((L.maxBufferSize || 0) / 1048576) + 'MB'
+      + ' / tex2D=' + L.maxTextureDimension2D);
+  }).catch((e) => dbg('requestAdapter 失敗:', e.message));
   setInterval(() => { const m = performance.memory; if (m) dbg('mem', Math.round(m.usedJSHeapSize / 1048576) + 'MB /', Math.round(m.jsHeapSizeLimit / 1048576) + 'MB'); }, 8000);
 }
 let _firstErrShown = false;
