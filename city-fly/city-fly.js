@@ -1815,24 +1815,34 @@ function setupTitle() {
   titleEl.style.cssText = 'position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;'
     + 'background:linear-gradient(180deg,rgba(6,10,26,0.96),rgba(24,8,34,0.94));color:#eef;';   // 眠りネイ表示までは不透明（構築中のステージを見せない）
   titleEl.style.transition = 'background 0.8s';
-  const btn = 'font:700 20px Meiryo,sans-serif;padding:12px 52px;border-radius:8px;border:1px solid #86f;background:#1b1f3a;color:#dde;cursor:pointer;min-width:340px;';
-  titleEl.innerHTML = '<div style="font:900 64px \'Yu Gothic\',\'Arial Black\',Meiryo,sans-serif;letter-spacing:0.08em;text-shadow:0 4px 18px rgba(130,70,255,0.65),0 2px 6px #000;">City-Fly</div>'
-    + '<div style="font:14px Meiryo,sans-serif;color:#aab;margin-bottom:14px;">' + (TUTORIAL ? '訓練プログラム — 基本操作を修得せよ' : 'デッドアトモス襲来 — 吸血鬼ネイ、出撃') + '</div>'
-    + '<button id="cf-start" style="' + btn + '" disabled>準備中…</button>'
-    + '<button id="cf-training" style="' + btn + '" disabled>トレーニングモード</button>';
+  const btn = 'font:700 20px Meiryo,sans-serif;padding:13px 52px;border-radius:8px;border:1px solid #86f;background:rgba(20,24,52,0.88);color:#dde;cursor:pointer;min-width:340px;';
+  // ロゴ: CYBER=シアン / BAT=クリムゾン のグラデ文字（背景クリップ）。発光はdrop-shadowで乗せる
+  // フォント名の引用符はHTML属性(")と衝突するのでシングルクォートを使う（二重引用符だと属性が途中で閉じて指定が丸ごと無効になる）
+  const logoBase = "font:900 96px Orbitron,'Arial Black',Impact,'Yu Gothic',sans-serif;letter-spacing:0.10em;"
+    + '-webkit-background-clip:text;background-clip:text;color:transparent;';
+  titleEl.innerHTML = '<div style="display:flex;align-items:baseline;line-height:1;padding:18px 60px 10px;'
+      + 'background:radial-gradient(ellipse at center,rgba(4,8,20,0.82) 30%,rgba(4,8,20,0) 72%);'
+      + 'filter:drop-shadow(0 0 22px rgba(90,190,255,0.6)) drop-shadow(0 4px 10px rgba(0,0,0,0.95));">'
+      + '<span style="' + logoBase + 'background-image:linear-gradient(180deg,#ffffff 8%,#9fe4ff 46%,#2f8fe0 62%,#1a4f9c 100%);">CYBER</span>'
+      + '<span style="' + logoBase + 'background-image:linear-gradient(180deg,#fff0f2 8%,#ff8090 44%,#e0203c 62%,#8c0a20 100%);">BAT</span>'
+    + '</div>'
+    + '<div style="font:700 13px Meiryo,sans-serif;color:#bcd8f5;letter-spacing:0.42em;margin-top:4px;'
+      + 'text-shadow:0 2px 6px #000,0 0 14px rgba(0,0,0,0.95);">' + (TUTORIAL ? 'TRAINING PROGRAM' : 'DEAD ATMOS ASSAULT') + '</div>'
+    + '<div style="font:700 14px Meiryo,sans-serif;color:#dce8f7;margin-top:8px;'
+      + 'text-shadow:0 2px 6px #000,0 0 14px rgba(0,0,0,0.95);">' + (TUTORIAL ? '訓練プログラム — 基本操作を修得せよ' : 'デッドアトモス襲来 — 吸血鬼ネイ、出撃') + '</div>'
+    + '<button id="cf-start" style="' + btn + 'margin-top:64px;" disabled>準備中…</button>';
   document.body.appendChild(titleEl);
-  const bs = titleEl.querySelector('#cf-start'), bt = titleEl.querySelector('#cf-training');
+  const bs = titleEl.querySelector('#cf-start');
   const iv = setInterval(() => {   // ボタン有効化（チュートリアルの本編はシナリオ素材が揃い次第＝ステージ構築はOP再生の裏で続行）
     const worldOk = cityRoot && collBoxes.length && player.ready;
     const castOk = player.ready && guestPreloadDone && ev.talks;
-    if (worldOk) { bt.disabled = false; loadProg(96, '会話キャストを読込中…'); }   // トレーニングはステージ必須
+    if (worldOk) loadProg(96, '会話キャストを読込中…');
     const startOk = TUTORIAL ? castOk : (worldOk && guestPreloadDone);
     if (startOk && bs.disabled) { bs.disabled = false; bs.textContent = 'ゲームスタート'; }
     else if (!startOk && (TUTORIAL ? player.ready : worldOk)) bs.textContent = 'キャスト読込中…';
-    if (worldOk && guestPreloadDone) { loadProg(100); if (!bs.disabled && !bt.disabled) clearInterval(iv); }
+    if (worldOk && guestPreloadDone) { loadProg(100); if (!bs.disabled) clearInterval(iv); }
   }, 400);
   bs.addEventListener('click', () => startMode('play'));
-  bt.addEventListener('click', () => startMode('training'));
 }
 function startMode(mode) {
   gameMode = mode;
