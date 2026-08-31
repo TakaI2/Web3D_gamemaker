@@ -7527,7 +7527,7 @@ function grabKen(m, bone) {
   m.grabbed = true;
   m.wasGrabbed = true;
   addWanted(0.2, m.pos);   // 住人を掴む＝軽犯罪
-  if (m.speech) m.speech.bark('grabbed');
+  kenBark(m, 'grabbed');
   if (!m.ragdoll.active) setRagdollActive(m.ragdoll, true);
   m.grabBone = bone || 'chest';
   if (bite.ready && !m.noBite) { player.prey = m; m.preyGroundT = 0; }   // 捕食候補（ダミードールは吸血不可）
@@ -7535,7 +7535,7 @@ function grabKen(m, bone) {
 function releaseKen(m) {
   m.grabbed = false;
   m.recoverTimer = KEN_RECOVER_DELAY;
-  if (m.speech) m.speech.bark('thrown');
+  kenBark(m, 'thrown');
   if (player.prey === m) player.prey = null;
 }
 function hitKen(m, dir, impulse = KEN_RAGDOLL_IMPULSE) {
@@ -7664,10 +7664,26 @@ function updateKens(dt) {
     if (kens[i]._remove) { const m = kens[i]; kens.splice(i, 1); finalizeRemoveKenAssets(m); reconcileKens().catch(() => { /* noop */ }); }
   }
 }
+// イベントセリフ。ragdoll中は毎フレーム onState('downed') が来て発話を止めてしまうので、
+// bark 直後だけ downed 通知を抑止する保持時間(barkT)を持たせる
+function kenBark(m, ev, hold = 2.6) {
+  if (!m.speech) return;
+  m.speech.bark(ev);
+  m.barkT = hold;
+}
 function updateOneKen(m, dt) {
   updateHpBar(m);
+  if (m.barkT > 0) m.barkT -= dt;
   if (m.suck) return;   // セーフティエリア吸い込み演出中（updateTutRoom3が駆動）
-  if (m.eating) { updateEatingVictim(m, dt); return; }
+  if (m.eating) {   // 吸血されている間: 一定間隔で sucked を再生（この分岐は downed 通知を通らない）
+    updateEatingVictim(m, dt);
+    if (m.speech) {
+      m.suckSayT = (m.suckSayT || 0) - dt;
+      if (m.suckSayT <= 0) { m.suckSayT = 3.4; kenBark(m, 'sucked'); }
+      m.speech.update(dt);
+    }
+    return;
+  }
   if (m.dissolving) { updateKenDissolve(m, dt); return; }
   if (m.tornado) { updateKenTornado(m, dt); return; }
   const rd = m.ragdoll;
@@ -7687,7 +7703,8 @@ function updateOneKen(m, dt) {
   }
   m.vrm.update(dt);
   if (m.speech) {   // 状況セリフ（表情適用後に update）
-    if (m.grabbed || m.ragdoll?.active) m.speech.onState('downed');
+    if (m.barkT > 0) { /* イベントセリフ再生中はステート通知で止めない */ }
+    else if (m.grabbed || m.ragdoll?.active) m.speech.onState('downed');
     else if (m.scared) m.speech.onState('flee');
     else if (m.agent) m.speech.onState('commute');
     else m.speech.onState('idle');
@@ -7771,7 +7788,7 @@ function eatingSound(on) {   // 吸血ループ音（3.5倍ブースト）
 function startEating(m) {
   eatingSound(true);
   if (TUTORIAL && m.mannequin === 'pneuma' && !tut.feedTalk) { tut.feedTalk = true; queueTalk('r5_feed'); }   // 吸い始めの一言（初回）
-  if (m.speech) m.speech.bark('predation');
+  kenBark(m, 'predation');
   player.eating = true; player.eatT = 0; player.eatIntroDone = false;
   player.vel.set(0, 0, 0);
   const sy = groundYAt(player.pos.x, player.pos.z, player.pos.y);   // 道路上なら路面へスナップ（埋まり防止）
@@ -7938,6 +7955,8 @@ function cancelEating() {   // 吸血の中断（左クリック）: 対象は�
     m.eatBlend = 0;
     m.pos.copy(m.vrm.scene.position);
     m.recoverTimer = KEN_RECOVER_DELAY;
+    m.suckSayT = 0;
+    kenBark(m, 'sucked', 3.2);   // 中断されて倒れている間のセリフ
   }
   const idle = player.states.idle;
   if (idle) {

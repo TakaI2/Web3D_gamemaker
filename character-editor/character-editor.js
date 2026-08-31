@@ -459,7 +459,10 @@ function buildEventSpeechPanel() {
   if (!el) return;
   el.innerHTML = '';
   if (!speechDef.events) speechDef.events = {};
-  const EVENTS = [['grabbed', '掴まれた'], ['thrown', '投げられた'], ['landed', '衝突 / 着地'], ['menace', '威嚇（攻撃の予備動作）'], ['attackHit', '攻撃ヒット（プレイヤーに命中）']];
+  const EVENTS = [['grabbed', '掴まれた'], ['thrown', '投げられた'], ['landed', '衝突 / 着地'],
+    ['menace', '威嚇（攻撃の予備動作）'], ['attackHit', '攻撃ヒット（プレイヤーに命中）'],
+    ['witness', '目撃（他者が襲われた）'], ['predation', '捕食された瞬間'],
+    ['sucked', '吸血されている間 / 中断され倒れている間']];
   for (const [key, lbl] of EVENTS) {
     const h = document.createElement('div');
     h.style.cssText = 'color:#ffd9a0;font-size:11px;font-weight:700;margin:8px 0 2px;';
