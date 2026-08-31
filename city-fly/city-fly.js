@@ -1033,15 +1033,21 @@ function tutProp(geo, x, z, mass, color, ry = 0, kind = 'prop') {   // グラブ
   tutProps.push(proxy);
   return proxy;
 }
+let _contAsset = null;   // コンテナGLBのbake結果（ソフトリスタートで再ロード/再パースしない）
 async function buildTutContainers() {   // 市街の港と同じコンテナを部屋3以降へ各10個（掴める・壊せる・数秒で再出現）
   // 構築方法もtakeContainerと完全に同一（未スケールのbake済みジオメトリ＋mesh.scale）＝見た目が市街と一致する
-  const loader = new GLTFLoader();
-  const a = bakeModel((await loader.loadAsync(new URL('../models/' + GRAB_SHAPES.container.glb.split('/').map(encodeURIComponent).join('/'), location.href).href)).scene);
-  const g = a.geometry.clone();
-  g.computeBoundingBox();
-  let b = g.boundingBox;
-  if ((b.max.z - b.min.z) > (b.max.x - b.min.x)) { g.rotateY(Math.PI / 2); g.computeBoundingBox(); b = g.boundingBox; }   // 長軸→X
-  g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+  if (!_contAsset) {
+    const loader = new GLTFLoader();
+    const a0 = bakeModel((await loader.loadAsync(new URL('../models/' + GRAB_SHAPES.container.glb.split('/').map(encodeURIComponent).join('/'), location.href).href)).scene);
+    const g0 = a0.geometry.clone();
+    g0.computeBoundingBox();
+    let b0 = g0.boundingBox;
+    if ((b0.max.z - b0.min.z) > (b0.max.x - b0.min.x)) { g0.rotateY(Math.PI / 2); g0.computeBoundingBox(); b0 = g0.boundingBox; }   // 長軸→X
+    g0.translate(-(b0.min.x + b0.max.x) / 2, -b0.min.y, -(b0.min.z + b0.max.z) / 2);
+    g0.computeBoundingBox();
+    _contAsset = { g: g0, material: a0.material, bb: g0.boundingBox.clone() };
+  }
+  const a = _contAsset, g = a.g, b = a.bb;
   const size0 = b.getSize(new THREE.Vector3());
   const cBoxC = b.getCenter(new THREE.Vector3()), cBoxH = size0.clone().multiplyScalar(0.5);   // ローカル(未スケール)の実寸箱
   const cs = GRAB_SHAPES.container.fitX / Math.max(0.01, size0.x);   // 市街と同じ実寸6.2m（mesh.scaleで適用）
@@ -1420,6 +1426,44 @@ function buildTutRoom6() {   // 部屋6: ボス戦（グラブ可能な巨大オ
   buildTutBoss();
 }
 const TUT_SUCK_DUR = 4.5;   // セーフティエリア吸い込みの所要秒（ゆっくり）
+function tutDollSpot(i) {   // ダミードールの配置（部屋3のリング状スポット）
+  const R = tut.rooms[2], cx = (R.x0 + R.x1) / 2;
+  const sp = TUT_DOLL_SPOTS[i % TUT_DOLL_SPOTS.length];
+  return { x: cx + sp[0], z: sp[1], bounds: { x0: R.x0 + 8, x1: R.x1 - 8, z0: R.z0 + 8, z1: R.z1 - 8 } };
+}
+function tutPneumaSpot(i) {   // プネウマドール（廊下）
+  const C = tut.rooms[4], ox = [45, 80, 115][i % 3];
+  return { x: C.x0 + ox, z: (ox % 2 ? -6 : 6), bounds: { x0: C.x0 + 4, x1: C.x1 - 4, z0: C.z0 + 4, z1: C.z1 - 4 } };
+}
+function resetDolls() {   // 生き残っているドールを再利用して初期状態へ戻す（不足分だけ新規生成）
+  let nd = 0, np = 0;
+  for (const m of kens) {
+    if (!m.mannequin) continue;
+    const isP = m.mannequin === 'pneuma';
+    const sp = isP ? tutPneumaSpot(np++) : tutDollSpot(nd++);
+    m.rescued = false; m.wasGrabbed = false; m._remove = false; m.suck = null; m.grabbed = false;
+    m.eating = false; m.cullHide = false; m.dead = false; m.deadTimer = 0; m.hp = m.maxHp;
+    m.vel.set(0, 0, 0); m.recoverTimer = 0; m.barkT = 0; m.suckSayT = 0;
+    if (m.dissolving) { m.dissolving = false; m.dissT = 0; m._mannShrink = false; try { m.dis?.setArmed(false); m.dis?.setProgress(0); } catch { /* noop */ } }
+    m.vrm.scene.scale.setScalar(1);
+    m.vrm.scene.visible = true;
+    m.vrm.scene.traverse((o) => { if (o.userData) o.userData.mannHidden = false; });
+    if (m.ragdoll?.active) { try { setRagdollActive(m.ragdoll, false); } catch { /* noop */ } }
+    m.bounds = sp.bounds;
+    m.pos.set(sp.x, groundYAt(sp.x, sp.z, 5), sp.z);
+    m.vrm.scene.position.copy(m.pos);
+    if (m.hpBar) m.hpBar.group.visible = false;
+  }
+  for (let i = nd; i < TUT_DOLL_SPOTS.length; i++) {   // 救出/破壊で減った分を補充
+    const sp = tutDollSpot(i);
+    spawnKen({ mannequin: 'dummy', noBite: true, walkSpeed: 3.4, pos: { x: sp.x, z: sp.z }, bounds: sp.bounds }).catch(() => { /* noop */ });
+  }
+  for (let i = np; i < 3; i++) {
+    const sp = tutPneumaSpot(i);
+    spawnKen({ mannequin: 'pneuma', still: true, healMul: 1 / 3, pos: { x: sp.x, z: sp.z }, bounds: sp.bounds }).catch(() => { /* noop */ });
+  }
+  tut.dollsSpawned = true;
+}
 const TUT_DOLL_SPOTS = [[-180, -60], [-120, 150], [-40, -180], [30, 60], [90, -90], [160, 30], [230, -160], [300, 90]];
 function tutSpawnDolls() {   // 部屋3のダミードール（走り回る救出対象）
   const R = tut.rooms[2];
@@ -1928,7 +1972,7 @@ function showGameOver() {
   const toTitle = document.createElement('button');
   toTitle.textContent = 'タイトルへ';
   toTitle.style.cssText = btnCss + 'background:rgba(255,255,255,0.12);color:#ddd;';
-  toTitle.onclick = () => location.reload();
+  toTitle.onclick = () => { if (TUTORIAL) softRestart(); else location.reload(); };
   goEl.appendChild(retry); goEl.appendChild(toTitle);
   document.body.appendChild(goEl);
   try { document.exitPointerLock(); } catch { /* noop */ }
@@ -2084,7 +2128,101 @@ function flowAdvance(port) {
     flowAdvance('next');   // start等は素通り
   }
 }
-function runFlowEnd() { location.reload(); }   // フロー終了＝タイトルへ（全リセット）
+// ステージ再構築のために「そのステージが作った物」を全部片付ける。
+// VRM・コンパイル済みシェーダ・会話/シナリオJSONは保持する（ここが再読込の6秒ぶん）
+function disposeStage() {
+  // 破壊で単体化した建物（カーブ済みメッシュ）
+  for (const rec of [...damagedList, ...dyingList]) { if (rec.std && rec.std.parent) rec.std.parent.remove(rec.std); }
+  damagedList.length = 0; dyingList.length = 0;
+  if (cityDamaged) { cityDamaged.clear(); if (cityDamaged.parent) cityDamaged.parent.remove(cityDamaged); cityDamaged = null; }
+  // 建物パイプライン（ターゲット/隔壁/要塞/砲台）と当たり判定
+  for (const md of bldModels) {
+    for (const im of [md.near, md.far]) { if (im && im.parent) im.parent.remove(im); if (im) im.dispose?.(); }
+  }
+  bldModels.length = 0;
+  collBoxes.length = 0; collGrid.clear(); boxToBld = null;
+  // 掴み対象・パトランプ・ステージ本体。共有ジオメトリ/材質は捨てず、このビルドで作った物だけ破棄
+  // （破棄しないと再スタートのたびにGPUメモリが積み上がる）
+  const shared = new Set([_tutGlowGeo, _tutEdgeGeo, _tutVertGeo, _tbCoreGeo, _tbBeamGeo, _mannGeoCyl, _mannGeoSph,
+    _tutGlowMat, _tbCoreMat, _tbBeamMat, _contAsset && _contAsset.g, _contAsset && _contAsset.material]);
+  if (tut.root) {
+    tut.root.traverse((o) => {
+      if (o.geometry && !shared.has(o.geometry)) o.geometry.dispose();
+      const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+      for (const mt of ms) if (!shared.has(mt)) mt.dispose();
+    });
+    if (tut.root.parent) tut.root.parent.remove(tut.root);
+  }
+  tutProps.length = 0;
+  tutBeacons.length = 0;
+  tut.root = null; cityRoot = null;
+  // ドールは破棄しない（VRMの再パースが最も重い）。位置と状態だけ resetDolls() で戻す
+  // 敵・投擲物・FX
+  for (const j of jets) { if (j.mesh && j.mesh.parent) j.mesh.parent.remove(j.mesh); }
+  jets.length = 0; jetRespawn.length = 0;
+  for (const bm of jetBombs) { if (bm.mesh && bm.mesh.parent) bm.mesh.parent.remove(bm.mesh); }
+  jetBombs.length = 0;
+  for (const eb of enemyBolts) { if (eb.mesh && eb.mesh.parent) eb.mesh.parent.remove(eb.mesh); }
+  enemyBolts.length = 0;
+  for (const d of debris) { if (d.obj && d.obj.parent) d.obj.parent.remove(d.obj); }
+  debris.length = 0;
+  for (const d of carDebris) { if (d.obj && d.obj.parent) d.obj.parent.remove(d.obj); }
+  carDebris.length = 0;
+  for (const f of shotFx) { if (f.obj && f.obj.parent) f.obj.parent.remove(f.obj); }
+  shotFx.length = 0;
+  thrownCars.length = 0; respawnCars.length = 0; takenConts.length = 0;
+  if (grabbedCar) { grabbedCar.grabbed = false; grabbedCar = null; }
+}
+// ED後/ゲームオーバーの「タイトルへ」= ページ再読込ではなくステージだけ作り直す。
+// 実測: 再読込は約7秒（うち6秒はVRMのパース）／作り直しは0.1秒程度
+async function softRestart() {
+  if (tut.restarting) return;
+  tut.restarting = true;
+  try {
+    gameMode = 'title';
+    hideGameOver();
+    // シナリオ表示・会話・HUDを畳む
+    portraitStage = false; portraitOn = false; setActiveGuest(null); clearStageBg(); setGameHudVisible(true);
+    talkQ.length = 0; talkCur = null; if (talkEls) talkEls.wrap.style.display = 'none';
+    // ゲーム状態
+    playerDead = false; playerRagOn = false; playerLandRag = false; playerDeathT = 0;
+    if (playerRagdoll) { try { setRagdollActive(playerRagdoll, false); } catch { /* noop */ } }
+    try { player.vrm.humanoid?.resetNormalizedPose?.(); } catch { /* noop */ }
+    player.eating = false; player.prey = null; player.oneShot = null; player.charging = false; player.chargeT = 0;
+    playerHp = PLAYER_HP_MAX; updateHpUI(); applyDamageFx();
+    killCount = 0; killShowT = 0; if (killEl) killEl.style.opacity = '0';
+    gp.destroyed = 0; gp.attritionPts = 0;
+    wantedPts = 0; wantedCool = 0;
+    largeBeam.active = false; if (largeBeam.mesh) largeBeam.mesh.visible = false;
+    largeBeamSound(false); eatingSound(false);
+    special.ult = !TUTORIAL; special.totem = !TUTORIAL;
+    // フロー/イベント
+    flowNode = null; flowBattleDone = false; flowTimer = null; flowFallback = false;
+    ev.fired.clear(); ev.flags = {}; ev.spawnAllow = {}; ev.kills.length = 0; ev.pendingOn.clear(); ev.lastPort = null;
+    // ステージを捨てて作り直す（VRM/シェーダは保持）
+    disposeStage();
+    Object.assign(tut, { ready: false, room: 0, started: false, midFired: {}, goalDone: false, cullRoom: -99,
+      rooms: [], doors: [], goal: null, targetsDown: 0, targetsTotal: 0, gateDown: false, rescued: 0, jetBase: 0,
+      dollsSpawned: false, aerialOn: false, aerialClear: false, killTalk: false, fortDown: false, fedPneuma: false,
+      feedTalk: false, boss: null, safety: null, turrets: null, fortMd: null, hurtCd: 0 });
+    tutObjective('');
+    await buildTutorialStage();
+    if (kenAssets.ready) resetDolls();   // 既存ドールを再利用（VRM再パースを避ける）
+    // プレイヤーを開始位置へ
+    if (tutSpawn) { player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]); player.vel.set(0, 0, 0); }
+    player.yaw = Math.PI / 2; camYaw = Math.PI / 2; camPitch = 0.1;
+    setState('idle');
+    if (titleEl) titleEl.style.display = 'flex';   // 空文字だと cssText の flex が消えて縦並びが崩れる
+    titleSleepOn = false;   // タイトルの眠りネイを作り直す
+  } catch (e) {
+    console.warn('ソフトリスタート失敗（再読込へ）:', e);
+    location.reload();
+  } finally { tut.restarting = false; }
+}
+function runFlowEnd() {   // フロー終了＝タイトルへ
+  if (TUTORIAL) { softRestart(); return; }   // 読み込み済みVRM/シェーダを捨てない
+  location.reload();
+}
 async function playFlowStory(name) {
   let story = null;
   try { story = await (await fetch('../story/' + name + '.story.json')).json(); }
@@ -2826,7 +2964,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial, get kenAssets() { return kenAssets; },
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial, get kenAssets() { return kenAssets; }, softRestart,
   hitTest: (car, ox, oy, oz, dx, dy, dz, maxT = 500) => rayHitObj(new THREE.Vector3(ox, oy, oz), new THREE.Vector3(dx, dy, dz).normalize(), car, maxT),
   testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
