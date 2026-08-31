@@ -39,7 +39,7 @@ let locked = false, recentered = false;
 const KENNEY_CITY = true;   // 実道路網に Kenney 建物を手続き配置（破壊・都市ゲームの土台）
 const PLAYER_NPC = 'nei_v2.npc.json';
 const FACE_OFFSET = Math.PI;   // Joy_reborn は正面が逆焼き→180°補正
-const flight = { accel: 64, drag: 2.4, maxSpeed: 18, turn: 8 };   // 基準速度2倍（ホイールで増減可）
+const flight = { accel: 64, drag: 2.4, maxSpeed: 18, turn: 8 };   // maxSpeedはSPEED_STEPS[speedStep]と同期（ホイールで段階変更）
 const CLOTH_FEEL_MAX = 9;   // マントが感じる相対速度の上限（=旧基準速度。この速度の靡きが最も美しい）
 const cam = { dist: 4.0, height: 1.2, follow: 8, side: 0.75 };   // side=肩越しオフセット(m)。プレイヤーを画面中心よりやや左へ＝クロスヘア/エフェクトが見やすい
 const FADE = 0.18, DESCEND_SIN = 0.3;
@@ -755,6 +755,17 @@ function updateDamageVignette(dt) {   // vamp-dungeon と同じ見た目の赤�
   const o = Math.max(0, Math.min(1, vigA)).toFixed(3);
   if (o !== vigLastO) { vigEl.style.opacity = o; vigLastO = o; }   // 値が変わる時だけDOMへ書く
 }
+// ── 飛行速度: 段階制（ホイールで増減）。SPEEDゲージの■の数と一致させる ──
+const SPEED_STEPS = [6, 12, 18, 30, 48, 80];   // 既定=18（index 2）
+let speedStep = 2;
+let spdBoxEl = null;
+function updateSpeedUI() {
+  if (!spdBoxEl) return;
+  const n = SPEED_STEPS.length;
+  spdBoxEl.textContent = '■'.repeat(speedStep + 1) + '□'.repeat(n - speedStep - 1);
+  const t = speedStep / (n - 1);   // 遅い=青緑 → 速い=橙
+  spdBoxEl.style.color = t < 0.5 ? '#7fe6c0' : t < 0.8 ? '#ffd76a' : '#ff9a4a';
+}
 let hpNumEl = null;
 function updateHpUI() {
   if (!hpBarEl) {
@@ -772,6 +783,16 @@ function updateHpUI() {
     hpNumEl.style.cssText = "color:#fff;font:900 15px 'Yu Gothic',Meiryo,sans-serif;text-shadow:0 1px 3px #000;min-width:34px;";
     wrap.append(label, barWrap, hpNumEl);
     document.body.appendChild(wrap);
+    const sp = document.createElement('div');   // SPEED: HPゲージの下に段階表示
+    sp.style.cssText = 'position:fixed;left:12px;top:72px;z-index:20;pointer-events:none;display:flex;align-items:center;gap:8px;';
+    const spLabel = document.createElement('div');
+    spLabel.textContent = 'SPEED';
+    spLabel.style.cssText = "color:#cfe;font:900 11px 'Yu Gothic',Meiryo,sans-serif;letter-spacing:0.08em;text-shadow:0 1px 2px #000;";
+    spdBoxEl = document.createElement('div');
+    spdBoxEl.style.cssText = "color:#7fe6c0;font:700 13px 'Yu Gothic',Meiryo,monospace;letter-spacing:0.10em;text-shadow:0 1px 3px #000;";
+    sp.append(spLabel, spdBoxEl);
+    document.body.appendChild(sp);
+    updateSpeedUI();
   }
   const r = Math.max(0, playerHp / PLAYER_HP_MAX);
   hpBarEl.style.width = (r * 100) + '%';
@@ -2297,6 +2318,7 @@ function setGameHudVisible(on) {
   for (const id of HUD_IDS) { const el = $(id); if (el) el.style.visibility = on ? '' : 'hidden'; }
   if (hpBarEl && hpBarEl.parentElement && hpBarEl.parentElement.parentElement) hpBarEl.parentElement.parentElement.style.visibility = on ? '' : 'hidden';
   if (paramsEl) paramsEl.style.visibility = on ? '' : 'hidden';
+  if (spdBoxEl && spdBoxEl.parentElement) spdBoxEl.parentElement.style.visibility = on ? '' : 'hidden';
   if (killEl) killEl.style.visibility = on ? '' : 'hidden';
 }
 function portraitRect() {   // 描画先の矩形（会話=顔枠 / シナリオ=画面全体）
@@ -5049,7 +5071,11 @@ function setupControls() {
     if (e.code === 'KeyT') timeScale = timeScale === 1 ? 10 : timeScale === 10 ? 60 : 1;   // 時間の早送り（動作確認用）
   });
   window.addEventListener('keyup', (e) => { keysDown[e.code] = false; });
-  window.addEventListener('wheel', (e) => { flight.maxSpeed = Math.max(4, Math.min(2000, flight.maxSpeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15))); });   // 基準8まで戻せるよう下限4
+  window.addEventListener('wheel', (e) => {   // 速度は段階制（SPEEDゲージの■と1対1）
+    speedStep = Math.max(0, Math.min(SPEED_STEPS.length - 1, speedStep + (e.deltaY < 0 ? 1 : -1)));
+    flight.maxSpeed = SPEED_STEPS[speedStep];
+    updateSpeedUI();
+  });
   if (IS_TOUCH) setupTouchControls(cv);
 }
 
@@ -9899,7 +9925,7 @@ function tick() {
     updateParamsUI();
     const clock = `${String(Math.floor(gameHour)).padStart(2, '0')}:${String(Math.floor((gameHour % 1) * 60)).padStart(2, '0')}`;
     const wanted = wantedLevel() > 0 ? ` / 手配${'★'.repeat(wantedLevel())}` : '';
-    setStatus(`${clock}${timeScale > 1 ? `(x${timeScale})` : ''}${wanted} / 高度 ${Math.round(player.pos.y)}m / 速度上限 ${Math.round(flight.maxSpeed)} / ${info}${entryPrompt ? ' / ' + entryPrompt : ''}`);
+    setStatus(`${clock}${timeScale > 1 ? `(x${timeScale})` : ''}${wanted} / 高度 ${Math.round(player.pos.y)}m / ${info}${entryPrompt ? ' / ' + entryPrompt : ''}`);
   }
   renderer.render(scene, camera);
   renderPortrait();   // 会話中のみ: 顔枠へキャラだけを追加描画
