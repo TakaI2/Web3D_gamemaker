@@ -107,6 +107,54 @@ const _desiredTarget = new THREE.Vector3(), _desiredPos = new THREE.Vector3();
 
 function $(id) { return document.getElementById(id); }
 function showError(msg) { const e = $('err'); if (e) { e.style.display = 'block'; e.textContent = String(msg); } console.error(msg); }
+// ── 画面ログ: ?debug=1 か window.CB_DEBUG=true で有効。実機（スマホ）での切り分け用 ──
+const DEBUG_LOG = _qsDebug();
+function _qsDebug() { try { return new URLSearchParams(location.search).get('debug') === '1' || !!window.CB_DEBUG; } catch { return false; } }
+let _dbgEl = null, _dbgBody = null, _dbgT0 = performance.now();
+function dbg(...args) {
+  if (!DEBUG_LOG) return;
+  if (!_dbgEl) {
+    _dbgEl = document.createElement('div');
+    _dbgEl.style.cssText = 'position:fixed;left:0;top:0;width:min(560px,74vw);max-height:56vh;z-index:9999;'
+      + 'background:rgba(0,0,0,0.82);color:#9f9;font:11px/1.45 monospace;padding:4px 6px;overflow:auto;'
+      + '-webkit-overflow-scrolling:touch;white-space:pre-wrap;word-break:break-all;';
+    const bar = document.createElement('div');
+    bar.style.cssText = 'position:sticky;top:0;background:#111;color:#ffd76a;padding:2px 0;display:flex;gap:8px;';
+    const btnMin = document.createElement('button');
+    btnMin.textContent = '最小化'; btnMin.style.cssText = 'font:11px monospace;';
+    btnMin.onclick = () => { _dbgBody.style.display = _dbgBody.style.display === 'none' ? '' : 'none'; };
+    const btnCopy = document.createElement('button');
+    btnCopy.textContent = 'コピー'; btnCopy.style.cssText = 'font:11px monospace;';
+    btnCopy.onclick = () => { try { navigator.clipboard.writeText(_dbgBody.textContent); btnCopy.textContent = 'コピー済'; } catch { /* noop */ } };
+    bar.append(btnMin, btnCopy);
+    _dbgBody = document.createElement('div');
+    _dbgEl.append(bar, _dbgBody);
+    document.body.appendChild(_dbgEl);
+  }
+  const t = ((performance.now() - _dbgT0) / 1000).toFixed(1);
+  const line = document.createElement('div');
+  line.textContent = t + 's ' + args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  _dbgBody.appendChild(line);
+  _dbgEl.scrollTop = _dbgEl.scrollHeight;
+}
+if (DEBUG_LOG) {   // console も画面へ流す
+  for (const k of ['log', 'warn', 'error']) {
+    const orig = console[k].bind(console);
+    console[k] = (...a) => { try { dbg('[' + k + ']', ...a); } catch { /* noop */ } orig(...a); };
+  }
+  window.addEventListener('error', (e) => dbg('[error]', e.message, e.filename + ':' + e.lineno));
+  window.addEventListener('unhandledrejection', (e) => dbg('[reject]', e.reason?.message || e.reason));
+  dbg('debug on', navigator.userAgent.slice(0, 90));
+  dbg('WebGPU:', !!navigator.gpu, '/ DPR', window.devicePixelRatio, '/ 画面', window.innerWidth + 'x' + window.innerHeight);
+  if (navigator.deviceMemory) dbg('deviceMemory:', navigator.deviceMemory + 'GB');
+  if (navigator.gpu) navigator.gpu.requestAdapter().then((ad) => {   // 端末のWebGPU上限（マント要件の可否も分かる）
+    if (!ad) { dbg('[error] requestAdapter が null'); return; }
+    const L = ad.limits || {};
+    dbg('adapter: vtxStorageBuf=' + L.maxStorageBuffersInVertexStage + ' storageBuf=' + L.maxStorageBuffersPerShaderStage
+      + ' buf=' + Math.round((L.maxBufferSize || 0) / 1048576) + 'MB tex2D=' + L.maxTextureDimension2D);
+  }).catch((e) => dbg('[error] requestAdapter:', e.message));
+  setInterval(() => { const m = performance.memory; if (m) dbg('mem', Math.round(m.usedJSHeapSize / 1048576) + 'MB /', Math.round(m.jsHeapSizeLimit / 1048576) + 'MB'); }, 8000);
+}
 let _firstErrShown = false;
 function reportFatal(msg) {   // スマホ用: コンソールが見られない環境でも原因が分かるように画面へ出す
   if (_firstErrShown) return;
@@ -134,6 +182,7 @@ async function init() {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   try {
     await renderer.init();
+    dbg('renderer.init OK (cloth limit あり)');
   } catch (e) {
     console.warn('WebGPU 初期化に失敗（頂点ストレージバッファ非対応の可能性）→ マント無しで再試行:', e);
     GPU_CLOTH_OK = false;
@@ -143,6 +192,7 @@ async function init() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     await renderer.init();   // ここでも失敗したら下の catch がエラー表示する
+    dbg('renderer.init OK (cloth無効で再試行)');
   }
   await collectGpuInfo();   // 診断: 実際に使われている GPU（ソフトウェアフォールバックだと極端に遅い）
   app.appendChild(renderer.domElement);
@@ -177,6 +227,7 @@ async function init() {
   pivot = new THREE.Group(); pivot.matrixAutoUpdate = false; scene.add(pivot);
 
   recenterToHachioji();   // 固定原点で即時再中心化
+  dbg('init 開始');
   loadProg(2, 'マップ地形を読込中…');
   groundGroup = new THREE.Group(); scene.add(groundGroup);
   // map-editor 製 .map.json の自作地形マップ（?map=<name>、既定 mytown）
@@ -1510,6 +1561,7 @@ function tutSpawnDolls() {   // 部屋3のダミードール（走り回る救�
     }).catch((e) => console.warn('プネウマ生成失敗:', e));
   }
   tut.dollsSpawned = true;
+  dbg('ドール生成を開始（' + (TUT_DOLL_SPOTS.length + 3) + '体）');
 }
 function tutJetKills() {
   let n = 0;
@@ -1661,6 +1713,7 @@ async function buildTutorialStage() {
   player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);   // 向きはマント生成後に loadPlayer 側で設定（布結合の回転ずれ防止）
   Object.assign(JET, { n: 6, spMin: 13, spMax: 22, orbitR: 95, killZone: 140, shotCd: 1e9, shotDmg: 0, bombCd: 1e9, resp: 5 });   // 訓練用戦闘機（低速・攻撃なし＝標的ドローン）
   tut.ready = true;
+  dbg('ステージ構築完了 collBoxes=' + collBoxes.length);
   console.log('tutorial stage:', totalL.toFixed(0) + 'm x', Math.max(...TUT_ROOMS.map((r) => r.W)) + 'm, collBoxes', collBoxes.length);
 }
 // ── パトランプ: 中心=点滅する赤光点／周囲=鉛直軸まわりを回転する光のコーン ──
@@ -1884,12 +1937,14 @@ function enemyAllowed(kind) {   // 敵出現のモード制御（本編の投入
 // ── ロード進捗バー（画面下部。ボタンの「準備中…」表示とは独立） ──
 let loadBarEl = null, loadFillEl = null, loadTxtEl = null, loadPct = 0;
 async function tutWaitScenarioAssets() {   // シナリオ素材(ネイ+キャスト)を先に読み切る（上限20秒＝失敗時もステージへ進む）
+  dbg('シナリオ素材の待機開始');
   const t0 = performance.now();
   await new Promise((res) => {
     const iv = setInterval(() => {
       if ((player.ready && guestPreloadDone) || performance.now() - t0 > 20000) { clearInterval(iv); res(); }
     }, 150);
   });
+  dbg('シナリオ素材OK: player.ready=' + player.ready + ' guestPreloadDone=' + guestPreloadDone);
   loadProg(38, 'ステージを構築中…');
 }
 function loadProg(pct, label) {
@@ -1905,6 +1960,7 @@ function loadProg(pct, label) {
     loadTxtEl = loadBarEl.querySelector('#ld-txt');
   }
   loadPct = Math.max(loadPct, pct);
+  if (label) dbg('[load ' + Math.round(loadPct) + '%] ' + label);
   loadFillEl.style.width = Math.min(100, loadPct) + '%';
   if (label) loadTxtEl.textContent = label + '　' + Math.min(100, Math.round(loadPct)) + '%';
   else loadTxtEl.textContent = Math.min(100, Math.round(loadPct)) + '%';
@@ -1941,6 +1997,7 @@ function loadWatchdog() {   // 一定時間たっても起動しない場合、�
     if (!ev.talks) miss.push('会話データ');
     if (!guestPreloadDone) miss.push('会話キャストVRM');
     if (!(cityRoot && collBoxes.length)) miss.push('ステージ構築');
+    dbg('[未完]', miss.join(' / ') || '不明');
     reportFatal('読み込みが完了しません（未完: ' + (miss.join(' / ') || '不明') + '）。'
       + '通信が不安定か、端末のメモリ不足の可能性があります。');
   }, 2000);
@@ -2463,6 +2520,7 @@ async function ensureGuestVrm(actorId, file) {   // 会話相手のVRMをポー�
     try { await warmGuest(g); } catch (e) { console.warn('ゲストの事前コンパイル失敗（初回表示が詰まります）:', actorId, e); }
 
     console.log('ポートレート用VRM読込:', actorId, file);
+    dbg('キャストVRM完了:', actorId);
   } catch (e) {
     console.warn('ポートレート用VRM読込失敗:', actorId, file, e);
   }
@@ -7651,6 +7709,7 @@ async function spawnKen(opts = {}) {
     });
     speech._holder = holder;
   }
+  dbg('ken生成: ' + (opts.mannequin || 'ken') + ' 累計' + (kens.length + 1) + '体');
   kens.push({
     vrm, ragdoll, mixer, action, pos, speech, faceOff: 0,
     vel: new THREE.Vector3(), grabbed: false, grabBone: 'chest', recoverTimer: 0,
