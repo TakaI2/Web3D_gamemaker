@@ -15,7 +15,8 @@
     #topbar { position: fixed; top: 8px; left: 8px; z-index: 20; display: flex; gap: 8px; align-items: center; }
     #topbar a { background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }
     #status { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20; background: rgba(0,0,0,0.55); color: #cfe; padding: 6px 12px; border-radius: 4px; font-size: 12px; max-width: 60vw; text-align: center; }
-    #hint { position: fixed; bottom: 8px; left: 8px; z-index: 20; background: rgba(0,0,0,0.5); color: #9ab; padding: 6px 10px; border-radius: 4px; font-size: 11px; line-height: 1.5; }
+    /* 画面下の操作説明は非表示（要素は残す＝タッチ時の文言差し替え等のコード参照を壊さない） */
+    #hint { display: none; }
     #attrib { position: fixed; bottom: 8px; right: 8px; z-index: 20; background: rgba(0,0,0,0.5); color: #9ab; padding: 6px 10px; border-radius: 4px; font-size: 10px; max-width: 46vw; text-align: right; }
     #attrib a { color: #bcd; }
     #crosshair { position: fixed; top: 50%; left: 50%; width: 16px; height: 16px; transform: translate(-50%,-50%); z-index: 18; pointer-events: none; opacity: 0.8; }
