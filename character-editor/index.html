@@ -72,6 +72,12 @@
     <h4>視線・顔の追従</h4>
     <div id="look-panel"></div>
     <h4>セリフ (speech)</h4>
+    <div id="speech-file-panel" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+      <span style="white-space:nowrap;">ファイル</span>
+      <select id="speech-file" style="flex:1;min-width:0;"></select>
+      <button id="speech-file-new" class="sub" title="このNPC名で新規作成">新規</button>
+    </div>
+    <div class="hint" style="margin-bottom:8px;">このNPCが使うセリフセット。既存ファイルを共有すれば同じ喋りを使い回せます（.npc.json の speech に保存）。</div>
     <div id="speech-panel"></div>
     <div class="hint">このステートで話すセリフ。行ごとに表情を指定でき、未指定ならステートの表情を使います。</div>
     <h4>イベントセリフ</h4>

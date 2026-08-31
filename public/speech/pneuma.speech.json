@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "pneuma",
+  "displayName": "プネウマドール",
+  "states": {
+    "idle": {
+      "mode": "loop",
+      "intervalMs": 11000,
+      "charsPerSecond": 6,
+      "lines": [
+        "…………",
+        "……ぷしゅう",
+        "……こぽ、こぽ"
+      ]
+    }
+  },
+  "events": {
+    "grabbed": {
+      "lines": [
+        "……ぷしゅ",
+        "……こく"
+      ]
+    },
+    "thrown": {
+      "lines": [
+        "……ぷしゅうう"
+      ]
+    },
+    "predation": {
+      "lines": [
+        "……こぽ、こぽ",
+        "……"
+      ]
+    }
+  }
+}

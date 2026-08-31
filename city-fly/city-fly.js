@@ -2771,7 +2771,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial,
+window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial, get kenAssets() { return kenAssets; },
   hitTest: (car, ox, oy, oz, dx, dy, dz, maxT = 500) => rayHitObj(new THREE.Vector3(ox, oy, oz), new THREE.Vector3(dx, dy, dz).normalize(), car, maxT),
   testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
@@ -7266,7 +7266,8 @@ const KEN_DISSOLVE_DURATION = 1.8, KEN_DISSOLVE_LINGER = 1.4;
 const KEN_FAR_TELEPORT = 140, KEN_SPAWN_R = 45;
 const KEN_DISSOLVE_OPTS = { rimColor: '#8ff0ff', liquidColor: '#bfeaff', rimIntensity: 2.6, groundY: 0, puddleScale: 1.6, doubleSide: false };
 const kens = [];
-const kenAssets = { ready: false, bundle: null, vrmBlobUrl: null, walkAnim: null, ragOpts: null, speechChar: null };
+const kenAssets = { ready: false, bundle: null, vrmBlobUrl: null, walkAnim: null, ragOpts: null, speechChar: null,
+  dollChar: null, pneumaChar: null };   // マネキン専用のセリフ（public/speech/dummydoll・pneuma）
 let speechUI = null;   // セリフ表示（頭上バブル）
 const BUBBLE_Y = 1.9, BUBBLE_MAX_DIST = 45;
 const _bubbleV = new THREE.Vector3();
@@ -7317,8 +7318,14 @@ async function prepareKenAssets() {
       if (rr.ok) { const j = await rr.json(); kenAssets.ragOpts = { ...(j.params || {}), boneMaxBend: j.boneMaxBend || {}, boundsMargin: 0.4 }; }
     } catch { /* 無ければ既定 */ }
     try {   // セリフセット（住民の状況セリフ）
-      const sd = await fetchSpeechSet('ken.speech.json');
+      const sd = await fetchSpeechSet(kenAssets.bundle?.speech || 'ken.speech.json');   // npc.jsonのspeech指定を優先
       if (sd) kenAssets.speechChar = buildSpeechCharacter(sd, '住民');
+      if (TUTORIAL) {   // ドールは専用のセリフ（機械的な応答／プネウマは無言に近い）
+        const dd = await fetchSpeechSet('dummydoll.speech.json');
+        if (dd) kenAssets.dollChar = buildSpeechCharacter(dd, 'ダミードール');
+        const pd = await fetchSpeechSet('pneuma.speech.json');
+        if (pd) kenAssets.pneumaChar = buildSpeechCharacter(pd, 'プネウマドール');
+      }
       if (!speechUI) speechUI = createSpeechUI({ dom: document.body });
     } catch (e) { console.warn('kenセリフ準備失敗:', e); }
     kenAssets.ready = true;
@@ -7384,9 +7391,12 @@ async function spawnKen(opts = {}) {
     : KEN_DISSOLVE_OPTS;
   try { dis = createDissolve(vrm.scene, { ...disOpts, groundY: pos.y, armed: false }); dis.setProgress(0); } catch (e) { console.warn('kenディソルブ事前生成失敗:', e); }
   let speech = null;   // 状況セリフ（頭上バブル）
-  if (kenAssets.speechChar) {
+  const speechChar = opts.mannequin === 'dummy' ? (kenAssets.dollChar || kenAssets.speechChar)
+    : opts.mannequin === 'pneuma' ? (kenAssets.pneumaChar || kenAssets.speechChar)
+    : kenAssets.speechChar;
+  if (speechChar) {
     const holder = {};   // バブルの所有者キー（下で m に差し替え）
-    speech = createNpcSpeech(vrm, kenAssets.speechChar, {
+    speech = createNpcSpeech(vrm, speechChar, {
       onLineStart: (speaker, text, cps) => { if (speechUI && holder.m) speechUI.setBubble(holder.m, text, cps); },
     });
     speech._holder = holder;

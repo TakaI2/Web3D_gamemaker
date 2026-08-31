@@ -14,7 +14,7 @@ import { createVRMCloth } from '../lib/vrm-cloth.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse }
   from '../lib/vrm-ragdoll.js';
 import { createLipSync } from '../lib/lip-sync.js';
-import { fetchSpeechSet, speechFromLegacyCharacter } from '../lib/speech-set.js';
+import { fetchSpeechSet, speechFromLegacyCharacter, defaultSpeechFile } from '../lib/speech-set.js';
 
 const STATES = ['idle', 'alert', 'attack', 'taunt', 'downed', 'recovering'];
 const STATE_LABEL = { idle: '通常 (idle)', alert: '警戒 (alert)', attack: '攻撃 (attack)', taunt: '挑発 (taunt)', downed: 'ダウン (downed)', recovering: '復帰 (recovering)' };
@@ -60,6 +60,7 @@ let bundle = null;             // 読み込んだ .npc.json（書き出しのベ
 let vrm = null, mixer = null, action = null, cloth = null, ragdoll = null;
 let characterDef = defaultCharacter();
 let speechDef = { version: 1, id: '', displayName: '', states: {}, events: {} };  // 反応セリフ（*.speech.json）
+let speechFile = '';   // このNPCに割り当てた speech ファイル名（.npc.json の speech に保存）
 let exprNames = [];            // この VRM が持つ表情プリセット名
 let editorState = 'idle';      // プレビュー中の状態
 let mode = 'preview';          // 'preview' | 'sim'
@@ -148,10 +149,12 @@ async function loadBundleObject(b) {
   characterDef = b.character ? mergeCharacter(b.character) : defaultCharacter();
   characterDef.displayName = characterDef.displayName || b.name || '';
 
-  // 反応セリフ（*.speech.json）を読み込む。無ければ npc.json 内の旧インライン speech から救済、それも無ければ空。
-  const speechName = (b.name || 'character') + '.speech.json';
-  const sd = await fetchSpeechSet(speechName) || speechFromLegacyCharacter(b.character) || { states: {}, events: {} };
+  // 反応セリフ（*.speech.json）を読み込む。割り当ては npc.json の speech を優先し、無ければ NPC 名の規約ファイル。
+  // 旧インライン speech からの救済も従来どおり。
+  speechFile = b.speech || defaultSpeechFile((b.name || 'character') + '.npc.json');
+  const sd = await fetchSpeechSet(speechFile) || speechFromLegacyCharacter(b.character) || { states: {}, events: {} };
   speechDef = { version: 1, id: b.name || '', displayName: sd.displayName || characterDef.displayName, states: sd.states || {}, events: sd.events || {} };
+  await buildSpeechFilePanel();
 
   // この VRM が持つ表情名
   exprNames = EXPR_PRESETS.filter(n => hasExpression(n));
@@ -522,6 +525,31 @@ function cleanCharacter(c) {
   return out;
 }
 
+// セリフファイルの割り当てUI（一覧から選ぶ／このNPC名で新規作成）
+async function buildSpeechFilePanel() {
+  const sel = document.getElementById('speech-file');
+  if (!sel) return;
+  let files = [];
+  try { const r = await fetch('../speech/manifest.json'); if (r.ok) files = await r.json(); } catch { /* 一覧APIなし */ }
+  if (speechFile && !files.includes(speechFile)) files = [speechFile, ...files];
+  sel.innerHTML = files.map((f) => `<option value="${f}">${f}</option>`).join('');
+  sel.value = speechFile;
+  sel.onchange = async () => {   // 別ファイルへ切替＝その内容を読み込む
+    speechFile = sel.value;
+    const sd = await fetchSpeechSet(speechFile) || { states: {}, events: {} };
+    speechDef = { version: 1, id: bundle?.name || '', displayName: sd.displayName || characterDef.displayName, states: sd.states || {}, events: sd.events || {} };
+    buildSpeechPanel(); buildEventSpeechPanel();
+    toast(`セリフを ${speechFile} に切替（.npc.json 保存で割り当て確定）`);
+  };
+  const nb = document.getElementById('speech-file-new');
+  if (nb) nb.onclick = async () => {   // このNPC名の規約ファイルを新規作成（中身は空から）
+    speechFile = defaultSpeechFile((bundle?.name || 'character') + '.npc.json');
+    speechDef = { version: 1, id: bundle?.name || '', displayName: characterDef.displayName, states: {}, events: {} };
+    await buildSpeechFilePanel();
+    buildSpeechPanel(); buildEventSpeechPanel();
+    toast(`新規セリフ ${speechFile}（保存で作成されます）`);
+  };
+}
 // 反応セリフを speech.json として保存（空行/空セットは間引く）
 async function saveSpeech() {
   if (!bundle) { toast('先に NPC を読み込んでください'); return; }
@@ -535,7 +563,8 @@ async function saveSpeech() {
     const lines = cleanLines(ev.lines);
     if (lines.length) out.events[k] = { ...ev, lines };
   }
-  const filename = `${id}.speech.json`;
+  const filename = speechFile || `${id}.speech.json`;   // 割り当てたファイルへ保存（共有セットの編集も可能）
+  out.id = filename.replace(/\.speech\.json$/i, '');
   try {
     const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'speech', filename, content: out }) });
     if (r.ok) { const j = await r.json(); toast(`セリフ保存: ${j.path}`); return; }
@@ -550,6 +579,7 @@ async function exportBundle() {
   const out = Object.assign({}, bundle);
   out.version = 2;
   out.character = cleanCharacter(characterDef);
+  if (speechFile) out.speech = speechFile;   // セリフセットの割り当て（読み込み側はこれを優先）
   const filename = `${bundle.name || 'character'}.npc.json`;
 
   // 開発サーバーの public/npc/ へ保存を試みる（本番等でエンドポイントが無ければダウンロードへ）
