@@ -839,6 +839,11 @@ function updateDamageVignette(dt) {   // vamp-dungeon と同じ見た目の赤�
 const SPEED_STEPS = [6, 12, 18, 30, 48, 80];   // 既定=18（index 2）
 let speedStep = 2;
 let spdBoxEl = null;
+function stepSpeed(d) {   // ホイール / タッチの◀▶ から共通で呼ぶ
+  speedStep = Math.max(0, Math.min(SPEED_STEPS.length - 1, speedStep + d));
+  flight.maxSpeed = SPEED_STEPS[speedStep];
+  updateSpeedUI();
+}
 function updateSpeedUI() {
   if (!spdBoxEl) return;
   const n = SPEED_STEPS.length;
@@ -871,6 +876,21 @@ function updateHpUI() {
     spdBoxEl = document.createElement('div');
     spdBoxEl.style.cssText = "color:#7fe6c0;font:700 13px 'Yu Gothic',Meiryo,monospace;letter-spacing:0.10em;text-shadow:0 1px 3px #000;";
     sp.append(spLabel, spdBoxEl);
+    if (IS_TOUCH) {   // タッチ端末はホイールが無いので◀▶で増減する
+      const mkSpd = (label, d) => {
+        const b = document.createElement('div');
+        b.textContent = label;
+        b.style.cssText = 'pointer-events:auto;touch-action:none;user-select:none;width:34px;height:26px;display:flex;'
+          + 'align-items:center;justify-content:center;background:rgba(10,14,22,0.62);border:1px solid #46608c;'
+          + "border-radius:6px;color:#cfe;font:900 14px 'Yu Gothic',Meiryo,sans-serif;";
+        b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); stepSpeed(d); b.style.background = 'rgba(60,110,170,0.8)'; });
+        const off = () => { b.style.background = 'rgba(10,14,22,0.62)'; };
+        b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off); b.addEventListener('pointerleave', off);
+        return b;
+      };
+      sp.style.pointerEvents = 'none';   // 行自体は素通し。ボタンだけ拾う
+      sp.append(mkSpd('◀', -1), mkSpd('▶', 1));
+    }
     document.body.appendChild(sp);
     updateSpeedUI();
   }
@@ -1771,7 +1791,7 @@ function setTutDoor(i, open) {
   d.lamp.material.color.set(open ? 0x44ff88 : 0xff5a4a);
 }
 const TUT_HINTS = {
-  move: { pc: 'PC：マウスで視点移動　／　WASD・カーソルキーで移動　／　Space上昇・Shift下降', sp: 'スマホ：画面右側スワイプで視点移動　／　左側スワイプで移動　／　右下ボタンで上昇・下降' },
+  move: { pc: 'PC：マウスで視点移動　／　WASD・カーソルキーで移動　／　Space上昇・Shift下降', sp: 'スマホ：画面右側スワイプで視点移動　／　左側スワイプで移動　／　上下を向いて前進で昇降' },
   goal: { pc: '隔壁が開いた！　次の部屋へ進もう', sp: '隔壁が開いた！　次の部屋へ進もう' },
   attack: { pc: 'PC：左クリック＝ビーム（レティクルで狙う）　／　3連射目は雷撃', sp: 'スマホ：右タップ＝ビーム（レティクルで狙う）' },
   charge: { pc: 'PC：左クリック長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）', sp: 'スマホ：長押しでチャージ→離すと貫通ビーム（ゲージMAXで電撃乱射）' },
@@ -1790,7 +1810,7 @@ function tutHint(key) {
   if (!h) return;
   if (!tut.hintEl) {
     tut.hintEl = document.createElement('div');
-    tut.hintEl.style.cssText = 'position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:24;pointer-events:none;'
+    tut.hintEl.style.cssText = 'position:fixed;left:50%;top:' + (IS_TOUCH ? 106 : 64) + 'px;transform:translateX(-50%);z-index:24;pointer-events:none;'
       + 'background:rgba(8,14,30,0.72);border:1px solid rgba(120,190,255,0.55);border-radius:8px;padding:10px 22px;'
       + 'color:#dff2ff;font:700 15px Meiryo,sans-serif;text-shadow:0 1px 3px #000;max-width:82vw;text-align:center;';
     document.body.appendChild(tut.hintEl);
@@ -2653,23 +2673,33 @@ function renderPortrait() {   // メイン描画の直後に、対象矩形へ�
 let talkEls = null; const talkQ = []; let talkCur = null, talkT = 0;
 function ensureTalkUI() {
   if (talkEls) return;
+  // スマホは画面が狭いので、下端に密着させた細身のウィンドウにする（PCは従来どおり）
+  const M = IS_TOUCH;
+  const facePx = M ? 76 : 138;
   const wrap = document.createElement('div');
   // 背景は本文パネル側に持たせ、顔枠は「窓の穴」にする（立体ポートレートをDOMで覆わないため）
-  wrap.style.cssText = 'position:fixed;left:50%;bottom:46px;transform:translateX(-50%);width:min(1100px,92vw);z-index:30;'
-    + 'pointer-events:none;gap:18px;align-items:center;display:none;';
+  wrap.style.cssText = M
+    ? 'position:fixed;left:0;right:0;bottom:0;width:100%;z-index:30;pointer-events:none;gap:8px;align-items:flex-end;display:none;padding:0 8px 6px;'
+    : 'position:fixed;left:50%;bottom:46px;transform:translateX(-50%);width:min(1100px,92vw);z-index:30;'
+      + 'pointer-events:none;gap:18px;align-items:center;display:none;';
   const face = document.createElement('div');
-  face.style.cssText = 'width:138px;height:138px;flex:0 0 138px;border-radius:12px;overflow:hidden;position:relative;background:#223;'
+  face.style.cssText = 'width:' + facePx + 'px;height:' + facePx + 'px;flex:0 0 ' + facePx + 'px;border-radius:'
+    + (M ? '8px' : '12px') + ';overflow:hidden;position:relative;background:#223;'
     + 'border:1px solid rgba(140,150,255,0.45);box-shadow:0 4px 18px rgba(0,0,0,0.5);';
   const fb = document.createElement('div');   // 顔グラ未配置時の仮表示（イニシャル）
-  fb.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:900 66px Meiryo,sans-serif;color:#fff;';
+  fb.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:900 '
+    + (M ? 38 : 66) + 'px Meiryo,sans-serif;color:#fff;';
   const img = document.createElement('img');
   img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;';
   face.appendChild(fb); face.appendChild(img);
   const body = document.createElement('div');
   body.style.cssText = 'flex:1;min-width:0;background:rgba(8,10,24,0.82);border:1px solid rgba(140,150,255,0.45);'
-    + 'border-radius:15px;padding:15px 21px;box-shadow:0 4px 18px rgba(0,0,0,0.5);';
-  const name = document.createElement('div'); name.style.cssText = 'font:700 21px Meiryo,sans-serif;margin-bottom:6px;';
-  const text = document.createElement('div'); text.style.cssText = 'font:24px/1.6 Meiryo,sans-serif;color:#eef;min-height:3.2em;';
+    + (M ? 'border-radius:8px;padding:6px 10px;' : 'border-radius:15px;padding:15px 21px;')
+    + 'box-shadow:0 4px 18px rgba(0,0,0,0.5);';
+  const name = document.createElement('div');
+  name.style.cssText = M ? 'font:700 13px Meiryo,sans-serif;margin-bottom:2px;' : 'font:700 21px Meiryo,sans-serif;margin-bottom:6px;';
+  const text = document.createElement('div');
+  text.style.cssText = M ? 'font:15px/1.45 Meiryo,sans-serif;color:#eef;min-height:2.9em;' : 'font:24px/1.6 Meiryo,sans-serif;color:#eef;min-height:3.2em;';
   body.appendChild(name); body.appendChild(text);
   wrap.appendChild(face); wrap.appendChild(body);
   document.body.appendChild(wrap);
@@ -5357,9 +5387,7 @@ function setupControls() {
   });
   window.addEventListener('keyup', (e) => { keysDown[e.code] = false; });
   window.addEventListener('wheel', (e) => {   // 速度は段階制（SPEEDゲージの■と1対1）
-    speedStep = Math.max(0, Math.min(SPEED_STEPS.length - 1, speedStep + (e.deltaY < 0 ? 1 : -1)));
-    flight.maxSpeed = SPEED_STEPS[speedStep];
-    updateSpeedUI();
+    stepSpeed(e.deltaY < 0 ? 1 : -1);
   });
   if (IS_TOUCH) setupTouchControls(cv);
 }
@@ -5372,10 +5400,11 @@ const TOUCH_HOLD = 0.28;         // 長押し判定(秒)
 const TOUCH_LOOK = 0.0045;       // 視点感度
 function setupTouchControls(cv) {
   for (const el of document.querySelectorAll('.touch-ui')) el.style.display = el.classList.contains('touch-btn') ? 'flex' : 'block';
+  for (const id of ['btn-up', 'btn-down']) { const el = $(id); if (el) el.style.display = 'none'; }   // 昇降ボタンは廃止（視点＋移動で昇降できる）
   $('joystick-base').style.display = 'none';
   $('touch-charge').style.display = 'none';
   const hint = $('hint');
-  if (hint) hint.textContent = '左半分ドラッグ=移動 / ▲▼=昇降 / 右半分ドラッグ=視点 / 右タップ=ビーム / 長押し=掴む(対象なしはチャージ→離してラージ) / 掴み中は指を離すと投擲';
+  if (hint) hint.textContent = '左半分ドラッグ=移動 / 右半分ドラッグ=視点 / 右タップ=ビーム / 長押し=掴む(対象なしはチャージ→離してラージ) / 掴み中は指を離すと投擲';
   locked = true;   // タッチはポインタロック不要＝入力を常時有効化
   // 仮想スティック（左半分）
   const base = $('joystick-base'), stick = $('joystick-stick');
