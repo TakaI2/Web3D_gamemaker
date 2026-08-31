@@ -98,7 +98,10 @@ const timelines = [
 ];
 const tlDest = path.join(dest, 'timeline'); fs.mkdirSync(tlDest, { recursive: true });
 const vrmaDest = path.join(dest, 'vrma'); fs.mkdirSync(vrmaDest, { recursive: true });
-const vrmaSet = new Set(['Catwalk_Walk_Forward.vrma', 'hit_front.vrma', 'dead03.vrma', 'HumanM@Idle01.vrma']);   // ken歩行＋プレイヤー被弾/死亡
+// ken/ドールの歩行VRMAは city-fly.js の KEN_WALK_VRMA を実読み（定数を変えたのに dist へ入らず
+// T ポーズになる事故を防ぐ）
+const kenWalkVrma = (jsSrc.match(/KEN_WALK_VRMA = '([^']+)'/) || [])[1] || 'Catwalk_Walk_Forward.vrma';
+const vrmaSet = new Set([kenWalkVrma, 'hit_front.vrma', 'dead03.vrma', 'HumanM@Idle01.vrma']);   // ken歩行＋プレイヤー被弾/死亡
 // timeline/fx が参照する public 直下のテクスチャpng（例 ../electric.png）を集めて同梱し、パスを ./ へ書き換え
 const texPngs = new Set(['electric.png']);   // アルティメット乱射のシート（コードから直接参照）
 const rewriteTexPaths = (text) => text.replace(/\.\.\/([\w\-. %@]+\.png)/g, (_, name) => { texPngs.add(name); return './' + name; });

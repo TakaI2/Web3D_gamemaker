@@ -810,7 +810,7 @@ const TUT_ROOMS = [   // L=X方向長さ, W=Z方向幅, H=天井高
   { name: 'boss',   L: 640, W: 640, H: 300 },
 ];
 const TUT_ROOM_TALK = { 2: 'r2_start', 3: 'r3_start', 4: 'r4_start', 5: 'r5_start', 6: 'r6_start' };
-const tut = { ready: false, room: 0, started: false, midFired: {}, goalDone: false,
+const tut = { ready: false, room: 0, started: false, midFired: {}, goalDone: false, cullRoom: -99,
   rooms: [], doors: [], goal: null, hintEl: null, hintT: 0, root: null };
 let tutSpawn = null;
 function makeTutTex() {   // games_fps 風: ライトグレーのチェッカー＋グリッド線
@@ -990,7 +990,7 @@ function tutPropDecor(mesh, geo, color, maxDim) {   // 太さのある発光エ�
     m4.compose(vd.copy(va).add(vb).multiplyScalar(0.5), q, vs.set(er, len, er));
     eIM.setMatrixAt(i, m4);
   }
-  eIM.frustumCulled = false;
+  eIM.computeBoundingSphere();   // インスタンス分布から境界球を作り、視界外は描かない
   mesh.add(eIM);
   const seen = new Set(), verts = [];   // 重複を除いた角頂点
   const pos = geo.attributes.position;
@@ -1008,7 +1008,7 @@ function tutPropDecor(mesh, geo, color, maxDim) {   // 太さのある発光エ�
     m4.compose(va.set(verts[i * 3], verts[i * 3 + 1], verts[i * 3 + 2]), q, vs.set(vr, vr, vr));
     vIM.setMatrixAt(i, m4);
   }
-  vIM.frustumCulled = false;
+  vIM.computeBoundingSphere();
   mesh.add(vIM);
   return vMat;   // 点滅制御用
 }
@@ -1029,6 +1029,7 @@ function tutProp(geo, x, z, mass, color, ry = 0, kind = 'prop') {   // グラブ
   const proxy = regGrabObj({ mesh, hbKind: kind, hitBox: { c: hbC, h: hbH }, hitR: hbC.length() + hbH.length(), mass, tutObj: true,
     home: { x, y: -bb.min.y, z, ry }, tutHp0: 2 + mass, tutHp: 2 + mass, blinkMat: ptsMat, blinkPhase: x * 0.37 });
   mesh.userData.car = proxy;   // レイ照準の掴みで直接ヒットできるように
+  proxy.roomIdx = tutRoomOf(x);   // 部屋カリング用
   tutProps.push(proxy);
   return proxy;
 }
@@ -1066,6 +1067,7 @@ async function buildTutContainers() {   // 市街の港と同じコンテナを�
       const proxy = regGrabObj({ mesh, hbKind: 'container', hitBox: { c: cBoxC.clone(), h: cBoxH.clone() }, hitR: (cBoxC.length() + cBoxH.length()) * cs, mass: 3, tutObj: true, glowBase: 1 / cs,
         home: { x: px, y: 0, z: pz, ry: mesh.rotation.y }, tutHp0: 5, tutHp: 5 });
       mesh.userData.car = proxy;
+      proxy.roomIdx = ri;   // 部屋カリング用
       tutProps.push(proxy);
     }
   }
@@ -1615,7 +1617,7 @@ function tutBeacon(x, y, z, opts = {}) {
   beam.add(cone1); beam.add(cone2);
   grp.add(beam);
   tut.root.add(grp);
-  const bc = { grp, beam, always: !!opts.always, door: opts.door ?? null, spin: 2.6 + (tutBeacons.length % 3) * 0.5, phase: tutBeacons.length * 1.3 };
+  const bc = { grp, beam, always: !!opts.always, door: opts.door ?? null, spin: 2.6 + (tutBeacons.length % 3) * 0.5, phase: tutBeacons.length * 1.3, roomIdx: tutRoomOf(x) };
   grp.visible = !!opts.always;
   tutBeacons.push(bc);
   return bc;
@@ -1672,8 +1674,31 @@ function tutHint(key) {
   tut.hintEl.style.opacity = '1';
   tut.hintT = 14;
 }
+function tutRoomOf(x) {   // ワールドX → 部屋index（範囲外は最寄り）
+  for (let i = 0; i < tut.rooms.length; i++) if (x >= tut.rooms[i].x0 - TUT_WALL && x <= tut.rooms[i].x1 + TUT_WALL) return i;
+  return x < tut.rooms[0].x0 ? 0 : tut.rooms.length - 1;
+}
+// 描画は「今いる部屋 ±1」だけに絞る（通過済みの部屋・まだ見えない部屋は描かない）。
+// 300万頂点の街と違い、ここはドローコール律速なので効果が大きい
+function updateTutCulling() {
+  const cur = tutRoomOf(player.pos.x);
+  if (cur === tut.cullRoom) return;
+  tut.cullRoom = cur;
+  const vis = (i) => i >= cur - 1 && i <= cur + 1;
+  for (const c of tutProps) if (c.roomIdx != null) c.cullHide = !vis(c.roomIdx);
+  for (const bc of tutBeacons) if (bc.roomIdx != null) bc.cullHide = !vis(bc.roomIdx);
+  for (const m of kens) {
+    if (!m.mannequin) continue;
+    const hide = !vis(tutRoomOf(m.pos.x));
+    m.cullHide = hide;
+    m.vrm.scene.visible = !hide;
+    m.vrm.scene.traverse((o) => { if (o.userData) o.userData.mannHidden = hide; });
+  }
+}
 function updateTutorial(dt) {
   if (!TUTORIAL || !tut.ready) return;
+  updateTutCulling();
+  updateMannequins();
   for (const d of tut.doors) {   // ドア開閉アニメ＋collbox連動
     if (!d.anim) continue;
     d.t = Math.min(1, d.t + dt / 1.4);
@@ -1685,7 +1710,7 @@ function updateTutorial(dt) {
   }
   _tbCoreMat.opacity = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(exhaustT * 7));   // 中心光点の点滅（共有材質）
   for (const bc of tutBeacons) {   // パトランプ: ゲート連動＋光コーンの回転
-    const on = bc.always || (bc.door != null && tut.doors[bc.door] && tut.doors[bc.door].open);
+    const on = !bc.cullHide && (bc.always || (bc.door != null && tut.doors[bc.door] && tut.doors[bc.door].open));
     if (bc.grp.visible !== on) bc.grp.visible = on;
     if (on) bc.beam.rotation.y = exhaustT * bc.spin + bc.phase;
   }
@@ -1747,6 +1772,9 @@ function updateTutorial(dt) {
     } else if (!c.dead && !c.grabbed && !c.thrown && c.mesh.children[0]) {
       c.mesh.children[0].scale.setScalar((c.glowBase || 1) * (1 + 0.35 * Math.sin(exhaustT * 4 + c.home.x)));
     }
+    const want = !c.dead && !c.cullHide;   // 部屋カリング（掴み/投擲中は追従して見えるように例外）
+    const show = want || c.grabbed || c.thrown;
+    if (c.mesh.visible !== show && c.respawnT == null && c.dying == null) c.mesh.visible = show;
     if (c.blinkMat && !c.dead) c.blinkMat.opacity = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(exhaustT * 5 + c.blinkPhase));   // 頂点の点滅
   }
   if (tut.room === 1) {   // 部屋1: 中間会話→ゴール到達で隔壁解放
@@ -7447,6 +7475,38 @@ const MANN_PARTS = [
 const _mnV0 = new THREE.Vector3(), _mnV1 = new THREE.Vector3(), _mnQ = new THREE.Quaternion(), _mnY = new THREE.Vector3(0, 1, 0);
 const _mannGeoCyl = new THREE.CylinderGeometry(1, 1, 1, 8);     // 単位ジオメトリ共有（scaleで各部位へ）
 const _mannGeoSph = new THREE.SphereGeometry(1, 10, 8);
+// マネキンのパーツは種類ごとの共有 InstancedMesh でまとめて描く（1体13パーツ×11体を2ドローコールに）
+const mannPool = { dummy: null, pneuma: null };
+const mannParts = { dummy: [], pneuma: [] };   // { obj: ボーンの子メッシュ, geo: 'cyl'|'sph' }
+const MANN_CAP = 320;   // 同時に描けるパーツ数の上限
+function mannPoolFor(kind, mat) {
+  if (mannPool[kind]) return mannPool[kind];
+  // 円筒と球を1つのジオメトリに混ぜられないので、種類ごとに2本立てる
+  const cyl = new THREE.InstancedMesh(_mannGeoCyl, mat, MANN_CAP);
+  const sph = new THREE.InstancedMesh(_mannGeoSph, mat, MANN_CAP);
+  for (const im of [cyl, sph]) { im.frustumCulled = false; im.count = 0; im.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(im); }
+  mannPool[kind] = { cyl, sph };
+  return mannPool[kind];
+}
+const _mnM = new THREE.Matrix4();
+function updateMannequins() {   // ボーン追従のパーツ行列を InstancedMesh へ流し込む
+  for (const kind of ['dummy', 'pneuma']) {
+    const pool = mannPool[kind];
+    if (!pool) continue;
+    let nc = 0, ns = 0;
+    for (const p of mannParts[kind]) {
+      const o = p.obj;
+      if (!o.parent || o.userData.mannHidden) continue;   // 部屋カリング等で非表示
+      o.updateWorldMatrix(true, false);
+      if (p.geo === 'sph') { if (ns < MANN_CAP) pool.sph.setMatrixAt(ns++, o.matrixWorld); }
+      else if (nc < MANN_CAP) pool.cyl.setMatrixAt(nc++, o.matrixWorld);
+    }
+    pool.cyl.count = nc; pool.sph.count = ns;
+    if (nc) pool.cyl.instanceMatrix.needsUpdate = true;
+    if (ns) pool.sph.instanceMatrix.needsUpdate = true;
+  }
+  void _mnM;
+}
 function makeMannequin(vrm, kind) {
   const nodeOf = (name) => vrm.humanoid?.getRawBoneNode?.(name) || vrm.humanoid?.getNormalizedBoneNode?.(name);
   const mat = kind === 'pneuma'
@@ -7470,8 +7530,9 @@ function makeMannequin(vrm, kind) {
     mesh.position.set((_mnV0.x + _mnV1.x) / 2, (_mnV0.y + _mnV1.y) / 2, (_mnV0.z + _mnV1.z) / 2).applyMatrix4(_im);
     const wq = na.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(_mnQ);
     mesh.quaternion.copy(wq);
-    mesh.frustumCulled = false;
+    mesh.visible = false;   // 描画は共有 InstancedMesh（行列だけ three に計算させる）
     na.add(mesh);
+    mannParts[kind === 'pneuma' ? 'pneuma' : 'dummy'].push({ obj: mesh, geo: 'cyl' });
     made++;
   }
   const hn = nodeOf('head');
@@ -7479,18 +7540,19 @@ function makeMannequin(vrm, kind) {
     const head = new THREE.Mesh(_mannGeoSph, mat);
     head.scale.setScalar(0.105);
     head.position.set(0, 0.09, 0);
-    head.frustumCulled = false;
+    head.visible = false;
     hn.add(head);
+    mannParts[kind === 'pneuma' ? 'pneuma' : 'dummy'].push({ obj: head, geo: 'sph' });
     made++;
     const mkMat = new THREE.MeshBasicMaterial({ color: kind === 'pneuma' ? 0x4ad7ff : 0xffb040, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
     mkMat._dissolveApplied = true;   // ディソルブラップ除外
     const mk = new THREE.Mesh(_mannGeoSph, mkMat);   // 頭上の発光マーカー（広い部屋でも視認できるように）
     mk.scale.setScalar(0.22);
     mk.position.set(0, 0.5, 0);
-    mk.frustumCulled = false;
     hn.add(mk);
   }
   if (!made) return;
+  mannPoolFor(kind === 'pneuma' ? 'pneuma' : 'dummy', mat);   // 共有プール（材質はこのマネキンのもの）
   vrm.scene.traverse((o) => { if ((o.isMesh || o.isSkinnedMesh) && o.geometry !== _mannGeoCyl && o.geometry !== _mannGeoSph) o.visible = false; });   // 元メッシュは隠す
 }
 function kenCount() { return kens.filter((k) => !k.interior && !k.doll).length; }   // 屋外プールの数（在宅住人・ドールは別枠）
@@ -7696,6 +7758,7 @@ function kenBark(m, ev, hold = 2.6) {
   m.barkT = hold;
 }
 function updateOneKen(m, dt) {
+  if (m.cullHide && !m.grabbed && !m.eating && !m.suck && !m.dissolving) return;   // 別の部屋のドールは更新しない
   updateHpBar(m);
   if (m.barkT > 0) m.barkT -= dt;
   if (m.suck) return;   // セーフティエリア吸い込み演出中（updateTutRoom3が駆動）
