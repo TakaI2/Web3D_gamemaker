@@ -1629,9 +1629,8 @@ const TUT_HINTS = {
   aerial: { pc: 'PC：右クリック長押し＝ドールを掴む→運んで光の柱の中で離す　／　訓練機はビームで撃墜', sp: 'スマホ：長押し＝ドールを掴む→光の柱まで運ぶ　／　右タップで撃墜' },
   grab: { pc: 'PC：右クリック長押し＝光る物を掴む／マウスを振って離すと投擲　重い物ほど破壊力大・持っている間は盾になる', sp: 'スマホ：長押し＝光る物を掴む／指を離すと投擲　重い物ほど破壊力大・盾にもなる' },
   feed: { pc: 'PC：右クリック長押し＝ドールを掴む→持ったまま着地すると捕食（HP回復・服とマントも修復）', sp: 'スマホ：長押し＝ドールを掴む→持ったまま着地すると捕食（HP回復・服とマントも修復）' },
-  special: { pc: '必殺技：ゲージMAXまで溜めて放つ　空中＝電撃乱射／地上＝トーテム設置', sp: '必殺技：ゲージMAXまで溜めて放つ　空中＝電撃乱射／地上＝トーテム設置' },
 };
-const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial', 4: 'grab', 5: 'feed', 6: 'special' };
+const TUT_ROOM_HINT = { 2: 'attack', 3: 'aerial', 4: 'grab', 5: 'feed' };
 function tutHurtLine() {   // 被弾時のランダム一言（連発しないようクールダウン）
   if (tut.hurtCd > 0) return;
   tut.hurtCd = 8;
@@ -1699,7 +1698,6 @@ function updateTutorial(dt) {
     tut.room = roomIdx + 1;
     const talk = TUT_ROOM_TALK[tut.room];
     if (talk) queueTalk(talk);
-    if (tut.room === 6 && !special.ult) { unlockSpecial('all'); queueTalk('r6_special'); }   // 最終訓練で必殺技を解放
     const hk = TUT_ROOM_HINT[tut.room];
     if (hk) tutHint(hk);
     tutRefreshObjective();
@@ -1748,7 +1746,7 @@ let gameMode = 'title';   // 'title' | 'training' | 'play'（'op'/'ed' はP2で�
 const gp = { destroyed: 0, attritionPts: 0 };          // 都市被害・敵損耗の実測値
 const ATTR_PTS = { jet: 3, walker: 20, spider: 35 };   // 撃破ポイント（想定総量100pt=100%）
 // 必殺技: ゲージMAXでのみ発動できる大技。解放前は使えない（空中=電撃乱射 / 接地=トーテム）
-const special = { ult: !TUTORIAL, totem: !TUTORIAL };   // 街は従来どおり最初から使用可
+const special = { ult: !TUTORIAL, totem: !TUTORIAL };   // 街は従来どおり最初から使用可。チュートリアルでは扱わない（未解放のまま）
 function unlockSpecial(name) {
   if (name === 'all') { special.ult = true; special.totem = true; return; }
   if (name in special) special[name] = true;
