@@ -46,6 +46,17 @@
     /* タッチ操作HUD（スマホ検出時のみ表示） */
     #app canvas { touch-action: none; }
     .touch-ui { display: none; }
+    /* 縦持ち時の回転案内。タッチ端末かつ縦向きのときだけ全画面で出す（iOSは回転ロックAPI非対応のため案内が要る） */
+    #rotate-hint { display: none; }
+    @media (orientation: portrait) and (pointer: coarse) {
+      #rotate-hint {
+        position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 18px; text-align: center;
+        background: #070b18; color: #dbe8ff; font: 700 17px Meiryo, sans-serif; padding: 24px;
+      }
+      #rotate-hint .icon { font-size: 62px; animation: rot 2.2s ease-in-out infinite; }
+      @keyframes rot { 0%,40% { transform: rotate(0deg); } 60%,100% { transform: rotate(-90deg); } }
+    }
     #joystick-base { position: fixed; width: 140px; height: 140px; border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.3); pointer-events: none; z-index: 22; }
     #joystick-stick { position: absolute; top: 50%; left: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%; background: rgba(255,255,255,0.4); border: 2px solid rgba(255,255,255,0.7); pointer-events: none; }
     .touch-btn { position: fixed; width: 68px; height: 68px; border-radius: 50%; background: rgba(255,255,255,0.14); border: 2px solid rgba(255,255,255,0.45); color: #fff; font-size: 26px; align-items: center; justify-content: center; z-index: 22; user-select: none; -webkit-user-select: none; touch-action: none; }
@@ -93,6 +104,8 @@
   <div id="attrib"></div>
   <div id="loading">CityFly 読み込み中…</div>
   <div id="err"></div>
+  <div id="rotate-hint"><div class="icon">📱</div><div>端末を横向きにしてください</div>
+    <div style="font:13px Meiryo,sans-serif;color:#8fa8c8;">横画面でのプレイを想定しています</div></div>
   <div id="joystick-base" class="touch-ui"><div id="joystick-stick"></div></div>
   <div id="btn-up" class="touch-btn touch-ui">▲</div>
   <div id="btn-down" class="touch-btn touch-ui">▼</div>

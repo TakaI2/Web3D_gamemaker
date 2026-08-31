@@ -1889,7 +1889,16 @@ function setupTitle() {
   }, 400);
   bs.addEventListener('click', () => startMode('play'));
 }
+// スマホ: ゲーム開始時に全画面化＋横向きロックを試す。
+// Androidは screen.orientation.lock が効く（全画面が前提）。iOSは両方とも非対応なので
+// CSSの回転案内(#rotate-hint)にフォールバックする
+async function tryLandscape() {
+  if (!IS_TOUCH) return;
+  try { if (!document.fullscreenElement) await document.documentElement.requestFullscreen(); } catch { /* 拒否/非対応 */ }
+  try { await screen.orientation?.lock?.('landscape'); } catch { /* iOS等は非対応 */ }
+}
 function startMode(mode) {
+  tryLandscape();
   gameMode = mode;
   if (TUTORIAL) {   // タイトルの眠りから覚醒（blink解除）。本編はこのままシナリオへシームレス継続
     titleSleepOn = false;
