@@ -3360,7 +3360,7 @@ window.__fly = { get buildProf() { return buildProf; },
   },
   roadEdgesNear: (x, z, r = 200) => activeEdges.filter((e) => Math.hypot(e.a.x - x, e.a.z - z) < r)
     .map((e) => ({ ax: Math.round(e.a.x), az: Math.round(e.a.z), ay: +e.a.y.toFixed(2), bx: Math.round(e.b.x), bz: Math.round(e.b.z), by: +e.b.y.toFixed(2), kind: e.kind, len: +e.len.toFixed(1) })), get profTimeline() { return profTimeline; }, get episode() { return episode; }, testFlowEnd: (node) => runFlowEnd(node),   // エピソード確認・EP遷移のテスト用
-  get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial, get kenAssets() { return kenAssets; }, softRestart,
+  get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get fallingSigns() { return fallingSigns; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial, get kenAssets() { return kenAssets; }, softRestart,
   hitTest: (car, ox, oy, oz, dx, dy, dz, maxT = 500) => rayHitObj(new THREE.Vector3(ox, oy, oz), new THREE.Vector3(dx, dy, dz).normalize(), car, maxT),
   testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
@@ -6195,6 +6195,7 @@ function damageBuildingRec(rec0, md, point, dmg = DMG_SHOT, fxScale = 1, src = n
   std.matrixAutoUpdate = false; std.matrix.copy(m); std.matrixWorldNeedsUpdate = true;
   cityDamaged.add(std);
   rec0.dead = true; partitionBuildings();   // インスタンス側から即除去
+  dropBuildingSigns(rec0);   // 看板は建物と一緒に傾かないので、ここで落として消す（浮いたまま残さない）
   // 欠損半径は建物サイズに比例（小さな住宅が一撃で丸ごと消えないように）
   const minDim = Math.min((gb.max.x - gb.min.x) * _s2.x, (gb.max.z - gb.min.z) * _s2.z, height);
   const carveR = Math.min(CARVE_RADIUS, Math.max(2.5, minDim * 0.45));
@@ -8839,7 +8840,7 @@ function updateDayNight(dt) {
   if (parkGlowMat) parkGlowMat.opacity = nightF;       // 公園ランタンも夜だけ
   if (windowGlowMat) windowGlowMat.opacity = nightF * 0.9;   // 窓の光漏れも夜だけ
   if (roadLightU) roadLightU.value = 0.30 + (1 - nightF) * 0.75;   // 道路(カーブ材質=アンリット)の昼夜明度
-  if (signLightU) signLightU.value = 0.30 + (1 - nightF) * 0.75;   // 看板(アンリット)も同じ明度カーブ。emissive指定の看板は夜も明るいまま
+  if (signLightU) signLightU.value = 0.85 + (1 - nightF) * 0.15;   // 看板は夜も読める明るさを保つ（照明付きの広告板のつもり）。emissive指定は常に最大
   if (cloudMat) {   // 雲: 時刻で色（夕焼けは太陽色に染まる）と濃さを変え、ゆっくり流す
     cloudMat.color.copy(dayLerp('sunC', gameHour)).lerp(_dcWhite, 0.6);
     cloudMat.opacity = 0.85 - nightF * 0.55;
@@ -9129,7 +9130,7 @@ async function buildSigns() {
   const rectA = attribute('signRect', 'vec4'), litA = attribute('signLit', 'float');
   const tx = texture(signAtlasTex, uv().mul(rectA.zw).add(rectA.xy));
   const nm = new THREE.MeshBasicNodeMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: true });
-  nm.colorNode = tx.mul(mix(signLightU, float(1), litA));   // 自発光指定の看板は夜も明るいまま
+  nm.colorNode = tx.rgb.mul(mix(signLightU, float(1), litA));   // ← rgbだけに掛ける（vec4に掛けるとアルファまで下がって夜に透ける）
   nm.opacityNode = tx.a;
   nm.alphaTest = 0.08;   // 切り抜き看板（背景透明PNG）に対応
   mesh.material = nm;
@@ -9137,6 +9138,48 @@ async function buildSigns() {
   addStage(mesh, true);
   signMesh = mesh;
   console.log('signs:', n, '/ atlas', size + 'px', imgs.length + '枚');
+}
+
+// 被弾した建物の看板を落とす。建物は初弾で単体メッシュへ置き換わり傾き始めるが、
+// 看板はインスタンス行列のまま残るため宙に浮いてしまう。落下＋回転させて短時間で消す。
+const fallingSigns = [];   // {i, p, q, s, vel, spinAxis, spinSpd, t}
+const SIGN_FALL_G = 26, SIGN_FALL_LIFE = 4;
+const _fsM = new THREE.Matrix4(), _fsQ = new THREE.Quaternion(), _fsZero = new THREE.Matrix4().makeScale(0, 0, 0);
+function dropBuildingSigns(rec) {
+  const e = rec && recLights.get(rec);
+  if (!signMesh || !e || !e.sign || !e.sign.length) return;
+  for (const i of e.sign) {
+    const p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+    signMesh.getMatrixAt(i, _fsM);
+    _fsM.decompose(p, q, sc);
+    if (sc.x < 1e-4) continue;   // 既に消えている
+    const a = Math.random() * Math.PI * 2;
+    fallingSigns.push({
+      i, p, q, s: sc, t: 0,
+      vel: new THREE.Vector3(Math.cos(a) * 2.5, 1.5 + Math.random() * 2, Math.sin(a) * 2.5),
+      spinAxis: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize(),
+      spinSpd: (Math.random() < 0.5 ? -1 : 1) * (1.5 + Math.random() * 2),
+    });
+  }
+  e.sign.length = 0;   // 以後 hideBuildingLights の対象から外す（落下中に行列を潰されないように）
+}
+function updateFallingSigns(dt) {
+  if (!fallingSigns.length || !signMesh) return;
+  for (let k = fallingSigns.length - 1; k >= 0; k--) {
+    const f = fallingSigns[k];
+    f.t += dt;
+    f.vel.y -= SIGN_FALL_G * dt;
+    f.p.addScaledVector(f.vel, dt);
+    f.q.multiply(_fsQ.setFromAxisAngle(f.spinAxis, f.spinSpd * dt));
+    const gy = groundYAt(f.p.x, f.p.z, f.p.y);
+    if (f.t > SIGN_FALL_LIFE || (gy != null && f.p.y <= gy + 0.2)) {   // 着地か寿命で消す
+      signMesh.setMatrixAt(f.i, _fsZero);
+      fallingSigns.splice(k, 1);
+      continue;
+    }
+    signMesh.setMatrixAt(f.i, _fsM.compose(f.p, f.q, f.s));
+  }
+  signMesh.instanceMatrix.needsUpdate = true;
 }
 
 // ── 車ライト: ヘッド/テールを各1つの Points（動的更新）。夜は遠距離の車体を隠しライトだけ描く ──
@@ -10698,6 +10741,7 @@ function tick() {
   updateGameBgm();        // 本編BGM（play中のみループ）
   updateDebris(dt);       // 破片（がれき/岩）
   updatePropFly(dt);      // 吹っ飛んだ信号/街灯/街路樹の飛翔
+  updateFallingSigns(dt); // 被弾した建物から落ちた広告看板
   if (mp) mpUpdate(dt);   // マルチプレイ: 状態送信＋リモート補間
   updateFirePillars(dt);  // 地面着弾の火柱
   updateWanted(dt);       // 手配度＋パトカー追跡＋サイレン
