@@ -264,6 +264,7 @@ async function init() {
       else mpShowLogin();                     // それ以外はログイン画面を開く
     }
   } catch (e) { console.warn('マルチプレイ初期化失敗:', e); }
+  if (NO_HUB) { const tb = $('topbar'); if (tb) tb.style.display = 'none'; }   // 配信ビルドは hub へ戻れないので出さない
   setupControls();
   window.addEventListener('resize', onResize);
   window.addEventListener('orientationchange', () => setTimeout(onResize, 250));   // 回転直後はサイズが確定していない
@@ -408,6 +409,10 @@ function profFrame(dtMs) {   // tick から呼ぶ。工程中のフレーム間�
     if (dtMs > 50) r.hitches.push(Math.round(dtMs));
   }
 }
+// 配信ビルドは hub を同梱しないので「← 一覧」ボタンを出さない（ビルド時に window.NO_HUB_LINK を注入）。
+// ボタンが消えるぶん HP/SPEED を上へ詰める
+const NO_HUB = !!window.NO_HUB_LINK;
+const HUD_TOP = NO_HUB ? 10 : 52;
 const NO_PORTRAIT = _qs.get('noportrait') === '1';   // 会話ウィンドウの立体ポートレートを無効化（負荷比較用）
 const NO_CITY = _qs.get('nocity') === '1';
 const NO_NPC = _qs.get('nonpc') === '1';
@@ -988,7 +993,7 @@ let hpNumEl = null;
 function updateHpUI() {
   if (!hpBarEl) {
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'position:fixed;left:12px;top:52px;z-index:20;pointer-events:none;display:flex;align-items:center;gap:8px;';
+    wrap.style.cssText = 'position:fixed;left:12px;top:' + HUD_TOP + 'px;z-index:20;pointer-events:none;display:flex;align-items:center;gap:8px;';
     const label = document.createElement('div');
     label.textContent = 'HP';
     label.style.cssText = "color:#cfe;font:900 13px 'Yu Gothic',Meiryo,sans-serif;text-shadow:0 1px 2px #000;";
@@ -1002,7 +1007,7 @@ function updateHpUI() {
     wrap.append(label, barWrap, hpNumEl);
     document.body.appendChild(wrap);
     const sp = document.createElement('div');   // SPEED: HPゲージの下に段階表示
-    sp.style.cssText = 'position:fixed;left:12px;top:72px;z-index:20;pointer-events:none;display:flex;align-items:center;gap:8px;';
+    sp.style.cssText = 'position:fixed;left:12px;top:' + (HUD_TOP + 20) + 'px;z-index:20;pointer-events:none;display:flex;align-items:center;gap:8px;';
     const spLabel = document.createElement('div');
     spLabel.textContent = 'SPEED';
     spLabel.style.cssText = "color:#cfe;font:900 11px 'Yu Gothic',Meiryo,sans-serif;letter-spacing:0.08em;text-shadow:0 1px 2px #000;";
@@ -2273,7 +2278,7 @@ function updateParamsUI() {   // デバッグ兼HUD: 都市被害/敵損耗/手�
   if (gameMode === 'title' || TUTORIAL) { if (paramsEl) paramsEl.style.display = 'none'; return; }   // チュートリアルでは戦況パラメータなし
   if (!paramsEl) {
     paramsEl = document.createElement('div');
-    paramsEl.style.cssText = 'position:fixed;left:12px;top:122px;z-index:20;pointer-events:none;'
+    paramsEl.style.cssText = 'position:fixed;left:12px;top:' + (HUD_TOP + 70) + 'px;z-index:20;pointer-events:none;'
       + 'color:#cfe;font:700 12px Meiryo,sans-serif;text-shadow:0 1px 3px #000;';
     document.body.appendChild(paramsEl);
   }

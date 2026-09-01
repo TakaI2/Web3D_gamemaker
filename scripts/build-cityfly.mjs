@@ -32,7 +32,7 @@ fs.mkdirSync(dest, { recursive: true });
 
 // index.html: DEFAULT_MAP を注入してコピー
 const html = fs.readFileSync(path.join(src, 'index.html'), 'utf8')
-  .replace('<script type="module"', `<script>window.DEFAULT_MAP = '${DEFAULT_MAP}';${epDef ? ` window.DEFAULT_EP = '${epDef.id}';` : ''}${MP_BUILD ? ' window.MP_BUILD = true;' : ''}</script>\n  <script type="module"`);
+  .replace('<script type="module"', `<script>window.DEFAULT_MAP = '${DEFAULT_MAP}';${epDef ? ` window.DEFAULT_EP = '${epDef.id}';` : ''} window.NO_HUB_LINK = true;${MP_BUILD ? ' window.MP_BUILD = true;' : ''}</script>\n  <script type="module"`);
 fs.writeFileSync(path.join(dest, 'index.html'), html);
 console.log(`copied: index.html (DEFAULT_MAP=${DEFAULT_MAP}${epDef ? ' / EP=' + epDef.id : ''}${MP_BUILD ? ' / MPビルド' : ''})`);
 // エピソード定義（一覧＋各EP。数KBなので全部入れる。起動時の解決に使う）
