@@ -431,7 +431,8 @@ let mapPort = null;      // .map.json の埠頭 {rect:[x0,z0,x1,z1], h, containe
 let mapRotaries = [];    // .map.json の駅前ロータリー [{x,z,r}]（環道はroadsに焼き込み済み。ここでは中央島の装飾と信号抑制）
 let mapBldParams = null; // .map.json buildings.params（自動配置のオプション上書き。例: spacing）
 let mapBuildings = null; // .map.json の建物差分 {removed[], moved{}, added[]}
-let mapWater = [];       // .map.json の水面矩形 {x,z,w,d,level}
+let mapWater = [];       // .map.json の水面矩形 {x,z,w,d,level}（海）
+let mapRivers = [];      // .map.json の川 [{points:[[x,z,w,wl]...]}]（経路リボン＝下流へ傾斜する水面）
 let mapForest = null;    // .map.json の植生ペイント {cell,res,data:Uint8Array 密度0-255}（map-editorで描く）
 let mapParks = [];       // .map.json の公園 {points:[[x,z]...], fountain:'round'|'square'}（閉じスプライン）
 let mapParkCfg = {};     // .map.json の公園設定 {hedgeOvr}（map-editorのスライダ）
@@ -468,11 +469,53 @@ function buildMapWater() {
     waterMeshes.push(mesh);
   }
   if (waterMeshes.length) tex.repeat.set(waterMeshes[0].userData.rep, waterMeshes[0].userData.rep);
+  buildRiverRibbons();
   // 遠距離マテリアルのパイプラインも起動時にコンパイルさせる（切替ヒッチ防止）
   const pre = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), waterFarMat);
   pre.position.set(0, -800, 0);
   addStage(pre, true);
   console.log('water planes:', waterMeshes.length);
+}
+// 川は矩形プレーンの寄せ集めではなく、経路に沿った1枚のリボンとして張る。
+// 点ごとに水位(wl)を持たせてあるので、水面がそのまま下流へ傾斜する（地形に沿った川になる）。
+// 板を並べる方式より見た目が自然なうえ、ドローコールも川1本=1回で済む。
+function buildRiverRibbons() {
+  for (const r of mapRivers) {
+    const pts = r.points;
+    if (!Array.isArray(pts) || pts.length < 2) continue;
+    const n = pts.length;
+    const pos = new Float32Array(n * 2 * 3), nor = new Float32Array(n * 2 * 3), uv = new Float32Array(n * 2 * 2);
+    let run = 0;
+    for (let i = 0; i < n; i++) {
+      const x = pts[i][0], z = pts[i][1], w = pts[i][2], wl = pts[i][3];
+      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
+      let dx = b[0] - a[0], dz = b[1] - a[1];
+      const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
+      const px = -dz, pz = dx;   // 進行方向の法線（左右へ川幅を張り出す）
+      if (i > 0) run += Math.hypot(x - pts[i - 1][0], z - pts[i - 1][1]);
+      for (let k = 0; k < 2; k++) {
+        const sgn = k === 0 ? -1 : 1, o = (i * 2 + k) * 3, uo = (i * 2 + k) * 2;
+        pos[o] = x + px * (w / 2) * sgn; pos[o + 1] = wl; pos[o + 2] = z + pz * (w / 2) * sgn;
+        nor[o] = 0; nor[o + 1] = 1; nor[o + 2] = 0;
+        uv[uo] = k; uv[uo + 1] = run / 30;   // 法線マップの流れ方向＝川に沿う
+      }
+    }
+    const idx = new Uint32Array((n - 1) * 6);
+    for (let i = 0; i < n - 1; i++) {
+      const a = i * 2, o = i * 6;
+      idx[o] = a; idx[o + 1] = a + 1; idx[o + 2] = a + 2;         // 上向きになる巻き順
+      idx[o + 3] = a + 1; idx[o + 4] = a + 3; idx[o + 5] = a + 2;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.computeBoundingSphere();
+    // 川は細いので塗り面積が小さい＝遠景LODは不要。常に近景マテリアル（波の法線つき）で描く
+    addStage(new THREE.Mesh(g, waterNearMat), true);
+  }
+  if (mapRivers.length) console.log('rivers:', mapRivers.length, '本 /', mapRivers.reduce((a, r) => a + r.points.length, 0), '点');
 }
 function updateWater(dt) {
   if (!waterMeshes.length) return;
@@ -498,6 +541,7 @@ async function buildMapGround() {
   mapRoads = Array.isArray(j.roads) ? j.roads.filter((r) => r.points && r.points.length >= 2) : [];
   mapBuildings = (j.buildings && ((j.buildings.removed || []).length || (j.buildings.added || []).length || Object.keys(j.buildings.moved || {}).length)) ? j.buildings : null;
   mapWater = Array.isArray(j.water) ? j.water : [];
+  mapRivers = Array.isArray(j.rivers) ? j.rivers : [];
   mapBridges = Array.isArray(j.bridges) ? j.bridges : [];
   mapRails = Array.isArray(j.rails) ? j.rails : [];
   mapPort = j.port || null;
