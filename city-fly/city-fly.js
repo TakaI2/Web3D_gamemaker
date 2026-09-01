@@ -235,38 +235,39 @@ async function init() {
   loadProg(2, 'マップ地形を読込中…');
   groundGroup = new THREE.Group(); scene.add(groundGroup);
   // map-editor 製 .map.json の自作地形マップ（?map=<name>、既定 mytown）
-  let chain = buildMapGround().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)));
+  let chain = profPhase('地形', () => buildMapGround())().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)));
   chain = chain.then(() => loadProg(12, TUTORIAL ? 'シナリオ素材を読込中…' : '道路網を構築中…'));
   if (TUTORIAL) {
-    chain = chain.then(() => tutWaitScenarioAssets());   // ネイ+会話キャストを先に読み切る（タイトルは眠りネイ表示へ）
-    chain = chain.then(() => buildTutorialStage());      // ステージ構築はその後＝タイトル/OP再生の裏で進行
+    chain = chain.then(profPhase('シナリオ素材', () => tutWaitScenarioAssets()));   // ネイ+会話キャストを先に読み切る（タイトルは眠りネイ表示へ）
+    chain = chain.then(profPhase('部屋ステージ', () => buildTutorialStage()));      // ステージ構築はその後＝タイトル/OP再生の裏で進行
     chain = chain.then(() => loadProg(72, 'エフェクトを準備中…'));
   } else {
-    chain = chain.then(() => loadRoads());
+    chain = chain.then(profPhase('道路網', () => loadRoads()));
     chain = chain.then(() => loadProg(25, '建物を配置中…'));
-    if (KENNEY_CITY) chain = chain.then(() => buildKenneyCity());   // 実道路網に Kenney 建物を配置
+    if (KENNEY_CITY) chain = chain.then(profPhase('建物', () => buildKenneyCity()));   // 実道路網に Kenney 建物を配置
     chain = chain.then(() => loadProg(52, '公園と森を生成中…'));
-    chain = chain.then(() => buildParks().catch((e) => console.warn('公園生成失敗', e)));   // 閉じスプラインの公園
-    chain = chain.then(() => buildForest().catch((e) => console.warn('森生成失敗', e)));   // 空き地の森（建物確定後）
+    chain = chain.then(profPhase('公園', () => buildParks().catch((e) => console.warn('公園生成失敗', e))));   // 閉じスプラインの公園
+    chain = chain.then(profPhase('森', () => buildForest().catch((e) => console.warn('森生成失敗', e))));   // 空き地の森（建物確定後）
     chain = chain.then(() => loadProg(62, 'エフェクトを準備中…'));
   }
-  chain = chain.then(() => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
+  chain = chain.then(profPhase('FX/敵材質ウォーム', async () => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
     try { warmEnemyMats(); } catch (e) { console.warn('敵材質ウォーム失敗:', e); }
     loadImpactFx().catch((e) => console.warn('着弾FX準備失敗:', e));
     ensureTotemFx().catch((e) => console.warn('トーテムFX準備失敗:', e));
     try { initDebrisFx(); } catch (e) { console.warn('破片FX準備失敗:', e); }
     try { initUltFx(); } catch (e) { console.warn('アルティメットFX準備失敗:', e); }
     if (!NO_NPC) {   // 性能切り分け: ?nonpc=1 で住民NPCと生活エージェントを出さない
-      prepareKenAssets().then((ok) => {
+      profPhase('NPC:ken読込', () => prepareKenAssets())().then((ok) => {
         loadProg(88, 'NPCを準備中…');
-        if (ok && !TUTORIAL) setKenCount(KEN_COUNT);
-        else if (ok && TUTORIAL && tut.ready) tutSpawnDolls();   // タイトル中にドール生成＝マネキンのパイプラインコンパイルを先に消化
+        if (ok && !TUTORIAL) return profPhase('NPC:住民配置', () => setKenCount(KEN_COUNT))();
+        else if (ok && TUTORIAL && tut.ready) return profPhase('NPC:ドール生成', () => tutSpawnDolls())();   // タイトル中にドール生成＝マネキンのパイプラインコンパイルを先に消化
+        return null;
       }).catch((e) => console.warn('ken準備失敗:', e));
-      if (!TUTORIAL) loadAgentOverrides().then(() => { try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); } });
+      if (!TUTORIAL) profPhase('NPC:生活エージェント', () => loadAgentOverrides())().then(() => { try { initAgents(); } catch (e) { console.warn('agents初期化失敗:', e); } });
     }
-  });
+  }));
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
-  loadPlayer().then(() => { loadProg(TUTORIAL ? 30 : 78, 'キャラクターを準備中…'); return prepareBiteAssets(); }).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
+  profPhase('プレイヤーVRM', () => loadPlayer())().then(() => { loadProg(TUTORIAL ? 30 : 78, 'キャラクターを準備中…'); return prepareBiteAssets(); }).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
   try {
     // マルチプレイはMP専用ビルド(window.MP_BUILD)か ?mp=1 のときだけ有効化（通常のCityFlyはシングル専用のまま）
     const mpAvailable = MP_ON || !!window.MP_BUILD;
@@ -358,6 +359,42 @@ function goToEpisode(id) {
 const _qs = new URLSearchParams(location.search);
 let NO_CAPE = _qs.get('nocape') === '1';
 let GPU_CLOTH_OK = true;   // 頂点ステージのストレージバッファが使えるか（使えない端末はマントを出さない）
+// ?prof=1 : ステージ構築の工程ごとに「所要時間」と「その間に出たフレーム落ち」を記録する。
+// OP再生の裏でどの工程まで走らせてよいかを、体感でなく実測で振り分けるため。
+const PROF = _qs.get('prof') === '1';
+const buildProf = [];
+const profActive = new Set();   // 同時に走る工程がある（プレイヤーVRM読込は他工程と並行）のでコマ落ちは全部に加算する
+function profPhase(name, fn) {   // chain.then(profPhase('道路網', () => loadRoads())) の形で挟む
+  return async () => {
+    if (!PROF) return fn();
+    const rec = { name, ms: 0, maxGap: 0, hitches: [], frames: 0 };
+    profActive.add(rec); buildProf.push(rec);
+    const t0 = performance.now();
+    try { return await fn(); }
+    finally {
+      rec.ms = Math.round(performance.now() - t0);
+      profActive.delete(rec);
+      console.log(`[prof] ${name}: ${rec.ms}ms / 最大コマ落ち ${Math.round(rec.maxGap)}ms / 50ms超 ${rec.hitches.length}回`);
+    }
+  };
+}
+const profTimeline = [];   // 50ms超のコマ落ちを時系列で記録（gameMode付き＝シナリオ中かどうかが分かる）
+let profLastNote = null;   // 直近のシナリオ側イベント（話者切替・背景・行送りなど）
+function profNote(label) { if (PROF) profLastNote = { label, t: performance.now() }; }
+function profFrame(dtMs) {   // tick から呼ぶ。工程中のフレーム間隔を記録
+  if (dtMs > 50) {
+    const n = profLastNote;
+    profTimeline.push({ t: Math.round(performance.now()), gap: Math.round(dtMs), mode: gameMode,
+      phases: [...profActive].map((r) => r.name).join('+') || '-',
+      note: n ? n.label : '-', noteAge: n ? Math.round(performance.now() - n.t) : -1 });
+    if (profTimeline.length > 400) profTimeline.shift();
+  }
+  for (const r of profActive) {
+    r.frames++;
+    if (dtMs > r.maxGap) r.maxGap = Math.round(dtMs);
+    if (dtMs > 50) r.hitches.push(Math.round(dtMs));
+  }
+}
 const NO_PORTRAIT = _qs.get('noportrait') === '1';   // 会話ウィンドウの立体ポートレートを無効化（負荷比較用）
 const NO_CITY = _qs.get('nocity') === '1';
 const NO_NPC = _qs.get('nonpc') === '1';
@@ -2252,9 +2289,9 @@ function updateStageBg(dt) {   // GIFのコマ送り（フレーム時間はGIF�
 const scn = createScenario2D({
   basePath: '../scenario2d', soundPath: '../sound', rootPath: PUB_ROOT, actors: () => (ev.talks && ev.talks.actors) || null,
   stage: {   // OP/ED: 話者を全画面で3D表示（モデルは起動時に先読み済み＝追加ロードなし）
-    begin: (who, face, text, extra) => { const ok = beginPortraitFor(who, face, text, true, extra); setGameHudVisible(false); return ok; },
+    begin: (who, face, text, extra) => { profNote('話者=' + who); const ok = beginPortraitFor(who, face, text, true, extra); setGameHudVisible(false); return ok; },
     end: () => { portraitStage = false; portraitOn = false; setActiveGuest(null); setGameHudVisible(true); clearStageBg(); },
-    bg: (image) => { setStageBg(image); },   // 背景画像/GIF（bg opから）
+    bg: (image) => { profNote('背景=' + image); setStageBg(image); },   // 背景画像/GIF（bg opから）
   },
 });
 async function playScenario(name, after = 'play') {   // after: 'play'=本編へ / 'title'=リロードでタイトルへ
@@ -2395,6 +2432,7 @@ async function playFlowStory(name) {
   try { story = await (await fetch('../story/' + name + '.story.json')).json(); }
   catch (err) { console.warn('シナリオ読込失敗:', name, err); }
   if (!story) { flowAdvance('next'); return; }
+  profNote('シナリオ開始=' + name);
   scn.play(story, { onEnd: () => { flowAdvance('next'); } });
 }
 function updateFlowTimer(dt) {   // battle中のポート発火遅延（例: ウォーカー崩壊を5秒見せてからGood ED）
@@ -3144,7 +3182,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get episode() { return episode; }, testFlowEnd: (node) => runFlowEnd(node),   // エピソード確認・EP遷移のテスト用
+window.__fly = { get buildProf() { return buildProf; }, get profTimeline() { return profTimeline; }, get episode() { return episode; }, testFlowEnd: (node) => runFlowEnd(node),   // エピソード確認・EP遷移のテスト用
   get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial, get kenAssets() { return kenAssets; }, softRestart,
   hitTest: (car, ox, oy, oz, dx, dy, dz, maxT = 500) => rayHitObj(new THREE.Vector3(ox, oy, oz), new THREE.Vector3(dx, dy, dz).normalize(), car, maxT),
   testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
@@ -3645,14 +3683,14 @@ async function loadRoads() {
 }
 // 道路グラフ確定後の共通処理（実体化・車・ライト・路面インデックス）
 async function finishRoads() {
-  buildRoadSurfIndex();
-  await buildRoadMeshes().catch((e) => { console.warn('道路メッシュ生成失敗（デバッグ線で代替）:', e); drawRoadLines(); });
-  try { buildMapBridges(); } catch (e) { console.warn('橋の生成失敗:', e); }
-  try { await buildMapRails(); } catch (e) { console.warn('鉄道の生成失敗:', e); }
-  try { await buildMapPort(); } catch (e) { console.warn('埠頭の生成失敗:', e); }
-  try { await buildRotaries(); } catch (e) { console.warn('ロータリーの生成失敗:', e); }
-  if (!NO_NPC) await spawnCars();   // 性能切り分け: ?nonpc=1 で車を出さない
-  try { buildCarLights(); } catch (e) { console.warn('車ライト生成失敗', e); }
+  await profPhase('道路:面インデックス', () => buildRoadSurfIndex())();
+  await profPhase('道路:メッシュ', () => buildRoadMeshes().catch((e) => { console.warn('道路メッシュ生成失敗（デバッグ線で代替）:', e); drawRoadLines(); }))();
+  await profPhase('道路:橋', () => { try { buildMapBridges(); } catch (e) { console.warn('橋の生成失敗:', e); } })();
+  await profPhase('道路:鉄道', async () => { try { await buildMapRails(); } catch (e) { console.warn('鉄道の生成失敗:', e); } })();
+  await profPhase('道路:埠頭', async () => { try { await buildMapPort(); } catch (e) { console.warn('埠頭の生成失敗:', e); } })();
+  await profPhase('道路:ロータリー', async () => { try { await buildRotaries(); } catch (e) { console.warn('ロータリーの生成失敗:', e); } })();
+  await profPhase('道路:車', async () => { if (!NO_NPC) await spawnCars(); })();   // 性能切り分け: ?nonpc=1 で車を出さない
+  await profPhase('道路:車ライト', () => { try { buildCarLights(); } catch (e) { console.warn('車ライト生成失敗', e); } })();
   console.log('roads center nodes', roadNodes.size, 'edges', activeEdges.length, 'cars', cars.length);
 }
 // ── 埠頭（.map.json port）: 岸壁＋コンテナ置き場＋接岸した客船（船は掴み/破壊対象）──
@@ -5585,20 +5623,20 @@ async function buildKenneyCity() {
   if (!activeEdges.length) { console.warn('city: no road edges'); return; }
   // 活性エッジ(world XZ＋DEM Y)→ジェネレータ
   const edges = activeEdges.map((e) => [e.a.x, e.a.y, e.a.z, e.b.x, e.b.y, e.b.z]);
-  const gen = generateBuildings(edges, { seed: 20260706, ...(mapBldParams || {}) });
+  const gen = await profPhase('建物:配置生成', () => generateBuildings(edges, { seed: 20260706, ...(mapBldParams || {}) }))();
   if (mapBuildings) applyMapBuildings(gen);   // map-editorの差分（削除/移動/追加）
   cityInfo = { count: gen.instances.length, zones: gen.zones };
   console.log('city buildings', gen.instances.length, gen.zones);
 
   // 進入マーカー（entry-editor 製）: モデル相対パス -> [{kind:'door'|'window'|'light'|'glow', ...}]
-  await loadBldEntries();
+  await profPhase('建物:進入マーカー', () => loadBldEntries())();
 
   // 使用モデルの GLB を「1マージ済みジオメトリ＋共有マテリアル」に（InstancedMesh 用）
   const used = new Set(gen.instances.map((i) => i.kit + '|' + i.model));
   const templates = new Map();
   const relByKey = new Map();
   const loader = new GLTFLoader();
-  await Promise.all([...used].map(async (key) => {
+  await profPhase('建物:GLB読込', () => Promise.all([...used].map(async (key) => {
     const [kit, model] = key.split('|');
     const relPath = BLD_KIT_DIR[kit] + model + '.glb';
     relByKey.set(key, relPath);
@@ -5608,7 +5646,7 @@ async function buildKenneyCity() {
       const baked = bakeModel(gltf.scene);
       if (baked) templates.set(key, baked);
     } catch (e) { console.warn('building load失敗', key, e); }
-  }));
+  })))();
 
   // モデル単位のグローバル InstancedMesh に集約（チャンク分割は InstancedMesh 個数=GPUバッファ/バインドグループ生成が
   // 数千個に膨れ、初回描画で20秒級のフリーズになる。モデル単位なら 40 個だけ＝生成が一瞬。低ポリ×インスタンスで常時描画でも軽い）
@@ -5625,6 +5663,7 @@ async function buildKenneyCity() {
   const kitMat = {};   // kit -> 共有マテリアル（同一colormap＝パイプライン1本）
   const farMat = {};   // kit -> 遠景ボックス用フラット材質（LOD低段）
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _e = new THREE.Euler();
+  await profPhase('建物:インスタンス集約', () => {
   for (const [k, insts] of byModel) {
     const tpl = templates.get(k);
     const kit = k.split('|')[0];
@@ -5657,13 +5696,18 @@ async function buildKenneyCity() {
     cityRoot.add(near); cityRoot.add(far);
     bldModels.push(md);
   }
+  })();
   partitionBuildings();   // 初期の近/遠振り分け（compile で両パイプラインを事前生成させる）
-  try { buildNeon(); } catch (e) { console.warn('neon生成失敗', e); }   // 屋上ランプ（夜用）
-  try { buildWindowGlows(); } catch (e) { console.warn('窓発光生成失敗', e); }   // 窓の光漏れ（夜用）
-  prewarmCarveMats(Object.values(kitMat));   // カーブ（欠損）材質のパイプラインを事前コンパイル（初弾のヒッチ軽減）
+  await profPhase('建物:ネオン/窓発光', () => {
+    try { buildNeon(); } catch (e) { console.warn('neon生成失敗', e); }   // 屋上ランプ（夜用）
+    try { buildWindowGlows(); } catch (e) { console.warn('窓発光生成失敗', e); }   // 窓の光漏れ（夜用）
+  })();
+  await profPhase('建物:カーブ材質ウォーム', () => prewarmCarveMats(Object.values(kitMat)))();   // カーブ（欠損）材質のパイプラインを事前コンパイル（初弾のヒッチ軽減）
   // WebGPUパイプラインを事前コンパイル（初回描画のハングをローディング中へ前倒し）
   loadProg(56, 'シェーダを最適化中…');
-  try { setStatus('都市を最適化中…'); if (renderer.compileAsync) await renderer.compileAsync(scene, camera); } catch (e) { console.warn('compileAsync', e); }
+  await profPhase('建物:compileAsync', async () => {
+    try { setStatus('都市を最適化中…'); if (renderer.compileAsync) await renderer.compileAsync(scene, camera); } catch (e) { console.warn('compileAsync', e); }
+  })();
   console.log('city models', bldModels.length, 'buildings', gen.instances.length, 'near/far', _lodNearCount, _lodFarCount);
 }
 
@@ -7738,7 +7782,10 @@ function updateHpBar(m) {
   bar.fill.material.color.set(frac > 0.5 ? 0x35e06a : frac > 0.25 ? 0xffc23a : 0xff4436);
 }
 
-async function spawnKen(opts = {}) {
+function spawnKen(opts = {}) {   // 計測用に一段かませる（?prof=1 のときだけ。ドール/住民の実体化はOP中に走るため）
+  return profPhase('NPC:実体化', () => spawnKenImpl(opts))();
+}
+async function spawnKenImpl(opts = {}) {
   if (!kenAssets.ready) return false;
   const loader = new GLTFLoader();
   loader.register((p) => new VRMLoaderPlugin(p, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(p, { materialType: MToonNodeMaterial }) }));
@@ -10262,7 +10309,9 @@ function updateSpider(dt) {
 }
 
 function tick() {
-  const dt = Math.min(_clock.getDelta(), 1 / 30);
+  const dtRaw = _clock.getDelta();
+  if (PROF) profFrame(dtRaw * 1000);
+  const dt = Math.min(dtRaw, 1 / 30);
   if (SHOW_FPS) updateFpsMeter();
   updateFlight(dt);
   updatePlayerDeath(dt);
