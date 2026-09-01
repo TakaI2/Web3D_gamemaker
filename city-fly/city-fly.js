@@ -9043,20 +9043,22 @@ function loadImageEl(url) {
   });
 }
 // 高さ順のシェルフパッキング。余白(SIGN_GUTTER)は遠景のミップで隣のセルが滲むのを防ぐため
-function packSigns(imgs, size) {
+function packSigns(imgs, W, H) {
   const rects = new Map();
   let x = SIGN_GUTTER, y = SIGN_GUTTER, shelfH = 0;
   for (const it of imgs) {
     const w = it.img.width, h = it.img.height;
-    if (w + SIGN_GUTTER * 2 > size) return null;
-    if (x + w + SIGN_GUTTER > size) { x = SIGN_GUTTER; y += shelfH + SIGN_GUTTER; shelfH = 0; }
-    if (y + h + SIGN_GUTTER > size) return null;   // 入りきらない＝アトラスを大きくして再挑戦
+    if (w + SIGN_GUTTER * 2 > W) return null;
+    if (x + w + SIGN_GUTTER > W) { x = SIGN_GUTTER; y += shelfH + SIGN_GUTTER; shelfH = 0; }
+    if (y + h + SIGN_GUTTER > H) return null;   // 入りきらない＝次に大きい候補で再挑戦
     rects.set(it.key, { x, y, w, h });
     x += w + SIGN_GUTTER;
     if (h > shelfH) shelfH = h;
   }
   return rects;
 }
+// 面積の小さい順の候補。正方形だけだと一段大きくした瞬間に容量が4倍になるので、横長も挟む
+const SIGN_ATLAS_SIZES = [[512, 512], [1024, 512], [1024, 1024], [2048, 1024], [2048, 2048], [4096, 2048], [4096, 4096], [8192, 4096], [8192, 8192]];
 async function buildSigns() {
   // 1) 看板マーカーを持つ建物 × その個体 を列挙
   const items = [];
@@ -9082,10 +9084,14 @@ async function buildSigns() {
   if (!imgs.length) { console.log('signs: 対象画像なし（advertise/ が空）'); return; }
   imgs.sort((a, b) => b.img.height - a.img.height || a.key.localeCompare(b.key));
   // 3) アトラスへ焼く（入るまでサイズを倍にする。上限を超えたら諦めて警告）
-  let size = 512, rects = null;
-  while (size <= SIGN_ATLAS_MAX && !(rects = packSigns(imgs, size))) size *= 2;
+  let atW = 0, atH = 0, rects = null;
+  for (const [w, h] of SIGN_ATLAS_SIZES) {
+    if (w > SIGN_ATLAS_MAX || h > SIGN_ATLAS_MAX) break;
+    rects = packSigns(imgs, w, h);
+    if (rects) { atW = w; atH = h; break; }
+  }
   if (!rects) { console.warn('看板アトラスに収まりません（' + imgs.length + '枚）。画像を減らすか解像度を下げてください'); return; }
-  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  const cv = document.createElement('canvas'); cv.width = atW; cv.height = atH;
   const g2 = cv.getContext('2d');
   for (const it of imgs) { const r = rects.get(it.key); g2.drawImage(it.img, r.x, r.y, r.w, r.h); }
   signAtlasTex = new THREE.CanvasTexture(cv);
@@ -9106,10 +9112,10 @@ async function buildSigns() {
     // 個体ごとの振り分け: 座標ハッシュ＝同じ場所の建物は毎回同じ看板（窓の点灯と同じ流儀）
     const h = ((Math.round(rec.x) * 73856093) ^ (Math.round(rec.z) * 19349663) ^ (si * 83492791)) >>> 0;
     const r = rects.get(cand[h % cand.length]);
-    rectArr[n * 4] = r.x / size;
-    rectArr[n * 4 + 1] = 1 - (r.y + r.h) / size;   // canvasはY下向き / UVはY上向き
-    rectArr[n * 4 + 2] = r.w / size;
-    rectArr[n * 4 + 3] = r.h / size;
+    rectArr[n * 4] = r.x / atW;
+    rectArr[n * 4 + 1] = 1 - (r.y + r.h) / atH;   // canvasはY下向き / UVはY上向き
+    rectArr[n * 4 + 2] = r.w / atW;
+    rectArr[n * 4 + 3] = r.h / atH;
     litArr[n] = sg.emissive ? 1 : 0;
     const rot = sg.rot || [0, sg.ry || 0, 0];
     _pp.fromArray(sg.pos);
@@ -9137,7 +9143,9 @@ async function buildSigns() {
   mesh.frustumCulled = false;   // 街全体に散るので個別カリングは効かない（窓発光と同じ）
   addStage(mesh, true);
   signMesh = mesh;
-  console.log('signs:', n, '/ atlas', size + 'px', imgs.length + '枚');
+  const px = imgs.reduce((a, it) => a + it.img.width * it.img.height, 0);
+  console.log('signs:', n, '/ atlas', atW + 'x' + atH,
+    '(' + Math.round(atW * atH * 4 / 1048576) + 'MB, 使用率' + Math.round(px / (atW * atH) * 100) + '%)', imgs.length + '枚');
 }
 
 // 被弾した建物の看板を落とす。建物は初弾で単体メッシュへ置き換わり傾き始めるが、
