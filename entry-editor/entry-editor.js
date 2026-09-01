@@ -43,13 +43,20 @@ async function loadModel(relPath) {
   camera.position.set(c.x + r * 1.6, c.y + r * 1.2, c.z + r * 1.6);
   orbit.update();
   for (const m of (entries[relPath] || [])) addMarkerMesh(m);
-  if ($('sign-set')) { $('sign-set').value = defaultSet(); updateSignFiles(); }   // 看板セットの既定＝このモデル名
+  if ($('sign-set')) { $('sign-set').value = nextSetName(); updateSignFiles(); }   // 次に置く看板の既定セット名
   setStatus(`${relPath}（マーカー ${(entries[relPath] || []).length}個）`);
 }
 
-function defaultSet() {   // 既定のセット名＝モデルのファイル名（例 building-a）
+function modelBase() {   // モデルのファイル名（例 building-a）
   return currentPath ? currentPath.split('/').pop().replace(/\.glb$/i, '') : '';
 }
+function nextSetName() {   // 次に置く看板の既定セット名＝<モデル名>-<通し番号>（例 building-f-2）
+  const base = modelBase();
+  if (!base) return '';
+  const n = (entries[currentPath] || []).filter((e) => e.kind === 'sign').length + 1;
+  return base + '-' + n;
+}
+const defaultSet = () => nextSetName();
 function signTexture(set) {   // プレビューはセットの1枚目。ゲームでは個体ごとにこの中から振り分けられる
   const files = signManifest[set] || [];
   if (!files.length) return null;
@@ -200,7 +207,7 @@ function onClick(e) {
     if (n.lengthSq() < 1e-6) n.set(0, 0, 1); else n.normalize();
     def.rot = [0, r3(Math.atan2(n.x, n.z)), 0];
     def.size = [Number($('sign-w').value) || 0.6, Number($('sign-h').value) || 0.25];
-    def.set = ($('sign-set').value || '').trim() || defaultSet();
+    def.set = $('sign-auto').checked ? nextSetName() : (($('sign-set').value || '').trim() || nextSetName());
     def.pos = [r3(hit.point.x + n.x * 0.012), r3(hit.point.y), r3(hit.point.z + n.z * 0.012)];
   }
   if (kind === 'glow') {
@@ -215,6 +222,10 @@ function onClick(e) {
   (entries[currentPath] = entries[currentPath] || []).push(def);
   selectMarker(addMarkerMesh(def));
   setStatus(`${KIND_LABEL[kind] || kind} を追加（計 ${entries[currentPath].length}個）`);
+  // 看板は置いた時点で白紙テンプレを作る（そのセットにまだ画像が無い場合だけ。既にあれば流用する）
+  if (kind === 'sign' && !(signManifest[def.set] || []).length) {
+    makeTemplate({ set: def.set, w: def.size[0], h: def.size[1] }).catch((e) => setStatus('テンプレ自動作成に失敗: ' + e.message));
+  }
 }
 
 function deleteSelected() {
@@ -229,11 +240,11 @@ function deleteSelected() {
   setStatus('マーカーを削除しました');
 }
 
-async function makeTemplate() {   // 矩形の縦横比に合わせた白紙PNGを advertise/<セット名>/uvN.png として作る
-  const set = ($('sign-set').value || '').trim() || defaultSet();
+async function makeTemplate(opt = {}) {   // 矩形の縦横比に合わせた白紙PNGを advertise/<セット名>/uvN.png として作る
+  const set = opt.set || ($('sign-set').value || '').trim() || defaultSet();
   if (!set) { setStatus('セット名を入力してください'); return; }
-  const w = Math.max(0.05, Number($('sign-w').value) || 0.6);
-  const h = Math.max(0.05, Number($('sign-h').value) || 0.25);
+  const w = Math.max(0.05, Number(opt.w ?? $('sign-w').value) || 0.6);
+  const h = Math.max(0.05, Number(opt.h ?? $('sign-h').value) || 0.25);
   const long = Number($('sign-res').value) || 512;
   const q4 = (v) => Math.max(16, Math.round(v / 4) * 4);   // 4の倍数に丸める
   const px = w >= h ? long : q4(long * w / h);
