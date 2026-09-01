@@ -430,6 +430,10 @@ let mapRails = [];       // .map.json の鉄道 [{points:[[x,z,y]..], gauge, sta
 let mapPort = null;      // .map.json の埠頭 {rect:[x0,z0,x1,z1], h, containers:[{x0,x1,z}], ship:{x,z,len}}
 let mapRotaries = [];    // .map.json の駅前ロータリー [{x,z,r}]（環道はroadsに焼き込み済み。ここでは中央島の装飾と信号抑制）
 let mapBldParams = null; // .map.json buildings.params（自動配置のオプション上書き。例: spacing）
+// 建物の配置シード。**必ず .map.json の buildings.seed を使う**。ここを決め打ちにすると、
+// 別シードで作った町では生成結果がマップ側と食い違い、removed（川/橋/線路の除外）が
+// 1件も一致しなくなる＝橋や線路の上に建物が残る（実際にアルデンでそうなった）
+let mapBldSeed = 20260706;
 let mapBuildings = null; // .map.json の建物差分 {removed[], moved{}, added[]}
 let mapWater = [];       // .map.json の水面矩形 {x,z,w,d,level}（海）
 let mapRivers = [];      // .map.json の川 [{points:[[x,z,w,wl]...]}]（経路リボン＝下流へ傾斜する水面）
@@ -547,6 +551,7 @@ async function buildMapGround() {
   mapPort = j.port || null;
   mapRotaries = Array.isArray(j.rotaries) ? j.rotaries : [];
   mapBldParams = (j.buildings && j.buildings.params) || null;
+  mapBldSeed = Number.isFinite(j.buildings?.seed) ? j.buildings.seed : 20260706;   // 既定は旧マップ（floz/mytown）の値
   mapForest = (j.forest && j.forest.data) ? { cell: j.forest.cell || 16, res: j.forest.res, yOff: j.forest.yOff ?? 0, model: j.forest.model || null, treeH: j.forest.treeH || 7, data: unb64(j.forest.data) } : null;
   mapParks = Array.isArray(j.parks) ? j.parks.filter((pk) => pk.points && pk.points.length >= 3) : [];
   mapParkCfg = j.parkCfg || {};
@@ -5839,7 +5844,7 @@ async function buildKenneyCity() {
   if (!activeEdges.length) { console.warn('city: no road edges'); return; }
   // 活性エッジ(world XZ＋DEM Y)→ジェネレータ
   const edges = activeEdges.map((e) => [e.a.x, e.a.y, e.a.z, e.b.x, e.b.y, e.b.z]);
-  const gen = await profPhase('建物:配置生成', () => generateBuildings(edges, { seed: 20260706, ...(mapBldParams || {}) }))();
+  const gen = await profPhase('建物:配置生成', () => generateBuildings(edges, { seed: mapBldSeed, ...(mapBldParams || {}) }))();
   if (mapBuildings) applyMapBuildings(gen);   // map-editorの差分（削除/移動/追加）
   cityInfo = { count: gen.instances.length, zones: gen.zones };
   console.log('city buildings', gen.instances.length, gen.zones);
