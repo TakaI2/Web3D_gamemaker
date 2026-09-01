@@ -3292,7 +3292,25 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get buildProf() { return buildProf; }, get profTimeline() { return profTimeline; }, get episode() { return episode; }, testFlowEnd: (node) => runFlowEnd(node),   // エピソード確認・EP遷移のテスト用
+window.__fly = { get buildProf() { return buildProf; },
+  lookFrom: (x, y, z, pitch = -0.9, yaw = 0) => {   // 調査用: 指定座標へワープして視点角も指定する
+    player.pos.set(x, y, z); player.vel.set(0, 0, 0);
+    player.yaw = yaw; camYaw = yaw; camPitch = pitch;
+    player.vrm.scene.position.copy(player.pos);
+    player.vrm.scene.rotation.set(0, player.yaw + player.faceOffset, 0);
+    player.vrm.scene.updateMatrixWorld(true);
+    buildPlayerCloth();   // ワープ後は布を作り直す（伸びた三角形で画面が埋まるのを防ぐ）
+  },
+  get roadInfo() { return { edges: activeEdges.length, nodes: roadNodes.size }; },
+  probeRoad: (x, z) => {   // 調査用: 真上から下向きに撃って、道路群と地形の何が当たるかを見る
+    const rc = new THREE.Raycaster(new THREE.Vector3(x, 400, z), new THREE.Vector3(0, -1, 0), 0, 2000);
+    const hitsRoad = roadGroup ? rc.intersectObject(roadGroup, true) : [];
+    const hitsGround = rc.intersectObject(groundGroup, true);
+    const f = (h) => h.slice(0, 4).map((o) => ({ y: +o.point.y.toFixed(2), type: o.object.type, geo: o.object.geometry?.type, n: o.object.geometry?.attributes?.position?.count }));
+    return { road: f(hitsRoad), ground: f(hitsGround), roadTopAt: roadTopAt(x, z), groundYAt: +groundYAt(x, z, 400).toFixed(2), terrain: +(mapTerrain ? mapTerrain.heightAt(x, z) : NaN).toFixed(2) };
+  },
+  roadEdgesNear: (x, z, r = 200) => activeEdges.filter((e) => Math.hypot(e.a.x - x, e.a.z - z) < r)
+    .map((e) => ({ ax: Math.round(e.a.x), az: Math.round(e.a.z), ay: +e.a.y.toFixed(2), bx: Math.round(e.b.x), bz: Math.round(e.b.z), by: +e.b.y.toFixed(2), kind: e.kind, len: +e.len.toFixed(1) })), get profTimeline() { return profTimeline; }, get episode() { return episode; }, testFlowEnd: (node) => runFlowEnd(node),   // エピソード確認・EP遷移のテスト用
   get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial, get kenAssets() { return kenAssets; }, softRestart,
   hitTest: (car, ox, oy, oz, dx, dy, dz, maxT = 500) => rayHitObj(new THREE.Vector3(ox, oy, oz), new THREE.Vector3(dx, dy, dz).normalize(), car, maxT),
   testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
@@ -4582,11 +4600,12 @@ async function buildRoadMeshes() {
     const runLen = chainLen.get(i) || e.len;
     ((roadBar && e.kind !== 'alley' && runLen >= BARRIER_MIN_EDGE * 1.5) ? barIdx : stdIdx).push(i);   // 長い街路にガードレール
   }
-  const fillRoad = (tile, idxList, lateral = 0) => {
+  const fillRoad = (tile, idxList, lateral = 0, { lift = 0, carve = true } = {}) => {
     if (!idxList.length) return;
     // 道路を破壊可能に: カーブ材質（ワールド座標球）＝着弾点に穴＋焦げ縁。夜は暗くなるよう昼夜係数を掛ける
+    // （ガードレールのような重ね物は carve:false ＝ 穴あけ対象を路面だけに保つ）
     let mat = tile.mat;
-    try {
+    if (carve) try {
       const c = makeCarveMaterial(tile.mat, 0, 1);
       if (!roadLightU) roadLightU = uniform(1);
       c.mat.colorNode = c.mat.colorNode.mul(roadLightU);
@@ -4608,7 +4627,7 @@ async function buildRoadMeshes() {
       const pb = Math.min(nodePull.get(e.bId) ?? PULL, len * 0.3);
       const segLen = Math.max(0.4, len - pa - pb);
       _p.copy(e.a).addScaledVector(_dir, pa + segLen / 2);
-      _p.y += ROAD_LIFT;
+      _p.y += ROAD_LIFT + lift;
       if (lateral) { _lat.set(-_dir.z, 0, _dir.x).normalize(); _p.addScaledVector(_lat, lateral); }   // 並列車線の横オフセット
       _s.set(ws, 1, segLen / tile.l);   // 厚みは等倍
       _m.compose(_p, _q, _s);
@@ -4618,7 +4637,11 @@ async function buildRoadMeshes() {
   };
   const RB = roadBar ? normTile(roadBar, true) : null;
   fillRoad(R, stdIdx);
-  if (RB) fillRoad(RB, barIdx);
+  // road-straight-barrier は「ガードレール単体」のモデルで路面が入っていない（実測: 真下レイが素通り＝
+  // 面が無い。road-straight は当たる）。単体で敷くと縁石だけがあって道路が無い見た目になるので、
+  // 必ず路面(R)を敷いた上へ重ねる
+  if (RB) { fillRoad(R, barIdx); fillRoad(RB, barIdx, 0, { lift: 0.006, carve: false }); }
+  else fillRoad(R, barIdx);
   if (signHw && aveIdx.length) {   // 幹線の案内標識: sign-highway-detailed をところどころ（約240m毎・左右交互）
     const sgeo = signHw.geometry.clone();
     sgeo.computeBoundingBox();
@@ -4661,8 +4684,12 @@ async function buildRoadMeshes() {
     }
   }
   if (aveIdx.length) {   // 幹線: 上下線を左右にオフセットして並列化（barrier付きタイル=mapplan準拠）＋中央帯
-    fillRoad(RB || R, aveIdx, DUAL_OFF);
-    fillRoad(RB || R, aveIdx, -DUAL_OFF);
+    fillRoad(R, aveIdx, DUAL_OFF);
+    fillRoad(R, aveIdx, -DUAL_OFF);
+    if (RB) {   // 幹線もガードレールは路面の上へ重ねる（RB単体では路面が無い）
+      fillRoad(RB, aveIdx, DUAL_OFF, { lift: 0.006, carve: false });
+      fillRoad(RB, aveIdx, -DUAL_OFF, { lift: 0.006, carve: false });
+    }
     const medIM = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshStandardMaterial({ color: 0x39404a, roughness: 0.95 }), aveIdx.length);
     medIM.frustumCulled = false;
