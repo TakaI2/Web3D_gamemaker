@@ -222,10 +222,6 @@ function onClick(e) {
   (entries[currentPath] = entries[currentPath] || []).push(def);
   selectMarker(addMarkerMesh(def));
   setStatus(`${KIND_LABEL[kind] || kind} を追加（計 ${entries[currentPath].length}個）`);
-  // 看板は置いた時点で白紙テンプレを作る（そのセットにまだ画像が無い場合だけ。既にあれば流用する）
-  if (kind === 'sign' && !(signManifest[def.set] || []).length) {
-    makeTemplate({ set: def.set, w: def.size[0], h: def.size[1] }).catch((e) => setStatus('テンプレ自動作成に失敗: ' + e.message));
-  }
 }
 
 function deleteSelected() {
@@ -240,7 +236,7 @@ function deleteSelected() {
   setStatus('マーカーを削除しました');
 }
 
-async function makeTemplate(opt = {}) {   // 矩形の縦横比に合わせた白紙PNGを advertise/<セット名>/uvN.png として作る
+async function makeTemplate(opt = {}) {   // opt.quiet=true でまとめ作成用（個別の表示・再読込をしない）   // 矩形の縦横比に合わせた白紙PNGを advertise/<セット名>/uvN.png として作る
   const set = opt.set || ($('sign-set').value || '').trim() || defaultSet();
   if (!set) { setStatus('セット名を入力してください'); return; }
   const w = Math.max(0.05, Number(opt.w ?? $('sign-w').value) || 0.6);
@@ -259,17 +255,47 @@ async function makeTemplate(opt = {}) {   // 矩形の縦横比に合わせた�
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dir: 'advertise', filename: set + '/' + name, content: cv.toDataURL('image/png').split(',')[1], encoding: 'base64' }),
     });
-    if (!r.ok) { setStatus('テンプレ作成失敗: ' + r.status); return; }
+    if (!r.ok) { if (!opt.quiet) setStatus('テンプレ作成失敗: ' + r.status); return false; }
+    if (opt.quiet) return true;   // まとめ作成側が最後に一度だけ読み直す
     await refreshManifest();
     reloadTextures();
     setStatus('作成: public/advertise/' + set + '/' + name + '（' + px + 'x' + py + '）— ペイントソフトで編集して「画像を再読込」');
-  } catch (e) { setStatus('テンプレ作成失敗: ' + e.message); }
+    return true;
+  } catch (e) { if (!opt.quiet) setStatus('テンプレ作成失敗: ' + e.message); return false; }
+}
+
+// 保存時にまとめてテンプレを作る。置いた瞬間ではなくここで作ることで、
+// 試し置き→削除を繰り返しても使われないPNGが残らない。
+async function makeMissingTemplates() {
+  await refreshManifest();
+  const done = new Set();
+  let made = 0;
+  for (const arr of Object.values(entries)) {
+    for (const e of (arr || [])) {
+      if (e.kind !== 'sign' || !e.set) continue;
+      if (done.has(e.set) || (signManifest[e.set] || []).length) continue;   // 既に画像があるセットは触らない
+      done.add(e.set);
+      if (await makeTemplate({ set: e.set, w: e.size?.[0], h: e.size?.[1], quiet: true })) made++;
+    }
+  }
+  if (made) { await refreshManifest(); reloadTextures(); }
+  // 参照されなくなったフォルダは「消さずに知らせる」だけ（塗った画像を勝手に消さないため）
+  const used = new Set();
+  for (const arr of Object.values(entries)) for (const e of (arr || [])) if (e.kind === 'sign' && e.set) used.add(e.set);
+  const orphans = Object.keys(signManifest).filter((k) => !used.has(k));
+  if (orphans.length) console.log('看板マーカーから参照されていないフォルダ（不要なら手動で削除）:', orphans.join(', '));
+  return { made, orphans };
 }
 
 async function saveEntries() {
   try {
     const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'models', filename: ENTRIES_FILE, content: JSON.stringify(entries, null, 1) }) });
-    setStatus(r.ok ? `保存しました: models/${ENTRIES_FILE}` : '保存失敗: ' + r.status);
+    if (!r.ok) { setStatus('保存失敗: ' + r.status); return; }
+    setStatus(`保存しました: models/${ENTRIES_FILE} ／ 看板テンプレを確認中…`);
+    const { made, orphans } = await makeMissingTemplates();
+    setStatus(`保存しました: models/${ENTRIES_FILE}`
+      + (made ? ` ／ テンプレPNGを${made}枚作成（advertise/）` : ' ／ テンプレは全て作成済み')
+      + (orphans.length ? ` ／ 未参照フォルダ${orphans.length}件（コンソール参照）` : ''));
   } catch (e) { setStatus('保存失敗: ' + e.message); }
 }
 
