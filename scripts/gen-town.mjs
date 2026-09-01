@@ -350,6 +350,45 @@ const stations = [];
   }
 }
 const rails = [{ points: railSamples.map((s) => [Math.round(s.x), Math.round(s.z), +s.y.toFixed(2)]), gauge: 5.2, stations }];
+// 線路敷の判定（道路・建物の両方で使う）。線路→道路→建物の順に作り、後段が前段を避ける。
+const RAIL_HALF = 9;          // 線路敷の半幅(m)
+const CROSS_SPACING = 340;    // 踏切の間隔(m)
+const RAILCELL = 64, RAILHASH = new Map();
+for (const s of railSamples) {
+  const k = Math.floor(s.x / RAILCELL) + '_' + Math.floor(s.z / RAILCELL);
+  if (!RAILHASH.has(k)) RAILHASH.set(k, []);
+  RAILHASH.get(k).push(s);
+}
+function railAt(x, z) {   // 最寄りの線路サンプルとの距離
+  let best = null, bd = 1e9;
+  const cx = Math.floor(x / RAILCELL), cz = Math.floor(z / RAILCELL);
+  for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+    const a = RAILHASH.get((cx + i) + '_' + (cz + j));
+    if (!a) continue;
+    for (const s of a) { const d = Math.hypot(x - s.x, z - s.z); if (d < bd) { bd = d; best = s; } }
+  }
+  return { d: bd, s: best };
+}
+const crossings = [];   // 踏切（一定間隔。ここだけ道路が線路を跨げる）
+{
+  let acc = CROSS_SPACING;
+  for (let i = 1; i < railSamples.length; i++) {
+    const a = railSamples[i - 1], b = railSamples[i];
+    acc += Math.hypot(b.x - a.x, b.z - a.z);
+    if (acc < CROSS_SPACING) continue;
+    if (b.y - hAt(b.x, b.z) > 5) continue;                                  // 高架区間に踏切は作らない
+    if (stations.some((st) => Math.hypot(b.x - st.x, b.z - st.z) < 90)) continue;   // 駅構内は避ける
+    acc = 0;
+    crossings.push({ x: b.x, z: b.z });
+  }
+}
+function railBlocks(x, z) {   // ここに道路を敷けないか（線路敷。高架の下と踏切は通せる）
+  const r = railAt(x, z);
+  if (!r.s || r.d > RAIL_HALF) return false;
+  if (r.s.y - hAt(x, z) > 5) return false;                                  // 高架の下はくぐれる
+  for (const c of crossings) if (Math.hypot(x - c.x, z - c.z) < 26) return false;   // 踏切
+  return true;
+}
 
 // ═══════════ 4) 道路網 ═══════════
 const RD = CFG.roads;
@@ -435,7 +474,7 @@ for (const sg of segs) {
     const t = i / n;
     const x = sg.x1 + (sg.x2 - sg.x1) * t, z = sg.z1 + (sg.z2 - sg.z1) * t;
     const rv = riverAt(x, z);
-    cls.push(rv.d <= 6 ? 1 : (cityOk(x, z) || inWharf(x, z)) ? 0 : 2);
+    cls.push(rv.d <= 6 ? 1 : railBlocks(x, z) ? 2 : (cityOk(x, z) || inWharf(x, z)) ? 0 : 2);
   }
   if (sg.kind === 'avenue') {
     let i = 0;
@@ -665,16 +704,20 @@ const parkRects = [];
   for (const p of parks) { delete p._cx; delete p._cz; }
 }
 const removed = [];
+// 建物のフットプリント（ランタイム city-fly.js の TARGET_FOOT と同じ値）。
+// 中心からの距離だけで判定すると、一辺26mの塔が線路や橋の上に載る（実際に載っていた）
+const TIER_FOOT = { tower: 26, mid: 15, house: 10 };
 for (const it of gen.instances) {
+  const foot = (TIER_FOOT[it.tier] || 12) * 0.55;   // 建物の半径ぶん判定を広げる
   const rv = riverAt(it.x, it.z);
-  let bad = rv.d < 6 || hAt(it.x, it.z) < 1.6 || slopeAt(it.x, it.z) > 0.5 || it.z > coastZ(it.x) - 90;
+  let bad = rv.d < foot || hAt(it.x, it.z) < 1.6 || slopeAt(it.x, it.z) > 0.5 || it.z > coastZ(it.x) - 90;
   if (!bad && WHARF && it.z > WHARF.z0 - 50 && it.x > WHARF.x0 - 20 && it.x < WHARF.x1 + 20) bad = true;
-  if (!bad) for (const br of bridges) {
+  if (!bad) for (const br of bridges) {   // 橋桁の上＋取り付け道路（坂）の範囲
     const alo = (it.x - br.x) * br.dx + (it.z - br.z) * br.dz;
     const per = -(it.x - br.x) * br.dz + (it.z - br.z) * br.dx;
-    if (Math.abs(alo) < br.len / 2 + 12 && Math.abs(per) < 16) { bad = true; break; }
+    if (Math.abs(alo) < br.len / 2 + 30 + foot && Math.abs(per) < br.w / 2 + 6 + foot) { bad = true; break; }
   }
-  if (!bad) for (const s of railSamples) if (Math.hypot(it.x - s.x, it.z - s.z) < 14) { bad = true; break; }
+  if (!bad && railAt(it.x, it.z).d < RAIL_HALF + foot) bad = true;   // 線路敷（高架でも真下は空ける）
   if (!bad) for (const st of stations) if (Math.hypot(it.x - st.x, it.z - st.z) < 44) { bad = true; break; }
   if (!bad) for (const r of parkRects) if (it.x > r[0] && it.x < r[1] && it.z > r[2] && it.z < r[3]) { bad = true; break; }
   if (!bad) for (const ro of rotaries) if (Math.hypot(it.x - ro.x, it.z - ro.z) < ro.r + 14) { bad = true; break; }
@@ -729,3 +772,18 @@ console.log('rails:', railSamples.length, 'サンプル / 駅', stations.length,
 console.log('bridges:', bridges.length, bridges.map((b) => b.kind + '@' + b.x + ',' + b.z).join(' '));
 console.log('buildings:', gen.instances.length, 'auto (removed', removed.length, ') + added', added.length, '/ zones', JSON.stringify(gen.zones));
 console.log('rotaries:', rotaries.length, '/ parks:', parks.length, '/ forest cells:', fCells, '/ wharf:', WHARF ? `${WHARF.x0}..${WHARF.x1}` : 'なし');
+{   // 除外条件の自己検証（0でなければ TIER_FOOT の見積りか判定式のバグ）
+  const rmSet = new Set(removed);
+  let onRail = 0, onBridge = 0;
+  for (const it of gen.instances) {
+    if (rmSet.has(instanceId(it))) continue;
+    const foot = (TIER_FOOT[it.tier] || 12) * 0.5;
+    if (railAt(it.x, it.z).d < 6 + foot) { onRail++; continue; }
+    for (const br of bridges) {
+      const alo = (it.x - br.x) * br.dx + (it.z - br.z) * br.dz;
+      const per = -(it.x - br.x) * br.dz + (it.z - br.z) * br.dx;
+      if (Math.abs(alo) < br.len / 2 + foot && Math.abs(per) < br.w / 2 + foot) { onBridge++; break; }
+    }
+  }
+  console.log('検証: 線路に載った建物', onRail, '/ 橋に載った建物', onBridge, '/ 踏切', crossings.length);
+}

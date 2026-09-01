@@ -556,16 +556,20 @@ const parkRects = [];   // 建物除外用の [x0,x1,z0,z1]
   for (const p of parks) { delete p._cx; delete p._cz; }
 }
 const removed = [];
+// 建物のフットプリント（ランタイム city-fly.js の TARGET_FOOT と同じ値）。中心からの距離だけで
+// 判定すると、一辺26mの塔が中心14mでも線路や橋に載る。半径ぶん判定を広げる
+const TIER_FOOT = { tower: 26, mid: 15, house: 10 };
 for (const it of gen.instances) {
+  const foot = (TIER_FOOT[it.tier] || 12) * 0.55;
   const rv = riverAt(it.x, it.z);
-  let bad = rv.d < 6 || hAt(it.x, it.z) < 1.6 || slopeAt(it.x, it.z) > 0.5 || it.z > coastZ(it.x) - 90;
+  let bad = rv.d < foot || hAt(it.x, it.z) < 1.6 || slopeAt(it.x, it.z) > 0.5 || it.z > coastZ(it.x) - 90;
   if (!bad && it.z > WHARF.z0 - 50 && it.x > WHARF.x0 - 20 && it.x < WHARF.x1 + 20) bad = true;   // 埠頭は工業建物(added)専用
   if (!bad) for (const br of bridges) {
     const alo = (it.x - br.x) * br.dx + (it.z - br.z) * br.dz;
     const per = -(it.x - br.x) * br.dz + (it.z - br.z) * br.dx;
-    if (Math.abs(alo) < br.len / 2 + 12 && Math.abs(per) < 16) { bad = true; break; }
+    if (Math.abs(alo) < br.len / 2 + 30 + foot && Math.abs(per) < br.w / 2 + 6 + foot) { bad = true; break; }
   }
-  if (!bad) for (const s of railSamples) if (Math.hypot(it.x - s.x, it.z - s.z) < 14) { bad = true; break; }   // 線路敷
+  if (!bad) for (const s of railSamples) if (Math.hypot(it.x - s.x, it.z - s.z) < 9 + foot) { bad = true; break; }   // 線路敷
   if (!bad) for (const st2 of stations) if (Math.hypot(it.x - st2.x, it.z - st2.z) < 44) { bad = true; break; } // 駅前広場
   if (!bad) for (const r2 of parkRects) if (it.x > r2[0] && it.x < r2[1] && it.z > r2[2] && it.z < r2[3]) { bad = true; break; }   // 公園内
   if (!bad) for (const ro of rotaries) if (Math.hypot(it.x - ro.x, it.z - ro.z) < ro.r + 14) { bad = true; break; }   // ロータリー
