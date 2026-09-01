@@ -250,6 +250,8 @@ async function init() {
     chain = chain.then(profPhase('森', () => buildForest().catch((e) => console.warn('森生成失敗', e))));   // 空き地の森（建物確定後）
     chain = chain.then(() => loadProg(62, 'エフェクトを準備中…'));
   }
+  // ステージ完成（パイプラインのコンパイルまで含む）。タイトル解禁とプレイヤー移動の解禁条件になる
+  chain = chain.then(() => { stageReady = true; });
   chain = chain.then(profPhase('FX/敵材質ウォーム', async () => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
     try { warmEnemyMats(); } catch (e) { console.warn('敵材質ウォーム失敗:', e); }
     profPhase('FX:着弾', () => loadImpactFx())().catch((e) => console.warn('着弾FX準備失敗:', e));
@@ -387,7 +389,7 @@ function profFrame(dtMs) {   // tick から呼ぶ。工程中のフレーム間�
     profTimeline.push({ t: Math.round(performance.now()), gap: Math.round(dtMs), mode: gameMode,
       phases: [...profActive].map((r) => r.name).join('+') || '-',
       note: n ? n.label : '-', noteAge: n ? Math.round(performance.now() - n.t) : -1,
-      dmgWarm: Math.round((dmgWarmT || 0) * 100) / 100 });   // >0 なら部位溶解のウォーム中（実描画でパイプラインを温めている）
+      dmgWarm: dmgWarmT || 0 });   // >0 なら部位溶解のウォーム中（残りフレーム数）
     if (profTimeline.length > 400) profTimeline.shift();
   }
   for (const r of profActive) {
@@ -2127,10 +2129,12 @@ function setupTitle() {
   document.body.appendChild(titleEl);
   const bs = titleEl.querySelector('#cf-start');
   const iv = setInterval(() => {   // ボタン有効化（チュートリアルの本編はシナリオ素材が揃い次第＝ステージ構築はOP再生の裏で続行）
-    const worldOk = cityRoot && collBoxes.length && player.ready;
-    const castOk = player.ready && guestPreloadDone && ev.talks;
+    const worldOk = stageReady && player.ready;
+    // dmgWarmDone: 部位溶解のパイプラインを焼き終えたか。ここで待たないとOP再生中にコンパイルが走る
+    const castOk = player.ready && guestPreloadDone && ev.talks && dmgWarmDone;
     if (worldOk) loadProg(96, '会話キャストを読込中…');
-    const startOk = TUTORIAL ? castOk : (worldOk && guestPreloadDone);
+    // startWhen='cast' ならステージはOPの裏で構築する（開始は早いがコマ落ちの可能性あり）
+    const startOk = episode.rules.startWhen === 'cast' ? castOk : (castOk && worldOk);
     if (startOk && bs.disabled) { bs.disabled = false; bs.textContent = 'ゲームスタート'; }
     else if (!startOk && (TUTORIAL ? player.ready : worldOk)) bs.textContent = 'キャスト読込中…';
     if (worldOk && guestPreloadDone) { loadProg(100); if (!bs.disabled) clearInterval(iv); }
@@ -2155,15 +2159,23 @@ function startMode(mode) {
     if (mode === 'training') { portraitStage = false; portraitOn = false; clearStageBg(); setGameHudVisible(true); }
   }
   if (titleEl) titleEl.style.display = 'none';
-  profPhase('被弾表現ウォーム', () => warmDamageParts(3))();   // 部位溶解のONパイプラインを実描画で温め直す
-  // （起動時の5秒ウォームはタイトル読込中に空費され、プレイヤーが描かれる前に終わっていた
-  //   →初回の被弾しきい値で650ms級のコンパイルストールが出ていた。ゲーム開始時に再ウォーム）
+  // 部位溶解のウォームはタイトル表示中（プレイヤーが実際に描かれている間）に済ませる方針。
+  // ここへ来た時点で未完なら、タイトルを即スキップされた等なので保険で張り直す
+  // （常に張り直すと OP 再生中にコンパイルが走り、実測で約960msのコマ落ちになっていた）
+  if (!dmgWarmDone) warmDamageParts(8);
   if (mode === 'play') startFlow();   // start→story(OP)→battle の順にフローが進行
 }
-function warmDamageParts(sec = 3) {
-  dmgWarmT = Math.max(dmgWarmT, sec);
+// パイプライン事前コンパイルについての実測メモ（?prof=1 で再現できる）:
+//   compileAsync(サブツリー, camera, scene) に分割しても、コマ落ちは減らない。
+//   「シーンに新しい中身が入った後の最初の1回」が全部を払う作り になっていて、
+//   渡したのが板ポリ1枚(MeshBasicMaterial)でも同じ約3秒がかかる（順序を逆にすると
+//   先頭に来たユニットが払う＝オブジェクト固有のコストではないことを確認済み）。
+//   よって「分割して薄く延ばす」は不可能。ステージのコンパイルはOP再生より前に済ませる。
+function warmDamageParts(frames = 8) {   // frames = 全部位アクティブで描くフレーム数（初回描画でパイプラインが焼かれる）
+  dmgWarmT = Math.max(dmgWarmT, frames);
   for (const dp of dmgParts) { try { if (dp.dis.setActive) dp.dis.setActive(true); } catch { /* noop */ } }
 }
+let dmgWarmDone = false;   // 部位溶解のウォームを最後までやり切ったか（やり切っていればゲーム開始時の再ウォームは不要）
 function showGameOver() {
   if (goEl) return;
   goEl = document.createElement('div');
@@ -2405,6 +2417,7 @@ async function softRestart() {
     flowNode = null; flowBattleDone = false; flowTimer = null; flowFallback = false;
     ev.fired.clear(); ev.flags = {}; ev.spawnAllow = {}; ev.kills.length = 0; ev.pendingOn.clear(); ev.lastPort = null;
     // ステージを捨てて作り直す（VRM/シェーダは保持）
+    stageReady = false;
     disposeStage();
     Object.assign(tut, { ready: false, room: 0, started: false, midFired: {}, goalDone: false, cullRoom: -99,
       rooms: [], doors: [], goal: null, targetsDown: 0, targetsTotal: 0, gateDown: false, rescued: 0, jetBase: 0,
@@ -2412,6 +2425,7 @@ async function softRestart() {
       feedTalk: false, boss: null, safety: null, turrets: null, fortMd: null, hurtCd: 0 });
     tutObjective('');
     await buildTutorialStage();
+    stageReady = true;
     if (kenAssets.ready) resetDolls();   // 既存ドールを再利用（VRM再パースを避ける）
     // プレイヤーを開始位置へ
     if (tutSpawn) { player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]); player.vel.set(0, 0, 0); }
@@ -2889,7 +2903,7 @@ function updateKillUI(dt) {
   killShowT = Math.max(0, killShowT - dt);
   killEl.style.opacity = Math.min(1, killShowT / 0.6).toFixed(2);   // 残り0.6秒でフェードアウト
 }
-let dmgWarmT = 0;   // 起動直後は溶解ON/OFF両方のパイプラインをコンパイルさせる猶予（切替ストール防止）
+let dmgWarmT = 0;   // 残りウォーム「フレーム数」。パイプラインは実描画で焼かれるので秒でなくフレームで数える
 function applyDamageFx() {   // ダメージ割合 → 各部位の溶解進行＋表情
   const dmgPct = (1 - playerHp / PLAYER_HP_MAX) * 100;
   for (const dp of dmgParts) {
@@ -2897,7 +2911,7 @@ function applyDamageFx() {   // ダメージ割合 → 各部位の溶解進行�
     const t0 = e0 > s0 ? Math.max(0, Math.min(1, (dmgPct - s0) / (e0 - s0))) : (dmgPct >= e0 ? 1 : 0);
     const prog = t0 * (dp.maxProg ?? 1);   // 最大溶解%: 損耗MAXでも布を残せる
     dp.dis.setProgress(prog);
-    if (dmgWarmT <= 0 && dp.dis.setActive) dp.dis.setActive(prog > 0);   // 無傷部位は溶解シェーダを停止
+    if (dmgWarmT <= 0 && dp.dis.setActive) dp.dis.setActive(prog > 0);   // ウォーム後は無傷部位の溶解シェーダを停止
   }
   const em = player.vrm?.expressionManager;
   if (em) for (const ec of dmgExpressions) { try { em.setValue(ec.name, dmgExprValueAt(ec.keys, dmgPct)); } catch { /* noop */ } }
@@ -3026,7 +3040,7 @@ function updatePlayerDeath(dt) {
 async function setupDamageFx(bundle, vrm) {   // damage/<npc>.damage.json を読み、部位ごとに溶解を仕込む
   for (const dp of dmgParts) { try { dp.dis.dispose(); } catch { /* noop */ } }
   dmgParts.length = 0;
-  dmgWarmT = 5;   // この間は全部位アクティブで描画→ON状態のパイプラインをコンパイル
+  dmgWarmT = 30;   // 構築中も全部位アクティブで描く。本番の計数は部位が揃ってから張り直す（末尾の warmDamageParts）
   playerHp = PLAYER_HP_MAX;
   updateHpUI();
   let cfg = null;
@@ -3059,6 +3073,8 @@ async function setupDamageFx(bundle, vrm) {   // damage/<npc>.damage.json を読
     } catch (e) { console.warn('損耗エフェクト生成失敗:', pc.id, e); }
   }
   applyDamageFx();
+  // 部位が揃ったここから計数（先に張ると読込中に空費され、プレイヤーが描かれる前に終わってしまう）
+  warmDamageParts(8);
   console.log('damage fx parts:', dmgParts.map((d) => d.id).join(', '));
 }
 function updateDamageFx() { /* space:'geometry' 化で高さ基準の毎フレーム供給は不要になった */ }
@@ -3180,7 +3196,8 @@ async function loadPlayer() {
     camTargetCur.copy(player.pos); camTargetCur.y += cam.height;
     camPosCur.copy(camTargetCur).addScaledVector(_fwd, -cam.dist);
     player.ready = true;
-    profPhase('ダメージFX', () => setupDamageFx(bundle, vrm))().catch((e) => console.warn('damage fx初期化失敗:', e));
+    profPhase('ダメージFX', () => setupDamageFx(bundle, vrm))()
+      .catch((e) => { console.warn('damage fx初期化失敗:', e); dmgWarmDone = true; });   // 失敗してもタイトルを待たせない
     console.log('player ready; states=', Object.keys(player.states).length);
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
@@ -3273,7 +3290,7 @@ function updateFlight(dt) {
   }
   if (player.eating) { player.vel.set(0, 0, 0); return; }   // 捕食中はその場で静止
   if (gameMode === 'op' || gameMode === 'ed') { player.vel.set(0, 0, 0); return; }   // シナリオ中は移動不可
-  if (TUTORIAL && !tut.ready) { player.vel.set(0, 0, 0); return; }   // ステージ構築中（OPを早く飛ばした場合）はその場で待機
+  if (!stageReady) { player.vel.set(0, 0, 0); return; }   // ステージ構築中（OPを早く飛ばした場合）はその場で待機
   camForwardRight();
   player.fwdY = _fwd.y;
   _move.set(0, 0, 0);
@@ -5614,6 +5631,7 @@ function applyMapBuildings(gen) {
 // ── Kenney 都市（実道路網に建物を手続き配置＝巨大ステージの土台）──
 const BLD_KIT_DIR = { city: 'city_GLB format/', suburban: 'kenney_city-kit-suburban_20/Models/GLB format/', industrial: 'Industrial_GLB format/' };
 let cityRoot = null;        // scene 直下の建物ルート（モデル単位の InstancedMesh 群）
+let stageReady = false;     // ステージ構築＋事前コンパイルまで完了したか（エピソード切替でも再利用）
 let cityDamaged = null;     // 破壊で単体化した建物のルート（レイキャスト対象に含める）
 let cityInfo = null;
 // 距離2段LOD: 近=フルモデル / 遠=バウンディングボックスの箱ポリ（頂点数を桁で削減）。定期再振り分け＋ヒステリシス
@@ -10452,7 +10470,7 @@ function tick() {
   }
   updateDamageFx();       // ダメージ損耗（マントの高さ基準追従）
   exhaustT += dt;         // 噴射コーンの明滅時刻
-  if (dmgWarmT > 0) { dmgWarmT -= dt; if (dmgWarmT <= 0) applyDamageFx(); }   // ウォームアップ後、無傷部位の溶解を停止
+  if (dmgWarmT > 0) { dmgWarmT -= 1; if (dmgWarmT <= 0) { dmgWarmDone = true; applyDamageFx(); } }   // 実描画1フレーム＝1消費。0でウォーム完了
   updateDamageVignette(dt);
   updateKillUI(dt);
   evalEvents();

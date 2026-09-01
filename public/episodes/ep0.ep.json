@@ -11,7 +11,10 @@
   "data": {
     "talks": "tutorial_talks.json",
     "events": "tutorial_events.json",
-    "speech": ["dummydoll.speech.json", "pneuma.speech.json"],
+    "speech": [
+      "dummydoll.speech.json",
+      "pneuma.speech.json"
+    ],
     "bgm": "zensen-he-totugekiseyo.ogg"
   }
 }
