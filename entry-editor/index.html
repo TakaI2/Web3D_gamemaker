@@ -34,8 +34,38 @@
         <option value="window">窓 (水色)</option>
         <option value="light">光点 (黄・夜ランプ)</option>
         <option value="glow">窓発光 (面・夜光漏れ)</option>
+        <option value="sign">看板 (面・広告)</option>
       </select>
       <button id="btn-del" class="sub">選択削除</button>
+    </div>
+    <div id="sign-opts" style="display:none;flex-direction:column;gap:6px;">
+      <div class="row">
+        <label style="flex:0 0 auto;align-self:center;color:#9ab;">幅×高</label>
+        <input type="number" id="sign-w" step="0.05" min="0.05" value="0.6" style="width:56px;background:#1a2438;color:#e6ecf5;border:1px solid #2a3756;border-radius:4px;padding:4px;">
+        <input type="number" id="sign-h" step="0.05" min="0.05" value="0.25" style="width:56px;background:#1a2438;color:#e6ecf5;border:1px solid #2a3756;border-radius:4px;padding:4px;">
+      </div>
+      <div class="row">
+        <label style="flex:0 0 auto;align-self:center;color:#9ab;" title="public/advertise/&lt;セット名&gt;/ の画像がランダムに割り当てられる">セット</label>
+        <input type="text" id="sign-set" value="" style="flex:1;min-width:0;background:#1a2438;color:#e6ecf5;border:1px solid #2a3756;border-radius:4px;padding:4px;">
+      </div>
+      <div class="row">
+        <select id="sign-res" title="生成するテンプレートPNGの長辺">
+          <option value="256">256px</option>
+          <option value="512" selected>512px</option>
+          <option value="1024">1024px</option>
+        </select>
+        <button id="btn-tex-new" class="sub" title="この矩形の縦横比に合わせた白紙PNGを advertise/&lt;セット名&gt;/ に作る">テンプレ作成</button>
+      </div>
+      <div class="row">
+        <button id="btn-tex-reload" class="sub" title="ペイントソフトで保存した画像を読み直す">画像を再読込</button>
+      </div>
+      <div id="sign-files" style="color:#8fa; font-size:11px; line-height:1.5;"></div>
+    </div>
+    <div class="row" id="gizmo-row">
+      <label style="flex:0 0 auto;align-self:center;color:#9ab;">ギズモ</label>
+      <button id="btn-gz-move" class="sub">移動</button>
+      <button id="btn-gz-rot" class="sub">回転</button>
+      <button id="btn-gz-off" class="sub">なし</button>
     </div>
     <div class="row" id="light-opts" style="display:none;">
       <label style="flex:0 0 auto;align-self:center;color:#9ab;">色</label>
@@ -56,7 +86,7 @@
     </div>
     <button id="btn-save">全モデル分を保存</button>
   </div>
-  <div id="hint"><b>建物クリック</b>でマーカー設置 / <b>マーカークリック</b>で選択→削除 / <b>窓発光</b>はクリック面の向きに矩形を貼る（幅×高で調整） / ドラッグで視点</div>
+  <div id="hint"><b>建物クリック</b>でマーカー設置 / <b>マーカークリック</b>で選択→削除 / <b>窓発光・看板</b>はクリック面の向きに矩形を貼る（幅×高で調整） / 選択中は<b>ギズモ</b>で移動・回転（G/R/Escで切替） / ドラッグで視点<br><b>看板</b>: セット名を決めて「テンプレ作成」→ public/advertise/&lt;セット名&gt;/uv1.png をペイントソフトで編集→「画像を再読込」</div>
   <script type="module" src="./entry-editor.js"></script>
 </body>
 </html>

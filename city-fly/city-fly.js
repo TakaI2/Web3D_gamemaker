@@ -31,7 +31,7 @@ import { deserializeTerrain, createTerrainMesh, buildRoadGraph, sampleRoadPoints
 import { createNpcSpeech } from '../lib/npc-speech.js';
 import { createSpeechUI } from '../lib/speech-ui.js';
 import { fetchSpeechSet, buildSpeechCharacter } from '../lib/speech-set.js';
-import { uniform, color, float, positionWorld, mx_noise_float, clamp, texture, uv, mix, frontFacing } from 'https://esm.sh/three@0.184.0/tsl';
+import { uniform, color, float, positionWorld, mx_noise_float, clamp, texture, uv, mix, frontFacing, attribute } from 'https://esm.sh/three@0.184.0/tsl';
 
 let renderer, scene, camera, pivot, groundGroup;
 const keysDown = {};
@@ -5702,6 +5702,7 @@ async function buildKenneyCity() {
     try { buildNeon(); } catch (e) { console.warn('neon生成失敗', e); }   // 屋上ランプ（夜用）
     try { buildWindowGlows(); } catch (e) { console.warn('窓発光生成失敗', e); }   // 窓の光漏れ（夜用）
   })();
+  await profPhase('建物:看板', () => buildSigns().catch((e) => console.warn('看板生成失敗', e)))();   // 広告看板（アトラス1枚＝1ドロー）
   await profPhase('建物:カーブ材質ウォーム', () => prewarmCarveMats(Object.values(kitMat)))();   // カーブ（欠損）材質のパイプラインを事前コンパイル（初弾のヒッチ軽減）
   // WebGPUパイプラインを事前コンパイル（初回描画のハングをローディング中へ前倒し）
   loadProg(56, 'シェーダを最適化中…');
@@ -8617,6 +8618,7 @@ function updateDayNight(dt) {
   if (parkGlowMat) parkGlowMat.opacity = nightF;       // 公園ランタンも夜だけ
   if (windowGlowMat) windowGlowMat.opacity = nightF * 0.9;   // 窓の光漏れも夜だけ
   if (roadLightU) roadLightU.value = 0.30 + (1 - nightF) * 0.75;   // 道路(カーブ材質=アンリット)の昼夜明度
+  if (signLightU) signLightU.value = 0.30 + (1 - nightF) * 0.75;   // 看板(アンリット)も同じ明度カーブ。emissive指定の看板は夜も明るいまま
   if (cloudMat) {   // 雲: 時刻で色（夕焼けは太陽色に染まる）と濃さを変え、ゆっくり流す
     cloudMat.color.copy(dayLerp('sunC', gameHour)).lerp(_dcWhite, 0.6);
     cloudMat.opacity = 0.85 - nightF * 0.55;
@@ -8667,7 +8669,7 @@ let neonMat = null, neonMesh = null, windowGlowMesh = null;
 let neonBlinks = [], neonTime = 0;   // entry-editorでblink(秒)を指定した光点の点滅管理
 const recLights = new Map();   // 建物rec -> {neon:[idx], glow:[idx]}（破壊時の消灯用）
 function recLightsOf(rec) {
-  if (!recLights.has(rec)) recLights.set(rec, { neon: [], glow: [] });
+  if (!recLights.has(rec)) recLights.set(rec, { neon: [], glow: [], sign: [] });
   return recLights.get(rec);
 }
 const _offM = new THREE.Matrix4().makeScale(0, 0, 0);
@@ -8676,6 +8678,7 @@ function hideBuildingLights(rec) {   // 崩壊した建物のネオン/窓発光
   if (!e) return;
   if (neonMesh) { for (const i of e.neon) neonMesh.setMatrixAt(i, _offM); if (e.neon.length) neonMesh.instanceMatrix.needsUpdate = true; }
   if (windowGlowMesh) { for (const i of e.glow) windowGlowMesh.setMatrixAt(i, _offM); if (e.glow.length) windowGlowMesh.instanceMatrix.needsUpdate = true; }
+  if (signMesh && e.sign) { for (const i of e.sign) signMesh.setMatrixAt(i, _offM); if (e.sign.length) signMesh.instanceMatrix.needsUpdate = true; }
   recLights.delete(rec);
 }
 function buildNeon() {
@@ -8795,6 +8798,124 @@ function buildWindowGlows() {
   scene.add(mesh);
   windowGlowMesh = mesh;
   console.log('window glows:', items.length);
+}
+
+// ── 建物の広告看板（entry-editor の sign マーカー）──
+// public/advertise/<セット名>/*.png を起動時に1枚のアトラスへ焼き、全看板を1つの InstancedMesh で描く。
+// どのセルを使うかはインスタンス属性 signRect=vec4(offsetX,offsetY,scaleX,scaleY) で選ぶので、
+// 画像が何種類あってもドローコールは1。後から画像を足しても manifest 経由で自動的にアトラスへ入る。
+let signMesh = null, signAtlasTex = null, signLightU = null, _signManifest = null;
+const MAX_SIGNS = 20000, SIGN_GUTTER = 4, SIGN_ATLAS_MAX = 8192;
+async function loadSignManifest() {
+  if (_signManifest) return _signManifest;
+  try { _signManifest = (await (await fetch('../advertise/manifest.json')).json()) || {}; }
+  catch { _signManifest = {}; }
+  return _signManifest;
+}
+function loadImageEl(url) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => rej(new Error('画像読込失敗: ' + url));
+    im.src = url;
+  });
+}
+// 高さ順のシェルフパッキング。余白(SIGN_GUTTER)は遠景のミップで隣のセルが滲むのを防ぐため
+function packSigns(imgs, size) {
+  const rects = new Map();
+  let x = SIGN_GUTTER, y = SIGN_GUTTER, shelfH = 0;
+  for (const it of imgs) {
+    const w = it.img.width, h = it.img.height;
+    if (w + SIGN_GUTTER * 2 > size) return null;
+    if (x + w + SIGN_GUTTER > size) { x = SIGN_GUTTER; y += shelfH + SIGN_GUTTER; shelfH = 0; }
+    if (y + h + SIGN_GUTTER > size) return null;   // 入りきらない＝アトラスを大きくして再挑戦
+    rects.set(it.key, { x, y, w, h });
+    x += w + SIGN_GUTTER;
+    if (h > shelfH) shelfH = h;
+  }
+  return rects;
+}
+async function buildSigns() {
+  // 1) 看板マーカーを持つ建物 × その個体 を列挙
+  const items = [];
+  for (const md of bldModels) {
+    const signs = (md.entries || []).filter((e) => e.kind === 'sign' && e.set);
+    if (!signs.length) continue;
+    for (const rec of md.recs) {
+      for (let si = 0; si < signs.length; si++) {
+        if (items.length >= MAX_SIGNS) break;
+        items.push({ rec, s: signs[si], si });
+      }
+    }
+  }
+  if (!items.length) return;
+  // 2) 使うセットの画像だけ読む
+  const man = await loadSignManifest();
+  const used = [...new Set(items.map((it) => it.s.set))];
+  const imgs = [];
+  await Promise.all(used.flatMap((set) => (man[set] || []).map(async (file) => {
+    try { imgs.push({ key: set + '/' + file, set, file, img: await loadImageEl('../advertise/' + encodeURIComponent(set) + '/' + encodeURIComponent(file)) }); }
+    catch (e) { console.warn(e.message); }
+  })));
+  if (!imgs.length) { console.log('signs: 対象画像なし（advertise/ が空）'); return; }
+  imgs.sort((a, b) => b.img.height - a.img.height || a.key.localeCompare(b.key));
+  // 3) アトラスへ焼く（入るまでサイズを倍にする。上限を超えたら諦めて警告）
+  let size = 512, rects = null;
+  while (size <= SIGN_ATLAS_MAX && !(rects = packSigns(imgs, size))) size *= 2;
+  if (!rects) { console.warn('看板アトラスに収まりません（' + imgs.length + '枚）。画像を減らすか解像度を下げてください'); return; }
+  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  const g2 = cv.getContext('2d');
+  for (const it of imgs) { const r = rects.get(it.key); g2.drawImage(it.img, r.x, r.y, r.w, r.h); }
+  signAtlasTex = new THREE.CanvasTexture(cv);
+  signAtlasTex.colorSpace = THREE.SRGBColorSpace;
+  signAtlasTex.anisotropy = 4;
+  signAtlasTex.needsUpdate = true;
+  // 4) インスタンス属性（UV矩形・自発光フラグ）と行列
+  const bySet = new Map();   // セット名 -> そのセットの画像キー配列（振り分け候補）
+  for (const it of imgs) { if (!bySet.has(it.set)) bySet.set(it.set, []); bySet.get(it.set).push(it.key); }
+  const rectArr = new Float32Array(items.length * 4), litArr = new Float32Array(items.length);
+  const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), null, items.length);
+  const _pp = new THREE.Vector3(), _qq = new THREE.Quaternion(), _ss = new THREE.Vector3();
+  const _ee = new THREE.Euler(), _lm = new THREE.Matrix4(), _wm = new THREE.Matrix4();
+  let n = 0;
+  for (const { rec, s: sg, si } of items) {
+    const cand = bySet.get(sg.set);
+    if (!cand || !cand.length) continue;   // このセットの画像がまだ無い＝描かない
+    // 個体ごとの振り分け: 座標ハッシュ＝同じ場所の建物は毎回同じ看板（窓の点灯と同じ流儀）
+    const h = ((Math.round(rec.x) * 73856093) ^ (Math.round(rec.z) * 19349663) ^ (si * 83492791)) >>> 0;
+    const r = rects.get(cand[h % cand.length]);
+    rectArr[n * 4] = r.x / size;
+    rectArr[n * 4 + 1] = 1 - (r.y + r.h) / size;   // canvasはY下向き / UVはY上向き
+    rectArr[n * 4 + 2] = r.w / size;
+    rectArr[n * 4 + 3] = r.h / size;
+    litArr[n] = sg.emissive ? 1 : 0;
+    const rot = sg.rot || [0, sg.ry || 0, 0];
+    _pp.fromArray(sg.pos);
+    _qq.setFromEuler(_ee.set(rot[0] || 0, rot[1] || 0, rot[2] || 0));
+    _ss.set(sg.size?.[0] ?? 0.6, sg.size?.[1] ?? 0.25, 1);
+    _lm.compose(_pp, _qq, _ss);
+    _wm.multiplyMatrices(rec.m, _lm);
+    mesh.setMatrixAt(n, _wm);
+    recLightsOf(rec).sign.push(n);
+    n++;
+  }
+  if (!n) { signAtlasTex.dispose(); signAtlasTex = null; return; }
+  mesh.count = n;
+  mesh.geometry.setAttribute('signRect', new THREE.InstancedBufferAttribute(rectArr, 4));
+  mesh.geometry.setAttribute('signLit', new THREE.InstancedBufferAttribute(litArr, 1));
+  // 5) 材質: アンリット（Standardノード材質はWebGPUで黒化した実績があるため carve と同じ流儀）
+  signLightU = uniform(1);
+  const rectA = attribute('signRect', 'vec4'), litA = attribute('signLit', 'float');
+  const tx = texture(signAtlasTex, uv().mul(rectA.zw).add(rectA.xy));
+  const nm = new THREE.MeshBasicNodeMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: true });
+  nm.colorNode = tx.mul(mix(signLightU, float(1), litA));   // 自発光指定の看板は夜も明るいまま
+  nm.opacityNode = tx.a;
+  nm.alphaTest = 0.08;   // 切り抜き看板（背景透明PNG）に対応
+  mesh.material = nm;
+  mesh.frustumCulled = false;   // 街全体に散るので個別カリングは効かない（窓発光と同じ）
+  scene.add(mesh);
+  signMesh = mesh;
+  console.log('signs:', n, '/ atlas', size + 'px', imgs.length + '枚');
 }
 
 // ── 車ライト: ヘッド/テールを各1つの Points（動的更新）。夜は遠距離の車体を隠しライトだけ描く ──

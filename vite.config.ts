@@ -138,12 +138,15 @@ export default defineConfig({
           req.on('end', () => {
             try {
               const { dir, filename, content, encoding } = JSON.parse(body);
-              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma', vamp_param: 'vamp_param', image: 'image', tools: 'tools', damage: 'damage', cityfly: 'cityfly' };
+              const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma', vamp_param: 'vamp_param', image: 'image', tools: 'tools', damage: 'damage', cityfly: 'cityfly', advertise: 'advertise' };
               const sub = allowed[dir];
-              const safe = path.basename(String(filename || ''));
+              // 看板テクスチャは advertise/<セット名>/uv1.png のように1階層だけサブフォルダを許す。
+              // 各要素を basename 化してから末尾2つに絞る＝'..' や絶対パスは通らない
+              const segs = String(filename || '').split('/').map((x) => path.basename(x)).filter((x) => x && x !== '.' && x !== '..');
+              const safe = segs.slice(-2).join('/');
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
               const outDir = path.join(pub, sub);
-              fs.mkdirSync(outDir, { recursive: true });
+              fs.mkdirSync(path.dirname(path.join(outDir, safe)), { recursive: true });
               if (encoding === 'base64') {
                 // バイナリ保存（家具アニメエディタの .vrma 等）
                 fs.writeFileSync(path.join(outDir, safe), Buffer.from(String(content), 'base64'));
@@ -167,6 +170,26 @@ export default defineConfig({
           const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.map.json')) : [];
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
+        });
+
+        // 看板テクスチャ一覧（entry-editor が保存した advertise/<セット名>/*.png）
+        // 返り値: { "building-a": ["uv1.png", "uv2.png"], ... }
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/advertise/manifest.json')) return next();
+          const dir = path.join(pub, 'advertise');
+          const out: Record<string, string[]> = {};
+          if (fs.existsSync(dir)) {
+            for (const set of fs.readdirSync(dir)) {
+              const sd = path.join(dir, set);
+              if (!fs.statSync(sd).isDirectory()) continue;
+              const imgs = fs.readdirSync(sd).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort();
+              if (imgs.length) out[set] = imgs;
+            }
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Cache-Control', 'no-store, max-age=0');
+          res.end(JSON.stringify(out));
         });
 
         // FX プリセット一覧（fx-builder が保存した *.fx.json）

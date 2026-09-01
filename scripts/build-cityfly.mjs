@@ -41,6 +41,21 @@ if (fs.existsSync(epSrc)) {
   fs.cpSync(epSrc, path.join(dest, 'episodes'), { recursive: true });
   console.log('copied: episodes/');
 }
+// 建物の広告看板（advertise/<セット名>/*.png）。dev サーバが動的に返している manifest.json を実体として書き出す
+const advSrc = path.join(pub, 'advertise');
+if (fs.existsSync(advSrc)) {
+  const advDest = path.join(dest, 'advertise');
+  fs.cpSync(advSrc, advDest, { recursive: true });
+  const man = {};
+  for (const set of fs.readdirSync(advDest)) {
+    const sd = path.join(advDest, set);
+    if (!fs.statSync(sd).isDirectory()) continue;
+    const imgs = fs.readdirSync(sd).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort();
+    if (imgs.length) man[set] = imgs;
+  }
+  fs.writeFileSync(path.join(advDest, 'manifest.json'), JSON.stringify(man));
+  console.log(`copied: advertise/（${Object.keys(man).length}セット）`);
+}
 
 // city-fly.js: ローカル相対参照を dist 内ローカル（./）へ書き換え
 const jsSrc = fs.readFileSync(path.join(src, 'city-fly.js'), 'utf8')
