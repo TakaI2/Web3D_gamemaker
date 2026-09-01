@@ -1,0 +1,138 @@
+{
+  "format": "cityfly-events",
+  "version": 1,
+  "events": [
+    {
+      "id": "hp50",
+      "when": {
+        "param": "hpPct",
+        "op": "<=",
+        "value": 50
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_hp50"
+        }
+      ]
+    },
+    {
+      "id": "hp25",
+      "when": {
+        "param": "hpPct",
+        "op": "<=",
+        "value": 25
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_hp25"
+        }
+      ]
+    },
+    {
+      "id": "city40",
+      "when": {
+        "param": "cityDamage",
+        "op": ">=",
+        "value": 40
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_city40"
+        }
+      ]
+    },
+    {
+      "id": "attr50",
+      "when": {
+        "param": "attrition",
+        "op": ">=",
+        "value": 50
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_attr50"
+        },
+        {
+          "type": "spawn",
+          "enemy": "walker"
+        }
+      ]
+    },
+    {
+      "id": "badRoute",
+      "when": {
+        "param": "wanted",
+        "op": ">=",
+        "value": 5
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_badroute"
+        },
+        {
+          "type": "flag",
+          "flag": "badRoute"
+        }
+      ]
+    },
+    {
+      "id": "attr75",
+      "when": {
+        "param": "attrition",
+        "op": ">=",
+        "value": 75,
+        "flag": "badRoute"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_attr75"
+        },
+        {
+          "type": "spawn",
+          "enemy": "spider"
+        }
+      ]
+    },
+    {
+      "id": "walkerDown",
+      "when": {
+        "kill": "walker",
+        "notFlag": "badRoute"
+      },
+      "do": [
+        {
+          "type": "flag",
+          "flag": "warEnd"
+        },
+        {
+          "type": "flow",
+          "port": "win",
+          "delay": 5
+        }
+      ]
+    },
+    {
+      "id": "spiderDown",
+      "when": {
+        "kill": "spider"
+      },
+      "do": [
+        {
+          "type": "flag",
+          "flag": "warEnd"
+        },
+        {
+          "type": "flow",
+          "port": "bad",
+          "delay": 6
+        }
+      ]
+    }
+  ]
+}

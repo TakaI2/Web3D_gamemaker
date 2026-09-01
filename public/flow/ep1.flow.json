@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "id": "ep1",
+  "title": "EP1 フローゼ防衛戦 フロー",
+  "start": "n_start",
+  "nodes": [
+    {
+      "id": "n_start",
+      "type": "start",
+      "x": 40,
+      "y": 180
+    },
+    {
+      "id": "n_op",
+      "type": "story",
+      "x": 180,
+      "y": 180,
+      "data": {
+        "story": "ep1_op.story.json"
+      }
+    },
+    {
+      "id": "n_battle",
+      "type": "battle",
+      "x": 380,
+      "y": 180,
+      "data": {
+        "battle": {
+          "title": "防衛戦（勝敗はゲーム内イベント events.json が決定）"
+        }
+      }
+    },
+    {
+      "id": "n_ed_good",
+      "type": "story",
+      "x": 600,
+      "y": 80,
+      "data": {
+        "story": "ep1_ed_good.story.json"
+      }
+    },
+    {
+      "id": "n_ed_bad",
+      "type": "story",
+      "x": 600,
+      "y": 280,
+      "data": {
+        "story": "ep1_ed_bad.story.json"
+      }
+    },
+    {
+      "id": "n_end_good",
+      "type": "end",
+      "x": 800,
+      "y": 80
+    },
+    {
+      "id": "n_end_bad",
+      "type": "end",
+      "x": 800,
+      "y": 280
+    },
+    {
+      "id": "n_end_lose",
+      "type": "end",
+      "x": 800,
+      "y": 180
+    }
+  ],
+  "edges": [
+    {
+      "from": "n_start",
+      "fromPort": "next",
+      "to": "n_op"
+    },
+    {
+      "from": "n_op",
+      "fromPort": "next",
+      "to": "n_battle"
+    },
+    {
+      "from": "n_battle",
+      "fromPort": "win",
+      "to": "n_ed_good"
+    },
+    {
+      "from": "n_battle",
+      "fromPort": "bad",
+      "to": "n_ed_bad"
+    },
+    {
+      "from": "n_battle",
+      "fromPort": "lose",
+      "to": "n_end_lose"
+    },
+    {
+      "from": "n_ed_good",
+      "fromPort": "next",
+      "to": "n_end_good"
+    },
+    {
+      "from": "n_ed_bad",
+      "fromPort": "next",
+      "to": "n_end_bad"
+    }
+  ]
+}

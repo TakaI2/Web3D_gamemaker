@@ -7,10 +7,7 @@
   "subtitle": "DEAD ATMOS ASSAULT",
   "map": "floz",
   "stage": "city",
-  "flow": "cityfly.flow.json",
   "data": {
-    "talks": "talks.json",
-    "events": "events.json",
     "speech": [],
     "bgm": "Sound_Wave.ogg"
   }

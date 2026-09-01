@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { normalizeEpisode } from '../lib/episode.js';
+import { normalizeEpisode, storiesOfFlow } from '../lib/episode.js';
 
 // CityFlyを自己完結の dist-cityfly/ に書き出す。
 // three / three-vrm 等は CDN（esm.sh / jsdelivr）から実行時取得するため同梱不要。
@@ -89,7 +89,7 @@ const forestModels = new Set();
 if (fs.existsSync(mapsSrc)) {
   const mapsDest = path.join(dest, 'maps'); fs.mkdirSync(mapsDest, { recursive: true });
   const mapFiles = fs.readdirSync(mapsSrc).filter((f) => f.endsWith('.map.json'))
-    .filter((f) => !TUT || f === DEFAULT_MAP + '.map.json');   // 専用ビルドは既定マップだけ同梱
+    .filter((f) => (!TUT && !epDef) || f === DEFAULT_MAP + '.map.json');   // 専用ビルド/エピソード指定は既定マップだけ同梱
   for (const f of mapFiles) {
     fs.copyFileSync(path.join(mapsSrc, f), path.join(mapsDest, f));
     try {
@@ -167,7 +167,7 @@ for (const v of vrmaSet) {
 }
 // セリフ（ken住民）。speech-set.js は lib 相対 '../speech/' を見るので dist ルートに speech/ を置く
 fs.mkdirSync(path.join(dest, 'speech'), { recursive: true });
-for (const sp of ['ken.speech.json', ...(TUT ? ['dummydoll.speech.json', 'pneuma.speech.json'] : [])]) {
+for (const sp of ['ken.speech.json', ...(epDef ? epDef.speech : (TUT ? ['dummydoll.speech.json', 'pneuma.speech.json'] : []))]) {
   const spSrc = path.join(pub, 'speech', sp);
   if (!fs.existsSync(spSrc)) { console.warn(`skip missing speech: ${sp}`); continue; }
   fs.copyFileSync(spSrc, path.join(dest, 'speech', sp));
@@ -202,7 +202,7 @@ if (fs.existsSync(sndSrc)) {
 fs.mkdirSync(path.join(dest, 'cityfly'), { recursive: true });
 // 会話ポートレート用VRM（talks.json の actor.vrm）
 try {
-  const tj = JSON.parse(fs.readFileSync(path.join(pub, 'cityfly', TUT ? 'tutorial_talks.json' : 'talks.json'), 'utf8'));
+  const tj = JSON.parse(fs.readFileSync(path.join(pub, 'cityfly', epDef ? epDef.talks : (TUT ? 'tutorial_talks.json' : 'talks.json')), 'utf8'));
   const acts = Object.values(tj.actors || {});
   const needVrm = [...new Set(acts.map((a) => a && a.vrm).filter(Boolean))];
   const needNpc = [...new Set(acts.map((a) => a && a.npc).filter(Boolean))];   // .npc.json バンドル（マント付き）
@@ -232,9 +232,12 @@ for (const dir of ['BGM', 'gif']) {   // BGM・シナリオ背景GIF
     console.log('copied: ' + dir + '/*');
   }
 }
-const cityflyJson = TUT
-  ? ['tutorial_events.json', 'tutorial_talks.json', 'expressions.json', 'grabhit.json']
-  : ['events.json', 'talks.json', 'expressions.json', 'grabhit.json'];
+// エピソード指定があれば、同梱する会話/イベントはその定義から取る（EP=ep1 → ep1_talks.json 等）
+const cityflyJson = epDef
+  ? [epDef.events, epDef.talks, 'expressions.json', 'grabhit.json']
+  : (TUT
+    ? ['tutorial_events.json', 'tutorial_talks.json', 'expressions.json', 'grabhit.json']
+    : ['events.json', 'talks.json', 'expressions.json', 'grabhit.json']);
 for (const f of cityflyJson) {
   const src2 = path.join(pub, 'cityfly', f);
   if (fs.existsSync(src2)) {
@@ -246,13 +249,20 @@ for (const f of cityflyJson) {
   } else console.warn(`skip missing cityfly/${f}`);
 }
 fs.mkdirSync(path.join(dest, 'story'), { recursive: true });
+const flowFile = epDef ? epDef.flow : (TUT ? 'tutorial.flow.json' : 'cityfly.flow.json');
+// シナリオは「フローが実際に参照している物」を同梱する（エピソード指定時）。
+// 名前の接頭辞に頼ると、EP名とファイル名がずれた瞬間に本番で404になる
 const storyPrefix = TUT ? 'tutorial_' : 'cityfly_';
-for (const f of fs.readdirSync(path.join(pub, 'story')).filter((f) => f.startsWith(storyPrefix) && f.endsWith('.story.json'))) {
-  fs.copyFileSync(path.join(pub, 'story', f), path.join(dest, 'story', f));
+const storyFiles = epDef
+  ? storiesOfFlow(JSON.parse(fs.readFileSync(path.join(pub, 'flow', flowFile), 'utf8')))
+  : fs.readdirSync(path.join(pub, 'story')).filter((f) => f.startsWith(storyPrefix) && f.endsWith('.story.json'));
+for (const f of storyFiles) {
+  const sSrc = path.join(pub, 'story', f);
+  if (!fs.existsSync(sSrc)) { console.warn(`skip missing story: ${f}`); continue; }
+  fs.copyFileSync(sSrc, path.join(dest, 'story', f));
   console.log(`copied: story/${f}`);
 }
 fs.mkdirSync(path.join(dest, 'flow'), { recursive: true });
-const flowFile = TUT ? 'tutorial.flow.json' : 'cityfly.flow.json';
 fs.copyFileSync(path.join(pub, 'flow', flowFile), path.join(dest, 'flow', flowFile));
 console.log(`copied: flow/${flowFile}`);
 // 2D素材（顔グラ/背景。まだ無ければスキップ=ゲーム側が仮表示にフォールバック）

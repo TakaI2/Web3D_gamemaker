@@ -1,127 +1,144 @@
-# 設計 — サイキッカー空中アクション（TPS / tps-flight）
+# エピソード形式（EP）— 設計メモ
 
-要件: `.tmp/requirements.md`。ベース: `swing-catch`。レンダラ WebGPU。
+対象: city-fly（CyberBat）本体のステージ選択・進行の一般化
+現状: `MAP_NAME === 'tutorial'` の二値で flow / story / talks / events / speech / BGM / 各種ルールを切り替えている（city-fly.js に 36 箇所の `TUTORIAL` 分岐）。
+目的: 「OPシナリオ → ゲーム本編 → 分岐ED → 次エピソード」を1つの形式で表現し、EP0(tutorial)・EP1(floz)・以降のEPを同じ仕組みで足せるようにする。
 
-## 0. 全体アーキテクチャ
-- 新規 `tps-flight/`（`index.html` + `tps-flight.js`）。swing-catch を雛形に、**FPS→TPS** と **NPC戦闘を除去**して作る。
-- 流用（ほぼそのまま）: シーン/レンダラ/スカイ/IBL/フォグ、`buildArena`、浮遊オブジェクト（`spawnObject`/`spawnModelObject`/`stepObjects`/`physicsStep`/`syncObjectMeshes`/コリジョン）、`loadStage`/`loadSelectedModels`、`lib/vrm-cloth`、`createVRMAnimationClip`、`dataURIToBlob`。
-- 除去/無効化: NPC（megus・敵戦闘・HUD・フロー postMessage）、ポインタロックFPS視点、カプセル重力・ジャンプ・床コリジョン（プレイヤーは飛行）。
-- hub 登録: `hub/index.html` にカード1枚追加（GAME）。
+---
 
-## 1. 前提作業A: lib/vrm-cloth を「名前付きグループ」対応へ（旧 Stage 3）
-**理由**: Joy_reborn の cloth は `gripGroups`(g5..g8)＋timeline は `groupId` トラック。現 `lib/vrm-cloth` は旧2ハンド(side)モデルで groupId を無視 → マント掴みが効かない。cloth-preview の per-vertex 方式へ統一する。
+## 1. 全体像
 
-### GPU モデル（cloth-preview/cloth-editor と同一に統一）
-- `vertexParams.w`(gripCode): **0=なし / 1=アンカー(常時) / 2=グリップ(グループactive時)**（現行の 1=左,2=右,3=anchor は廃止）。
-- `bonePinTargetBuffer` を **vec3→vec4** に拡張（`xyz`=ターゲット, `w`=active フラグ）。アンカー頂点は w=1 固定、グリップ頂点は所属グループの active で 0/1。
-- 旧 `leftGrip*/rightGrip*` uniform と分岐は削除。動的グラブ（`grab/moveGrab/releaseGrab`：プレイヤーが手でマントを掴む）は**残す**（互換）。
+```
+episodes/index.json        エピソード一覧（順序・タイトル・解放条件）
+episodes/ep0.ep.json       EP0 チュートリアル（map=tutorial）
+episodes/ep1.ep.json       EP1 フローゼ防衛戦（map=floz）
+flow/ep0.flow.json         OP→本編→ED の遷移グラフ（既存 flow をそのまま流用）
+story/ep0_op.story.json    OP/ED シナリオ（既存 story 形式のまま）
+cityfly/ep0_talks.json     ステージ内会話
+cityfly/ep0_events.json    ステージ内イベント（勝敗ポートの発火もここ）
+```
 
-### データ読み込み（後方互換）
-- グループ: `cloth.gripGroups`(新) を優先。各 `{id,name,bone,offset:[x,y,z],vertices:[..]}`。無ければ legacy `cloth.leftGripIndices/rightGripIndices`(+`handGrabOffsets`) から `leftHand`/`rightHand` グループを合成。
-- 頂点→グループ: `gripMap`(Map idx→groupId)。重複は先勝ち。
-- 各グループ: `{id,bone,boneNode,offset:Vector3,worldPos:Vector3,active:bool}`。グラブ点 worldPos = `boneWorldPos + boneWorldQuat × offset`（cloth-preview と同じ回転追従）。
+エピソード = **1つの flow ＋ その flow が使うデータ束（map/talks/events/speech/BGM）＋ ルール**。
+OP・本編・ED の並びは既存 flow グラフ（`lib/flow-runner.js`）がすでに表現できているので、**flow は作り直さない**。足りないのは「エピソード束の定義」と「EP から EP への連結」の2点だけ。
 
-### timeline グリップの解釈（後方互換 + 切替）
-- 現状は生成時 `o.timeline` の固定。**ランタイム切替**のため API 追加:
-  - `setTimeline(timeline)`: その timeline の grip トラックを解析して内部 `gripRanges`(Map groupId→[{start,end}]) を差し替え。
-  - `setGroupsActive(idsOrMap)`（任意・簡易版）: フレーム評価せず直接 active 指定（state遷移ベースで使うなら）。
-- `update(dt, frame)`:
-  1. 各グループ active = `gripActiveAt(gripRanges[g.id], frame)`（frame=null なら全false）。
-  2. アンカー/グリップの per-vertex ターゲットを `bonePinTargetBuffer`(vec4) に書く（アンカー: bone+rot×localOffset, w=1／グリップ: group.worldPos, w=active?1:0）。
-  3. コライダーのボーン追従、固定タイムステップ compute（現行どおり）。
-- timeline トラック互換: `groupId`(新) 優先、無ければ legacy `side:'left'/'right'` を leftHand/rightHand グループへ（cloth-preview importTimeline と同じマップ）。
-- `gripPos`(グラブ点位置キーフレーム) は今回のゲームに不要 → **対象外**（将来）。group.offset は cloth データ固定。
+## 2. `<id>.ep.json` 形式
 
-### 影響と互換確認（重要）
-- 既存利用箇所: `fps-cloth-vrm`・`swing-catch`（旧 megu 系：side timeline + leftGripIndices）。→ legacy 合成パスで従来どおり動くこと。`character-editor`/`cloth-editor`/`cloth-preview` は独自 sim なので影響なし。
-- リスク: GPU バッファ構成変更（vec4 化）。**WebGPU の storage buffer 8本制限**に注意（cloth-preview で踏んだ罠）。現行 lib は anchor のみ vec3 一本→vec4 一本に置換なので本数は増えない見込み。要実機確認。
+```json
+{
+  "format": "episode",
+  "version": 1,
+  "id": "ep1",
+  "no": 1,
+  "title": "EP1 フローゼ防衛戦",
+  "subtitle": "DEAD ATMOS ASSAULT",
+  "map": "floz",
+  "stage": "city",
+  "flow": "ep1.flow.json",
+  "data": {
+    "talks":  "ep1_talks.json",
+    "events": "ep1_events.json",
+    "speech": ["ken.speech.json"],
+    "bgm":    "Sound_Wave.ogg"
+  },
+  "rules": {
+    "wanted": true,
+    "buildingEntry": true,
+    "cars": true,
+    "agents": true,
+    "special": true,
+    "paramsHud": true,
+    "fixedHour": null
+  }
+}
+```
 
-## 2. 前提作業B: timeline に VRMA 参照を埋め込む（cloth-preview 拡張）
-- cloth-preview: VRMA をドロップダウン/ファイルで読んだとき `currentVrmaName`（例 `"move_Flying_front.vrma"`、ファイル読み込み時はそのファイル名）を保持。
-- `exportTimeline()` に `vrma: currentVrmaName` を追加。`importTimeline(json)` で `json.vrma` を読み、TLドロップダウンからの読込時など、可能なら対応VRMA(`/vrma/<name>`)を自動ロード（任意・失敗無害）。
-- 既存 `Joy_reborn_*.timeline.json` に `vrma` を**バックフィル**（確定マッピング）。スペース/`@`入りは値としてはそのまま（fetchは利用側で `encodeURI`）。
+- `stage`: `"rooms"`（チュートリアル型・実行時に部屋を構築）/ `"city"`（マップから街を生成）。現状 `TUTORIAL` が担っている分岐の本体。
+- `flow` / `data.*`: 省略時は `<id>.flow.json` `<id>_talks.json` … と **id 接頭で自動解決**。既存ファイル名を rename すれば設定ゼロで動く。
+- `subtitle`: タイトル画面の英字（現在 `TUTORIAL ? 'TRAINING PROGRAM' : 'DEAD ATMOS ASSAULT'` とハードコードされている箇所）。
+- `rules`: 現在の `TUTORIAL` ゲート群（手配度・建物進入・車・生活NPC・必殺技解放・戦況パラメータHUD・時刻固定）の置き換え先。既定値は `stage` から導く（rooms → 全部 false・fixedHour 12）ので、EP0 は `rules` を書かなくてよい。
 
-### 確定 VRMA マッピング（バックフィル）
-| timeline | vrma |
-|---|---|
-| Joy_reborn_Fly_f | move_Flying_front.vrma |
-| Joy_reborn_Fly_back | move_Flying_back.vrma |
-| Joy_reborn_Fly_L | move_Flying_left.vrma |
-| Joy_reborn_Fly_R | move_Flying_right.vrma |
-| Joy_reborn_Fly_idle | idle.vrma（仮） |
-| Joy_reborn_Fly_f2 | move_Flying_front02.vrma（仮） |
-| Joy_reborn_capcher1 | attack01.vrma |
-| Joy_reborn_cas1_L1 | HumanF@MagicAttackDirect1H01_L - Cast.vrma |
+## 3. EP 連結（分岐）
 
-## 3. プレイヤー（Joy_reborn）とアニメ状態機械
-### 生成
-- `public/npc/Joy_reborn.npc.json` を fetch（NPCバンドル）。VRM を MToonNodeMaterial で生成（swing-catch createMegu と同様）。`vrm.scene` をシーンへ。
-- cloth = `createVRMCloth({ renderer, scene, vrm, cloth: bundle.cloth, basePos: spawn, floorY:-1e9, timeline: <初期=idle> })`（重力で落ちないよう floorY 無効化、空中）。
+`end` ノードに次エピソードを持たせる。flow-runner は変更不要（`data` を素通しするだけ）。
 
-### モーションセット（複数 VRMA → 1 mixer）
-- 状態定義 `STATES`（キー→ `{ timelineFile, vrmaFile, loop }`）。確定マッピングを内蔵（timelineFile を fetch して vrma 名も取得できるが、確実性のためゲーム内テーブルにも持つ）。
-- ロード手順（各状態）:
-  1. `fetch('../timeline/<timelineFile>.timeline.json')` → grip 等トラック＋`vrma`。
-  2. `fetch('../vrma/'+encodeURI(vrmaName))` → `createVRMAnimationClip` → `mixer.clipAction(clip)`。loop/once 設定。
-  3. `state = { clip, action, timeline }` を保持。
-- 1つの `AnimationMixer(vrm.scene)`。各 action を用意し、**crossFadeTo** で遷移（`fadeDuration≈0.15s`）。
+```json
+{ "id": "n_end_good", "type": "end", "data": { "next": "ep2" } },
+{ "id": "n_end_bad",  "type": "end", "data": { "next": "ep3" } },
+{ "id": "n_end",      "type": "end" }
+```
 
-### 状態機械
-- 入力→希望状態を決定:
-  - グラブ中ワンショット（capcher1）/ショット（cas1_L1）が再生中はそれを優先（再生終了 or 一定時間で抜ける）。
-  - 移動入力あり: グラブ保持中なら `Fly_f2`、非保持なら方向別（前=Fly_f / 後=Fly_back / 左=Fly_L / 右=Fly_R）。複数同時は優先順（前後 > 左右、または合成は単純化して主方向）。
-  - 入力なし: `Fly_idle`。
-- 遷移時: `crossFadeTo`、かつ `cloth.setTimeline(state.timeline)`（grip グループ切替）。
-- 毎フレーム: `mixer.update(dt)` → `vrm.update(dt)` → `frame = floor(activeAction.time * state.timeline.fps)` → `cloth.update(dt, frame)`。
+- `next` あり → そのエピソードへ遷移。
+- `next` なし → 従来どおりタイトルへ（EP0 はこれ。一本道なので分岐 ED を持たない）。
+- **分岐の判定は既存の仕組みをそのまま使う**: `battle` ノードのポート（win / bad / lose）を `events.json` が発火 → ポートごとに別の ED story → その先の `end` の `next` が次 EP を決める。つまり「EP1 での行動 → EP2 か EP3 か」は events とグラフの結線だけで表現できる。
+- ポートを増やしたい場合: `NODE_TYPES.battle.ports` の固定3つをやめ、ノード側 `data.ports` があればそれを使う（flow-editor も同様）。既定は現状の3つ。
 
-### 注意
-- VRMA はワールド原点基準のポーズ。プレイヤーの移動は `vrm.scene.position` を動かす（mixer はローカルポーズ、位置は別管理）。Hips のルート移動を含むモーションは要確認（移動と二重移動になるなら hips の XZ を無視 or そのまま許容を実機判断）。
-- cloth `basePos`/コライダーはボーン追従なので、`vrm.scene.position` を動かせばマントも追従する。
+### 遷移の実装
+- 次EPが**同じ map** → `softRestart()` 相当（VRM/シェーダを保持したままステージだけ作り直す。実測 7秒 → 0.1秒）。
+- 次EPが**別の map** → `location.href = '?ep=<id>'`（地形・建物キットごと入れ替わるためリロードが素直）。
+- 進行の保存: `localStorage['cyberbat.progress'] = { cleared: ['ep0'], branch: { ep1: 'good' }, last: 'ep2' }`。タイトルから続きを選ぶ・EP選択画面を出す土台。
 
-## 4. TPS カメラ（球面 + スプリング）
-- 状態: `camYaw, camPitch, camDist`（球面）、`camTarget`(注視点=プレイヤー頭付近)。
-- 入力: ポインタロック中の `mousemove` で `camYaw -= dx*sens; camPitch -= dy*sens`（pitch を `[-1.3, +1.3]` 程度に制限）。
-- 望ましいカメラ位置 `desiredPos = playerPos + offset(camYaw,camPitch,camDist)`、望ましい注視点 `desiredTarget = playerPos + headOffset`。
-- **スプリング追従**: `camPosCurrent` と `camTargetCurrent` を毎フレーム指数補間（`k = 1 - exp(-follow * dt)`）で `desired` へ。`camera.position = camPosCurrent; camera.lookAt(camTargetCurrent)`。
-- 前進方向 `camForward` = `(desiredTarget - desiredPos)` を正規化（3D、ピッチ込み）＝高度移動の素（要件2）。
+## 4. 解決順（どの EP を起動するか）
 
-## 5. 飛行移動
-- `playerVel`(Vector3) を加減速。基底ベクトル:
-  - `fwd` = カメラ視線方向（3D, 正規化）= 上記 camForward。
-  - `right` = `fwd × up` 正規化（水平寄り）。左右平行移動に使用。
-- 入力で加速: W/↑ `+fwd`、S/↓ `-fwd`、A/← `-right`、D/→ `+right`（`accel*dt`）。
-- 減衰: `playerVel *= exp(-drag*dt)`、`clampSpeed(maxSpeed)`。重力なし。
-- `vrm.scene.position += playerVel*dt`。アリーナ内クランプ（壁/天井/床に薄いマージン、反射はなしで停止 or 軽い反発）。
-- **体の向き**: 移動入力中（特に前進）、`vrm.scene` の yaw を水平移動方向へ `slerp`/補間で滑らかに向ける（左右移動のみの時はカメラ正面 or 移動方向、実機調整）。
+1. `?ep=<id>` があればそれ。
+2. なければ `window.DEFAULT_EP`（dist ビルド時に注入。現在の `DEFAULT_MAP` と同じ方式）。
+3. なければ `?map=<name>` から `episodes/index.json` を引いて `map` が一致する EP。
+4. どれも無ければ**現状の二値フォールバック**（`map=tutorial` → tutorial_*、それ以外 → cityfly_*）。既存 URL とビルドを壊さないための保険。
 
-## 6. グラブ / ショット（マウス、目前吸着）
-- アンカー `frontAnchor`（ワールド点）= `playerPos + bodyForward * GRAB_FRONT_DIST + up*~0.2`（体の向き前方、胸〜目線の高さ）。
-- レイ: 画面中心からカメラレイ（swing-catch `tryGrab` 流用）。対象は浮遊オブジェクトのみ（megu 関連分岐は削除）。
-- LMB: `tryGrab`。命中で `grabbed=obj; obj.grabbed=true`。グラブ中は `stepObjects` で対象を `frontAnchor` へバネ吸着（既存 line1104 の `handAnchor` を `frontAnchor` に置換）。`capcher1` ワンショット再生。保持中は移動アニメ `Fly_f2`。
-- RMB: `fireProjectile` 改め `shoot()`。保持オブジェクトをカメラ前方へ射出（`vel = camForward * SHOT_SPEED`）。`cas1_L1` 再生。保持していない場合は何もしない（または既存の発射体）。要件はオブジェクト射出が主。
-- 旧 `handAnchor`(camera+forward) は `frontAnchor`(player前方) に統一。
+`MAP_NAME` は EP 決定後に `ep.map` で上書きする。`?map=` 単独指定は今までどおり動く。
 
-## 7. カメラ簡易調整 UI
-- 右上に小パネル（プレイ中は隠す/トグル）。スライダー: 距離(camDist) / 高さ(headOffset.y, camPitch初期) / 追従(follow) / FOV / マウス感度。
-- `localStorage('tps-cam')` に保存・復元。`bindSlider` 流用。
+## 5. ビルドスクリプトへの反映
 
-## 8. ファイル構成 / 変更点
-- 追加: `tps-flight/index.html`, `tps-flight/tps-flight.js`。
-- 変更: `lib/vrm-cloth.js`（名前付きグループ化・setTimeline）/ `cloth-preview/cloth-preview.js`(+index.html)（vrma 埋め込み）/ `public/timeline/Joy_reborn_*.timeline.json`（vrma バックフィル）/ `hub/index.html`（カード）。
-- 既存ゲーム（fps-cloth-vrm/swing-catch）は **lib/vrm-cloth 改修の互換性のみ要確認**（コード変更なし）。
+`EP=ep1 npm run build:cityfly` で、
+- 既定エピソードを `window.DEFAULT_EP` として注入（`DEFAULT_MAP` も EP から導出）。
+- **同梱するデータをエピソード定義から決める**: `ep.map` のマップ1本、flow から到達可能な story 群、`data.*` の talks/events/speech/BGM。
+- 現在の `const TUT = DEFAULT_MAP === 'tutorial'` による「街用アセットを丸ごと除外」も、`ep.stage === 'rooms'` に置き換え。これで floz ビルド時に「全マップ同梱」（build-cityfly.mjs:63）や不要キットの混入を避けられる。dist-cityfly が 147MB、dist-cyberbat が 69MB という差はここに効く。
 
-## 9. 主要リスク
-- **lib/vrm-cloth 改修の後方互換**（megu の side timeline / legacy indices）。回帰確認必須（swing-catch で megu のマント掴み）。
-- WebGPU storage buffer 8本制限（vec4 化で本数増やさない）。
-- VRMA のルート移動（hips XZ）と自前移動の二重化 → 必要なら hips の水平成分を抑制。
-- VRMA 切替時のポーズ飛び → crossFade で吸収。`idle`/`f2` は仮VRMAなので見た目要確認。
-- スペース入り VRMA 名の fetch（encodeURI）。
+## 6. 段階計画
 
-## 10. 実装順（Stage 5 で詳細タスク化）
-1. lib/vrm-cloth 名前付きグループ化＋setTimeline（＋swing-catch回帰確認）。
-2. cloth-preview に vrma 埋め込み＋既存timelineバックフィル。
-3. tps-flight 雛形（swing-catchから複製→TPS化・NPC除去・飛行移動）。
-4. プレイヤー生成＋モーションセット＋状態機械＋cloth連携。
-5. TPSカメラ（球面+スプリング）＋簡易UI。
-6. グラブ/ショット（前方吸着・射出）。
-7. hub 登録・実機調整。
+- **Phase 1（骨格）**: `ep.json` 形式・解決順・データ選択の一般化（flow/story/talks/events/speech/BGM/タイトル文言）。`TUTORIAL` は `ep.stage === 'rooms'` に置換。EP0/EP1 の定義ファイルを追加。既存ファイルは EP 名へ rename（別名を残すなら `data` に明記）。
+- **Phase 2（ルール化）**: 36箇所の `TUTORIAL` ゲートを `rules.*` 参照へ置き換え。
+- **Phase 3（連結）**: `end.next` による EP 遷移、localStorage 進行保存、タイトルの続きから開始。
+- **Phase 4（ビルド）**: `EP=` 駆動の同梱決定。flow-editor に `end.next` と可変ポートの編集UI。
+
+## 7. 未確定事項
+
+- EP2 / EP3 の中身（マップ・条件）は未定。形式だけ先に用意する。
+- EP1 の分岐条件（何をすると good / bad / secret か）は events 側の設計待ち。
+- 既存 `mytown`（cityfly_*）を EP として扱うか、フォールバックのまま残すか。
+
+---
+
+## 8. OP裏読み込みの実測（2026-09-01 / ?prof=1）
+
+計測基盤: `profPhase()` で工程ごとの所要時間とコマ落ちを記録、`profTimeline` が50ms超のコマ落ちを
+gameMode・走っていた工程つきで時系列に残す。`__fly.buildProf` / `__fly.profTimeline`。
+
+### 判明したこと
+
+- **OP中のコマ落ちは全部、裏の読み込みが原因**。シナリオ側（話者切替・GIF背景・行送り）由来はゼロ件。
+- チュートリアルOPの内訳（対策前）: 1684ms=部屋ステージのcompileAsync / 1223ms=NPC・ドール（?nonpc=1で消滅） / 960ms=部位溶解ウォーム / 94ms=着弾FX
+- 街(floz)の建物工程 4481ms のうち、実作業（配置生成・GLB読込・インスタンス集約・ネオン・カーブ材質）は
+  **計190msでコマ落ちゼロ**。フリーズは **compileAsync の3455ms（単発2172ms）に集中**。
+- 公園389ms・森167ms・FX・NPC読込はコマ落ちほぼゼロ＝OP裏に置いて安全。
+
+### compileAsync は分割できない（重要）
+
+`compileAsync(サブツリー, camera, scene)` に割って間でフレームを譲っても、コマ落ちは減らない。
+**「シーンに新しい中身が入った後の最初の1回」が全部を払う**作りで、渡したのが板ポリ1枚
+(MeshBasicMaterial) でも同じ約3秒がかかった。ユニットの順序を逆にすると、先頭に来た別のユニットが
+同じコストを払う＝オブジェクト固有ではないことを確認済み。
+→ **ステージのコンパイルはOP再生より前に済ませるしかない**。
+
+### 部位溶解ウォームの罠
+
+`dmgWarmT` を「秒」で数えていたため、読み込み中の低fps（1フレーム数百ms、dtは1/30に丸め）では
+実時間で10秒近くかかり、タイトル中に終わらずOP再生中にコンパイルが走っていた。
+→ **実描画フレーム数で数える**方式へ変更（8フレーム）。パイプラインは初回描画で焼かれるので数フレームで足りる。
+
+### 振り分け（rules.startWhen）
+
+- `'world'`（既定）= ステージ構築＋コンパイルまで待ってからタイトルを解禁。**OP中のコマ落ち0件**（実測）
+- `'cast'` = 会話キャストが揃えば開始し、ステージはOPの裏で構築。開始は早いが1〜2秒のコマ落ちが出る
+- 実測ではこの機体で解禁 10.5秒('world') vs 10.9秒('cast')＝**ステージ構築の方がキャスト先読みより早く終わるため、'world'にしても実質待たされない**
+- OP前に必須: プレイヤーVRM / 会話キャスト / **捕食アセット(2138ms・単発2030msのフリーズ)** / 部位溶解ウォーム / ステージのcompileAsync
+- OP裏で安全: 道路網の各サブ工程・建物の実作業・公園・森・FX・NPC読込（いずれも実測でコマ落ちほぼゼロ）
