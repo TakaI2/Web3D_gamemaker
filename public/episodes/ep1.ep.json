@@ -1,0 +1,17 @@
+{
+  "format": "episode",
+  "version": 1,
+  "id": "ep1",
+  "no": 1,
+  "title": "EP1 フローゼ防衛戦",
+  "subtitle": "DEAD ATMOS ASSAULT",
+  "map": "floz",
+  "stage": "city",
+  "flow": "cityfly.flow.json",
+  "data": {
+    "talks": "talks.json",
+    "events": "events.json",
+    "speech": [],
+    "bgm": "Sound_Wave.ogg"
+  }
+}

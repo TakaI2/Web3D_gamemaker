@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { normalizeEpisode } from '../lib/episode.js';
 
 // CityFlyを自己完結の dist-cityfly/ に書き出す。
 // three / three-vrm 等は CDN（esm.sh / jsdelivr）から実行時取得するため同梱不要。
@@ -12,7 +13,14 @@ const root = path.resolve(__dirname, '..');
 const src  = path.join(root, 'city-fly');
 const MP_BUILD = process.env.MP === '1';   // MP=1 → マルチプレイ専用ビルド（別出力・ログイン画面つき）
 const pub  = path.join(root, 'public');
-const DEFAULT_MAP = process.env.MAP || 'mytown';   // 既定マップ（MAP=名前 npm run build:cityfly で変更可）
+// エピソード（EP=ep0 で指定）。既定マップは EP から導出する。MAP を明示した場合はそちらが優先。
+const EP_ID = process.env.EP || null;
+let epDef = null;
+if (EP_ID) {
+  try { epDef = normalizeEpisode(JSON.parse(fs.readFileSync(path.join(root, 'public', 'episodes', EP_ID + '.ep.json'), 'utf8')), EP_ID); }
+  catch (e) { console.warn(`エピソード定義を読めません（EP=${EP_ID}）: ` + e.message); }
+}
+const DEFAULT_MAP = process.env.MAP || (epDef ? epDef.map : 'mytown');   // 既定マップ（MAP=名前 npm run build:cityfly で変更可）
 // OUT=名前 で出力先を変更（例: CyberBat配信ビルド → OUT=dist-cyberbat MAP=tutorial）
 const dest = path.join(root, process.env.OUT || (MP_BUILD ? 'dist-cityfly-mp' : 'dist-cityfly'));
 const OUT_NAME = path.basename(dest);
@@ -24,9 +32,15 @@ fs.mkdirSync(dest, { recursive: true });
 
 // index.html: DEFAULT_MAP を注入してコピー
 const html = fs.readFileSync(path.join(src, 'index.html'), 'utf8')
-  .replace('<script type="module"', `<script>window.DEFAULT_MAP = '${DEFAULT_MAP}';${MP_BUILD ? ' window.MP_BUILD = true;' : ''}</script>\n  <script type="module"`);
+  .replace('<script type="module"', `<script>window.DEFAULT_MAP = '${DEFAULT_MAP}';${epDef ? ` window.DEFAULT_EP = '${epDef.id}';` : ''}${MP_BUILD ? ' window.MP_BUILD = true;' : ''}</script>\n  <script type="module"`);
 fs.writeFileSync(path.join(dest, 'index.html'), html);
-console.log(`copied: index.html (DEFAULT_MAP=${DEFAULT_MAP}${MP_BUILD ? ' / MPビルド' : ''})`);
+console.log(`copied: index.html (DEFAULT_MAP=${DEFAULT_MAP}${epDef ? ' / EP=' + epDef.id : ''}${MP_BUILD ? ' / MPビルド' : ''})`);
+// エピソード定義（一覧＋各EP。数KBなので全部入れる。起動時の解決に使う）
+const epSrc = path.join(pub, 'episodes');
+if (fs.existsSync(epSrc)) {
+  fs.cpSync(epSrc, path.join(dest, 'episodes'), { recursive: true });
+  console.log('copied: episodes/');
+}
 
 // city-fly.js: ローカル相対参照を dist 内ローカル（./）へ書き換え
 const jsSrc = fs.readFileSync(path.join(src, 'city-fly.js'), 'utf8')
@@ -75,7 +89,7 @@ if (fs.existsSync(mapsSrc)) {
 const texPngs = new Set(['electric.png']);   // アルティメット乱射のシート（コードから直接参照）
 const rewriteTexPaths = (text) => text.replace(/\.\.\/([\w\-. %@]+\.png)/g, (_, name) => { texPngs.add(name); return './tex/' + name; });
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js', 'vrm-expressions.js', 'vrm-tk.js', 'pose-kit.js', 'grab-shapes.js']) {
+for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js', 'episode.js','vrm-expressions.js', 'vrm-tk.js', 'pose-kit.js', 'grab-shapes.js']) {
   const libSrc = rewriteTexPaths(fs.readFileSync(path.join(root, 'lib', f), 'utf8')
     .replace(/\.\.\/lib\//g, './')
     .replace(/\.\.\/speech\//g, './speech/'));   // speech-set.js は import.meta.url 相対（distではlibがルート直下）

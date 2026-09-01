@@ -1,0 +1,17 @@
+{
+  "format": "episode",
+  "version": 1,
+  "id": "ep0",
+  "no": 0,
+  "title": "EP0 訓練プログラム",
+  "subtitle": "TRAINING PROGRAM",
+  "map": "tutorial",
+  "stage": "rooms",
+  "flow": "tutorial.flow.json",
+  "data": {
+    "talks": "tutorial_talks.json",
+    "events": "tutorial_events.json",
+    "speech": ["dummydoll.speech.json", "pneuma.speech.json"],
+    "bgm": "zensen-he-totugekiseyo.ogg"
+  }
+}

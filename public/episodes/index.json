@@ -1,0 +1,8 @@
+{
+  "format": "episode-index",
+  "version": 1,
+  "episodes": [
+    { "id": "ep0", "no": 0, "file": "ep0.ep.json", "map": "tutorial", "title": "EP0 訓練プログラム" },
+    { "id": "ep1", "no": 1, "file": "ep1.ep.json", "map": "floz",     "title": "EP1 フローゼ防衛戦" }
+  ]
+}

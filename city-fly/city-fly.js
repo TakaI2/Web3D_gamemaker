@@ -22,6 +22,7 @@ import { createLipSync } from '../lib/lip-sync.js';
 import { createTkBeam } from '../lib/vrm-tk.js';
 import { registerCustomExpressions, resetEmotionExpressions } from '../lib/vrm-expressions.js';
 import { createFlow } from '../lib/flow-runner.js';
+import { normalizeEpisode, legacyEpisode, episodeFileFor, nextEpisodeOf } from '../lib/episode.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
 import { generateBuildings, instanceId } from '../lib/kenney-buildings.js';
@@ -311,13 +312,46 @@ function recenterToHachioji() {
   console.log('recentered to Hachioji; ECEF origin=', c.toArray().map((v) => Math.round(v)));
 }
 
-// ── マップモード（map-editor製 .map.json の地形。既定 mytown＝my-city ステージ）──
-const MAP_NAME = new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || 'mytown';   // dist はビルド時に window.DEFAULT_MAP を注入
-const TUTORIAL = MAP_NAME === 'tutorial';   // チュートリアルステージ（部屋群を実行時構築。街の生成はスキップ）
-if (TUTORIAL) {   // スポーン位置と向きを非同期処理が走る前に確定（布はこの位置・向きで生成される）
-  player.pos.set(-1256, 4, 0);
-  player.yaw = Math.PI / 2;
-  camYaw = Math.PI / 2; camPitch = 0.1;
+// ── エピソード（OP→本編→分岐ED→次EP）とマップの決定 ──
+// 解決順: ?ep=<id> → ?map=<name> の逆引き → window.DEFAULT_EP（dist注入）→ window.DEFAULT_MAP の逆引き → 旧構成
+// episode 確定までは既定値。resolveEpisode() が setupTitle/loadGameEvents/init より先に走る（ファイル末尾）。
+let episode = legacyEpisode(new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || 'mytown');
+let MAP_NAME = episode.map;
+let TUTORIAL = episode.stage === 'rooms';   // 部屋群を実行時構築するステージ（街の生成はスキップ）
+async function resolveEpisode() {
+  const qs = new URLSearchParams(location.search);
+  const qEp = qs.get('ep'), qMap = qs.get('map');
+  const epId = qEp || (qMap ? null : window.DEFAULT_EP || null);
+  const mapName = qMap || window.DEFAULT_MAP || 'mytown';
+  let index = [];
+  try { index = (await (await fetch('../episodes/index.json')).json()).episodes || []; }
+  catch { /* 一覧が無い構成でも動く（下でファイル名を直接試す）*/ }
+  const file = episodeFileFor(index, epId, mapName);
+  let ep = null;
+  if (file) {
+    try { ep = normalizeEpisode(await (await fetch('../episodes/' + file)).json(), epId); }
+    catch (err) { console.warn('エピソード定義を読めません（旧構成で起動）:', file, err); }
+  }
+  applyEpisode(ep || legacyEpisode(mapName));
+}
+function applyEpisode(ep) {
+  episode = ep;
+  MAP_NAME = ep.map;
+  TUTORIAL = ep.stage === 'rooms';
+  special.ult = ep.rules.special; special.totem = ep.rules.special;
+  if (TUTORIAL) {   // スポーン位置と向きを非同期処理が走る前に確定（布はこの位置・向きで生成される）
+    player.pos.set(-1256, 4, 0);
+    player.yaw = Math.PI / 2;
+    camYaw = Math.PI / 2; camPitch = 0.1;
+  }
+  console.log('episode:', ep.id, '/ map', ep.map, '/ stage', ep.stage, '/ flow', ep.flow);
+}
+// 次エピソードへ。別マップは地形/建物キットごと入れ替わるのでURL遷移で作り直す（同一マップの差し替えは今後）
+function goToEpisode(id) {
+  const u = new URL(location.href);
+  u.searchParams.set('ep', id);
+  u.searchParams.delete('map');
+  location.href = u.toString();
 }
 // 性能切り分け用スイッチ。?diag=1 で GPU名/drawCall/三角数まで表示。
 //   ?nocape=1 マント無効 / ?nocity=1 建物無効 / ?nonpc=1 NPC(ken)と車を無効 / ?dpr=1 解像度を下げる
@@ -1945,7 +1979,7 @@ let gameMode = 'title';   // 'title' | 'training' | 'play'（'op'/'ed' はP2で�
 const gp = { destroyed: 0, attritionPts: 0 };          // 都市被害・敵損耗の実測値
 const ATTR_PTS = { jet: 3, walker: 20, spider: 35 };   // 撃破ポイント（想定総量100pt=100%）
 // 必殺技: ゲージMAXでのみ発動できる大技。解放前は使えない（空中=電撃乱射 / 接地=トーテム）
-const special = { ult: !TUTORIAL, totem: !TUTORIAL };   // 街は従来どおり最初から使用可。チュートリアルでは扱わない（未解放のまま）
+const special = { ult: true, totem: true };   // 実際の初期値は applyEpisode() が episode.rules.special から設定する
 function unlockSpecial(name) {
   if (name === 'all') { special.ult = true; special.totem = true; return; }
   if (name in special) special[name] = true;
@@ -2048,7 +2082,7 @@ function setupTitle() {
       + '<span style="' + logoBase + 'background-image:linear-gradient(180deg,#fff0f2 8%,#ff8090 44%,#e0203c 62%,#8c0a20 100%);">BAT</span>'
     + '</div>'
     + "<div style=\"font:700 " + subPx + "px Orbitron,'Arial Black',Impact,sans-serif;color:#cfe4ff;letter-spacing:0.34em;margin-top:2px;"
-      + 'text-shadow:0 2px 8px #000,0 0 18px rgba(0,0,0,0.95),0 0 26px rgba(80,170,255,0.45);">' + (TUTORIAL ? 'TRAINING PROGRAM' : 'DEAD ATMOS ASSAULT') + '</div>'
+      + 'text-shadow:0 2px 8px #000,0 0 18px rgba(0,0,0,0.95),0 0 26px rgba(80,170,255,0.45);">' + (episode.subtitle || (TUTORIAL ? 'TRAINING PROGRAM' : 'DEAD ATMOS ASSAULT')) + '</div>'
     + '<button id="cf-start" style="' + btn + 'margin-top:64px;" disabled>準備中…</button>';
   document.body.appendChild(titleEl);
   const bs = titleEl.querySelector('#cf-start');
@@ -2143,7 +2177,7 @@ let gameBgm = null;
 function updateGameBgm() {
   const want = gameMode === 'play' && !playerDead;
   if (want) {
-    if (!gameBgm) { gameBgm = new Audio(audioSrc(PUB_ROOT + 'BGM/' + (TUTORIAL ? 'zensen-he-totugekiseyo.ogg' : 'Sound_Wave.ogg'))); gameBgm.loop = true; gameBgm.volume = 0.45; }
+    if (!gameBgm) { gameBgm = new Audio(audioSrc(PUB_ROOT + 'BGM/' + (episode.bgm || 'Sound_Wave.ogg'))); gameBgm.loop = true; gameBgm.volume = 0.45; }
     if (gameBgm.paused) gameBgm.play().catch(() => { /* 自動再生制限 */ });
   } else if (gameBgm && !gameBgm.paused) gameBgm.pause();
 }
@@ -2235,7 +2269,7 @@ async function playScenario(name, after = 'play') {   // after: 'play'=本編へ
 let flowRt = null, flowNode = null, flowBattleDone = false, flowTimer = null, flowFallback = false;   // flowTimer={port,t}=ポート発火の遅延（撃破演出を見せてからED）
 async function startFlow() {
   if (!flowRt) {
-    try { flowRt = createFlow(await (await fetch('../flow/' + (TUTORIAL ? 'tutorial' : 'cityfly') + '.flow.json')).json()); }
+    try { flowRt = createFlow(await (await fetch('../flow/' + episode.flow)).json()); }
     catch (err) { console.warn('フロー読込失敗（本編へ直行）:', err); }
   }
   if (!flowRt) { flowFallback = true; gameMode = 'play'; return; }   // フロー読込失敗＝本編直行
@@ -2245,7 +2279,7 @@ async function startFlow() {
 function flowAdvance(port) {
   if (!flowRt || !flowNode) return;
   const nx = flowRt.next(flowNode.id, port);
-  if (!nx) { runFlowEnd(); return; }
+  if (!nx) { runFlowEnd(null); return; }
   flowNode = nx;
   if (nx.type === 'story') {
     const name = String((nx.data && nx.data.story) || '').replace(/\.story\.json$/, '');
@@ -2254,7 +2288,7 @@ function flowAdvance(port) {
   } else if (nx.type === 'battle') {
     gameMode = 'play';
   } else if (nx.type === 'end') {
-    runFlowEnd();
+    runFlowEnd(nx);
   } else {
     flowAdvance('next');   // start等は素通り
   }
@@ -2326,7 +2360,7 @@ async function softRestart() {
     wantedPts = 0; wantedCool = 0;
     largeBeam.active = false; if (largeBeam.mesh) largeBeam.mesh.visible = false;
     largeBeamSound(false); eatingSound(false);
-    special.ult = !TUTORIAL; special.totem = !TUTORIAL;
+    special.ult = episode.rules.special; special.totem = episode.rules.special;
     // フロー/イベント
     flowNode = null; flowBattleDone = false; flowTimer = null; flowFallback = false;
     ev.fired.clear(); ev.flags = {}; ev.spawnAllow = {}; ev.kills.length = 0; ev.pendingOn.clear(); ev.lastPort = null;
@@ -2350,7 +2384,9 @@ async function softRestart() {
     location.reload();
   } finally { tut.restarting = false; }
 }
-function runFlowEnd() {   // フロー終了＝タイトルへ
+function runFlowEnd(node) {   // フロー終了。end ノードが next を持っていれば次エピソードへ分岐する
+  const nextEp = nextEpisodeOf(node);
+  if (nextEp) { goToEpisode(nextEp); return; }
   if (TUTORIAL) { softRestart(); return; }   // 読み込み済みVRM/シェーダを捨てない
   location.reload();
 }
@@ -2372,8 +2408,8 @@ function updateFlowTimer(dt) {   // battle中のポート発火遅延（例: ウ
 async function loadGameEvents() {
   try {
     const [e, t] = await Promise.all([
-      fetch('../cityfly/' + (TUTORIAL ? 'tutorial_events' : 'events') + '.json').then((r) => r.json()),
-      fetch('../cityfly/' + (TUTORIAL ? 'tutorial_talks' : 'talks') + '.json').then((r) => r.json()),
+      fetch('../cityfly/' + episode.events).then((r) => r.json()),
+      fetch('../cityfly/' + episode.talks).then((r) => r.json()),
     ]);
     ev.defs = Array.isArray(e.events) ? e.events : [];
     ev.talks = t;
@@ -3108,7 +3144,8 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial, get kenAssets() { return kenAssets; }, softRestart,
+window.__fly = { get episode() { return episode; }, testFlowEnd: (node) => runFlowEnd(node),   // エピソード確認・EP遷移のテスト用
+  get player() { return player; }, get camera() { return camera; }, gp, attritionPct, cityDamagePct, startMode, get mode() { return gameMode; }, ev, queueTalk, addKill, scn, playScenario, addWanted, get portraitOn() { return portraitOn; }, get portraitStage() { return portraitStage; }, guests: portraitGuests, talkWho: () => portraitWho, get portraitCam() { return portraitCam; }, get portraitLip() { return portraitLip; }, get flowNode() { return flowNode; }, swapPlayer, idbPutNpc, npcSelection, playerDamage, get hp() { return playerHp; }, get dmgParts() { return dmgParts; }, get hour() { return gameHour; }, setHour: (h) => { gameHour = h; }, get trains() { return trains; }, get railPath() { return railPath; }, get cars() { return cars; }, get roadNodes() { return roadNodes; }, get edgeKinds() { return edgeKindByPair; }, get police() { return police; }, get port() { return portShip; }, get cont() { return portCont; }, get jets() { return jets; }, get debris() { return debris; }, get tut() { return tut; }, get kens() { return kens; }, get props() { return tutProps; }, get largeBeam() { return largeBeam; }, cancelEating, get special() { return special; }, unlockSpecial, get kenAssets() { return kenAssets; }, softRestart,
   hitTest: (car, ox, oy, oz, dx, dy, dz, maxT = 500) => rayHitObj(new THREE.Vector3(ox, oy, oz), new THREE.Vector3(dx, dy, dz).normalize(), car, maxT),
   testLargeBeam: (sec) => { player.chargeT = sec; fireLargeBeam(); }, setTutDoor,
   tutWarp: (i) => { const r = tut.rooms[i]; if (r) { player.pos.set(r.x0 + 20, 10, 0); player.vel.set(0, 0, 0); } }, takeContainer, destroyContainer, breakCar, debugThrow,
@@ -10300,6 +10337,8 @@ function onResize() {
   renderer.setSize(w, h);
 }
 
-setupTitle();
-loadGameEvents();
-init().catch((e) => showError('初期化失敗: ' + (e?.message || e)));
+resolveEpisode().then(() => {   // タイトル文言・会話/イベント・マップ名がエピソードで決まるので最初に確定させる
+  setupTitle();
+  loadGameEvents();
+  return init();
+}).catch((e) => showError('初期化失敗: ' + (e?.message || e)));
