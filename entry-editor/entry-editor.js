@@ -16,7 +16,8 @@ let modelObj = null, currentPath = null;
 let entries = {};            // relPath -> [{kind,pos}]
 const markerGroup = new THREE.Group();
 let selectedMarker = null;
-let gizmo = null, gizmoMode = 'translate', justDragged = false;
+let gizmo = null, gizmoMode = 'translate', justDragged = false, shiftDown = false;
+const ROT_SNAP = Math.PI / 4;   // Shift押下中の回転刻み（45度）
 let signManifest = {};       // セット名 -> ["uv1.png", ...]（advertise/manifest.json）
 let texVer = 0;              // 画像再読込用のキャッシュバスター
 const texCache = new Map();
@@ -122,8 +123,12 @@ function ensureGizmo() {
     if (!e.value) justDragged = true;   // ドラッグ終了直後のクリックでマーカーを増やさない
   });
   gizmo.addEventListener('objectChange', syncFromGizmo);
+  applySnap();
   scene.add(gizmo.getHelper ? gizmo.getHelper() : gizmo);   // r169以降は helper を add する
   return gizmo;
+}
+function applySnap() {   // Shiftを押している間だけ45度スナップ（three.js の TransformControls 例と同じ流儀）
+  if (gizmo) gizmo.setRotationSnap(shiftDown ? ROT_SNAP : null);
 }
 function syncFromGizmo() {
   const m = selectedMarker;
@@ -165,7 +170,7 @@ function selectMarker(m) {
     $('light-color').value = m.userData.def.color || '';
     $('light-blink').value = String(m.userData.def.blink ?? 0);
   }
-  setStatus(m ? `選択: ${KIND_LABEL[m.userData.def.kind] || m.userData.def.kind}（削除ボタンで除去）` : '選択解除');
+  setStatus(m ? `選択: ${KIND_LABEL[m.userData.def.kind] || m.userData.def.kind}（Deleteキー / 削除ボタンで除去）` : '選択解除');
 }
 
 function onClick(e) {
@@ -291,6 +296,10 @@ async function init() {
     sel.appendChild(o);
   }
   sel.addEventListener('change', () => loadModel(sel.value).catch((e) => setStatus('読込失敗: ' + e.message)));
+  renderer.domElement.addEventListener('pointerdown', () => {
+    // 幅×高やセット名の入力欄にフォーカスが残っていると Delete が文字削除に食われるので外す
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur?.();
+  });
   renderer.domElement.addEventListener('click', onClick);
   $('btn-del').addEventListener('click', deleteSelected);
   $('btn-save').addEventListener('click', saveEntries);
@@ -349,12 +358,15 @@ async function init() {
   for (const [m, b] of Object.entries(gzBtns)) b.addEventListener('click', () => { setGizmoMode(m); syncGzBtns(); });
   syncGzBtns();
   window.addEventListener('keydown', (e) => {
-    if (e.target instanceof HTMLInputElement) return;
-    if (e.code === 'Delete') deleteSelected();
+    if (e.key === 'Shift' && !shiftDown) { shiftDown = true; applySnap(); }
+    if (e.target instanceof HTMLInputElement) return;   // 入力欄の編集中は文字削除を優先
+    if (e.code === 'Delete' || e.code === 'Backspace') { e.preventDefault(); deleteSelected(); }
     else if (e.code === 'KeyG') { setGizmoMode('translate'); syncGzBtns(); }
     else if (e.code === 'KeyR') { setGizmoMode('rotate'); syncGzBtns(); }
     else if (e.code === 'Escape') { setGizmoMode('off'); syncGzBtns(); }
   });
+  window.addEventListener('keyup', (e) => { if (e.key === 'Shift') { shiftDown = false; applySnap(); } });
+  window.addEventListener('blur', () => { shiftDown = false; applySnap(); });   // Alt+Tab等でShiftが押しっぱなし扱いにならないように
   window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
   if (list.length) { sel.value = list[0]; loadModel(list[0]); }
   renderer.setAnimationLoop(() => {
@@ -370,4 +382,9 @@ async function init() {
   });
   setStatus('建物を選び、面をクリックしてマーカーを設置（看板はセット名を決めて「テンプレ作成」）');
 }
+// 自動テスト用の覗き口（city-fly の __fly と同じ流儀）
+window.__ee = {
+  get gizmo() { return gizmo; }, get camera() { return camera; }, get selected() { return selectedMarker; },
+  get markers() { return markerGroup.children; }, get entries() { return entries; },
+};
 init().catch((e) => { setStatus('初期化失敗: ' + e.message); console.error(e); });
