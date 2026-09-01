@@ -234,24 +234,7 @@ async function init() {
   dbg('init 開始');
   loadProg(2, 'マップ地形を読込中…');
   groundGroup = new THREE.Group(); scene.add(groundGroup);
-  // map-editor 製 .map.json の自作地形マップ（?map=<name>、既定 mytown）
-  let chain = profPhase('地形', () => buildMapGround())().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)));
-  chain = chain.then(() => loadProg(12, TUTORIAL ? 'シナリオ素材を読込中…' : '道路網を構築中…'));
-  if (TUTORIAL) {
-    chain = chain.then(profPhase('シナリオ素材', () => tutWaitScenarioAssets()));   // ネイ+会話キャストを先に読み切る（タイトルは眠りネイ表示へ）
-    chain = chain.then(profPhase('部屋ステージ', () => buildTutorialStage()));      // ステージ構築はその後＝タイトル/OP再生の裏で進行
-    chain = chain.then(() => loadProg(72, 'エフェクトを準備中…'));
-  } else {
-    chain = chain.then(profPhase('道路網', () => loadRoads()));
-    chain = chain.then(() => loadProg(25, '建物を配置中…'));
-    if (KENNEY_CITY) chain = chain.then(profPhase('建物', () => buildKenneyCity()));   // 実道路網に Kenney 建物を配置
-    chain = chain.then(() => loadProg(52, '公園と森を生成中…'));
-    chain = chain.then(profPhase('公園', () => buildParks().catch((e) => console.warn('公園生成失敗', e))));   // 閉じスプラインの公園
-    chain = chain.then(profPhase('森', () => buildForest().catch((e) => console.warn('森生成失敗', e))));   // 空き地の森（建物確定後）
-    chain = chain.then(() => loadProg(62, 'エフェクトを準備中…'));
-  }
-  // ステージ完成（パイプラインのコンパイルまで含む）。タイトル解禁とプレイヤー移動の解禁条件になる
-  chain = chain.then(() => { stageReady = true; });
+  let chain = buildStage().catch((e) => showError('マップ読込失敗: ' + (e?.message || e)));
   chain = chain.then(profPhase('FX/敵材質ウォーム', async () => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
     try { warmEnemyMats(); } catch (e) { console.warn('敵材質ウォーム失敗:', e); }
     profPhase('FX:着弾', () => loadImpactFx())().catch((e) => console.warn('着弾FX準備失敗:', e));
@@ -321,21 +304,21 @@ function recenterToHachioji() {
 let episode = legacyEpisode(new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || 'mytown');
 let MAP_NAME = episode.map;
 let TUTORIAL = episode.stage === 'rooms';   // 部屋群を実行時構築するステージ（街の生成はスキップ）
+async function loadEpisode(epId, mapName) {   // 定義ファイルを読んで正規化（読めなければ null）
+  let index = [];
+  try { index = (await (await fetch('../episodes/index.json')).json()).episodes || []; }
+  catch { /* 一覧が無い構成でも動く（下でファイル名を直接試す）*/ }
+  const file = episodeFileFor(index, epId, mapName);
+  if (!file) return null;
+  try { return normalizeEpisode(await (await fetch('../episodes/' + file)).json(), epId); }
+  catch (err) { console.warn('エピソード定義を読めません:', file, err); return null; }
+}
 async function resolveEpisode() {
   const qs = new URLSearchParams(location.search);
   const qEp = qs.get('ep'), qMap = qs.get('map');
   const epId = qEp || (qMap ? null : window.DEFAULT_EP || null);
   const mapName = qMap || window.DEFAULT_MAP || 'mytown';
-  let index = [];
-  try { index = (await (await fetch('../episodes/index.json')).json()).episodes || []; }
-  catch { /* 一覧が無い構成でも動く（下でファイル名を直接試す）*/ }
-  const file = episodeFileFor(index, epId, mapName);
-  let ep = null;
-  if (file) {
-    try { ep = normalizeEpisode(await (await fetch('../episodes/' + file)).json(), epId); }
-    catch (err) { console.warn('エピソード定義を読めません（旧構成で起動）:', file, err); }
-  }
-  applyEpisode(ep || legacyEpisode(mapName));
+  applyEpisode(await loadEpisode(epId, mapName) || legacyEpisode(mapName));
 }
 function applyEpisode(ep) {
   episode = ep;
@@ -349,12 +332,39 @@ function applyEpisode(ep) {
   }
   console.log('episode:', ep.id, '/ map', ep.map, '/ stage', ep.stage, '/ flow', ep.flow);
 }
-// 次エピソードへ。別マップは地形/建物キットごと入れ替わるのでURL遷移で作り直す（同一マップの差し替えは今後）
-function goToEpisode(id) {
-  const u = new URL(location.href);
-  u.searchParams.set('ep', id);
-  u.searchParams.delete('map');
-  location.href = u.toString();
+// 次エピソードへ。読み込み済みのVRM・コンパイル済みシェーダ・FXプール・会話キャストを持ち越したまま
+// ステージだけ入れ替える（再読込は約7秒、うち6秒がVRMのパース。作り直しならそこを丸ごと省ける）。
+// 失敗したら安全側に倒してURL遷移＝通常の読み込みでやり直す。
+let epSwapping = false;
+async function goToEpisode(id) {
+  if (epSwapping) return;
+  epSwapping = true;
+  try {
+    const ep = await loadEpisode(id, null);
+    if (!ep) throw new Error('エピソード定義が見つかりません: ' + id);
+    gameMode = 'title';
+    resetGameState();
+    stageReady = false;
+    disposeStage({ keepKens: false });   // 住民/ドールの実体は捨てる（VRMアセットは kenAssets に残る）
+    applyEpisode(ep);
+    const u = new URL(location.href);
+    u.searchParams.set('ep', ep.id); u.searchParams.delete('map');
+    history.replaceState(null, '', u.toString());   // リロードしても同じエピソードに戻る
+    flowRt = null;                 // フローはエピソードごとに読み直す
+    await loadGameEvents();        // talks/events も同様
+    loadProg(0, '次のエピソードを準備中…');
+    await buildStage();
+    spawnPlayerForStage();
+    buildPlayerCloth();   // 布は「作られた場所」に居続けるので、ワープ後は作り直す
+    if (playerBundle) await setupDamageFx(playerBundle, player.vrm).catch((e) => console.warn('damage fx再初期化失敗:', e));   // 新しいマントへ貼り直す
+    if (kenAssets.ready) { if (TUTORIAL) tutSpawnDolls(); else setKenCount(KEN_COUNT); }
+    startMode('play');             // 新エピソードのOPから
+  } catch (e) {
+    console.warn('エピソード切替に失敗（URL遷移でやり直し）:', e);
+    const u = new URL(location.href);
+    u.searchParams.set('ep', id); u.searchParams.delete('map');
+    location.href = u.toString();
+  } finally { epSwapping = false; }
 }
 // 性能切り分け用スイッチ。?diag=1 で GPU名/drawCall/三角数まで表示。
 //   ?nocape=1 マント無効 / ?nocity=1 建物無効 / ?nonpc=1 NPC(ken)と車を無効 / ?dpr=1 解像度を下げる
@@ -454,14 +464,14 @@ function buildMapWater() {
     mesh.scale.set(w.w || 100, 1, w.d || 100);
     const rep = Math.max(2, Math.round((w.w || 100) / 30));
     mesh.userData.rep = rep;   // 大きい水面ほど法線を細かく繰り返す
-    scene.add(mesh);
+    addStage(mesh, true);
     waterMeshes.push(mesh);
   }
   if (waterMeshes.length) tex.repeat.set(waterMeshes[0].userData.rep, waterMeshes[0].userData.rep);
   // 遠距離マテリアルのパイプラインも起動時にコンパイルさせる（切替ヒッチ防止）
   const pre = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), waterFarMat);
   pre.position.set(0, -800, 0);
-  scene.add(pre);
+  addStage(pre, true);
   console.log('water planes:', waterMeshes.length);
 }
 function updateWater(dt) {
@@ -1745,7 +1755,7 @@ async function buildTutorialStage() {
   let x = -totalL / 2;   // 西外壁の西端
   const doorHole = { z0: -TUT_DOOR_W / 2, z1: TUT_DOOR_W / 2, y0: 0, y1: TUT_DOOR_H };
   tut.root = new THREE.Group();
-  cityDamaged = new THREE.Group(); scene.add(cityDamaged);   // 破壊で単体化した建物の置き場（街と共通の破壊経路が使う）
+  addStage(cityDamaged = new THREE.Group());   // 破壊で単体化した建物の置き場（街と共通の破壊経路が使う）
   for (let i = 0; i < TUT_ROOMS.length; i++) {
     const r = TUT_ROOMS[i], prev = TUT_ROOMS[i - 1];
     const spanW = (prev ? Math.max(prev.W, r.W) : r.W) / 2 + TUT_WALL;
@@ -1799,7 +1809,7 @@ async function buildTutorialStage() {
   const em = new THREE.Mesh(mergeGeometries(emGeoms, false), new THREE.MeshBasicMaterial({ color: 0xe8f6ff }));
   em.matrixAutoUpdate = false;
   tut.root.add(em);
-  scene.add(tut.root);
+  addStage(tut.root);   // 中身は disposeStage が個別に破棄する
   cityRoot = tut.root;   // タイトル解錠条件（cityRoot && collBoxes.length）を満たす
   loadProg(55, 'コンテナを配置中…');
   await buildTutContainers().catch((e) => console.warn('コンテナ配置失敗', e));
@@ -2347,7 +2357,7 @@ function flowAdvance(port) {
 }
 // ステージ再構築のために「そのステージが作った物」を全部片付ける。
 // VRM・コンパイル済みシェーダ・会話/シナリオJSONは保持する（ここが再読込の6秒ぶん）
-function disposeStage() {
+function disposeStage({ keepKens = true } = {}) {
   // 破壊で単体化した建物（カーブ済みメッシュ）
   for (const rec of [...damagedList, ...dyingList]) { if (rec.std && rec.std.parent) rec.std.parent.remove(rec.std); }
   damagedList.length = 0; dyingList.length = 0;
@@ -2389,6 +2399,126 @@ function disposeStage() {
   shotFx.length = 0;
   thrownCars.length = 0; respawnCars.length = 0; takenConts.length = 0;
   if (grabbedCar) { grabbedCar.grabbed = false; grabbedCar = null; }
+  // 街の生成物（道路・橋・鉄道・埠頭・公園・森・車・ネオン・看板…）と地形。addStage で登録済み
+  disposeStageObjects();
+  for (const c of [...groundGroup.children]) {
+    c.traverse((o) => { if (o.geometry) o.geometry.dispose(); });   // 地形ジオメトリはマップごとに作り直す
+    groundGroup.remove(c);
+  }
+  waterMeshes.length = 0; cars.length = 0; trains.length = 0;
+  portShip = null; portCont = null; railPath = null; roadGroup = null;
+  activeEdges = []; roadNodes = new Map(); cityInfo = null;
+  if (walker) walkerRemove();
+  if (spider) spiderRemove();
+  for (const p of police) { if (p.mesh && p.mesh.parent) p.mesh.parent.remove(p.mesh); }
+  police.length = 0;
+  if (!keepKens) {   // エピソード切替: 住民/ドールの実体は捨てる（VRMアセット kenAssets は残す＝再パースしない）
+    for (const m of [...kens]) { try { finalizeRemoveKenAssets(m); } catch (e) { console.warn('ken破棄失敗', e); } }
+    kens.length = 0; kenDesired = 0;
+  }
+}
+// addStage で登録したステージ生成物を捨てる。dispose=true のものだけ実ジオメトリ/材質も解放する
+// （clone やテンプレ共有のものを解放すると次の生成が壊れるため）
+function disposeStageObjects() {
+  for (const { obj, dispose } of stageObjs) {
+    if (dispose) {
+      obj.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+        for (const mt of ms) mt.dispose();
+      });
+    }
+    if (obj.parent) obj.parent.remove(obj);
+  }
+  stageObjs.length = 0;
+}
+// ステージを作り直す前の状態リセット（ソフトリスタート／エピソード切替の共通処理）。
+// VRM・シェーダ・FXプール・会話キャストには触らない＝作り直しが速いのはここを触らないから。
+function resetGameState() {
+  hideGameOver();
+  // シナリオ表示・会話・HUDを畳む
+  portraitStage = false; portraitOn = false; setActiveGuest(null); clearStageBg(); setGameHudVisible(true);
+  talkQ.length = 0; talkCur = null; if (talkEls) talkEls.wrap.style.display = 'none';
+  // プレイヤー
+  playerDead = false; playerRagOn = false; playerLandRag = false; playerDeathT = 0;
+  if (playerRagdoll) { try { setRagdollActive(playerRagdoll, false); } catch { /* noop */ } }
+  try { player.vrm.humanoid?.resetNormalizedPose?.(); } catch { /* noop */ }
+  player.eating = false; player.prey = null; player.oneShot = null; player.charging = false; player.chargeT = 0;
+  playerHp = PLAYER_HP_MAX; updateHpUI(); applyDamageFx();
+  killCount = 0; killShowT = 0; if (killEl) killEl.style.opacity = '0';
+  gp.destroyed = 0; gp.attritionPts = 0;
+  wantedPts = 0; wantedCool = 0;
+  largeBeam.active = false; if (largeBeam.mesh) largeBeam.mesh.visible = false;
+  largeBeamSound(false); eatingSound(false);
+  special.ult = episode.rules.special; special.totem = episode.rules.special;
+  // フロー/イベント
+  flowNode = null; flowBattleDone = false; flowTimer = null; flowFallback = false;
+  ev.fired.clear(); ev.flags = {}; ev.spawnAllow = {}; ev.kills.length = 0; ev.pendingOn.clear(); ev.lastPort = null;
+  // チュートリアル進行
+  Object.assign(tut, { ready: false, room: 0, started: false, midFired: {}, goalDone: false, cullRoom: -99,
+    rooms: [], doors: [], goal: null, targetsDown: 0, targetsTotal: 0, gateDown: false, rescued: 0, jetBase: 0,
+    dollsSpawned: false, aerialOn: false, aerialClear: false, killTalk: false, fortDown: false, fedPneuma: false,
+    feedTalk: false, boss: null, safety: null, turrets: null, fortMd: null, hurtCd: 0 });
+}
+// ステージ本体の構築（地形 → 部屋 or 街）。init とエピソード切替の共通経路。
+// 完了時に stageReady が立ち、タイトルの「ゲームスタート」とプレイヤーの移動が解禁される。
+async function buildStage() {
+  // map-editor 製 .map.json の自作地形マップ（?map=<name> / エピソードの map）
+  await profPhase('地形', () => buildMapGround())();
+  loadProg(12, TUTORIAL ? 'シナリオ素材を読込中…' : '道路網を構築中…');
+  if (TUTORIAL) {
+    await profPhase('シナリオ素材', () => tutWaitScenarioAssets())();   // ネイ+会話キャストを先に読み切る（タイトルは眠りネイ表示へ）
+    await profPhase('部屋ステージ', () => buildTutorialStage())();
+    loadProg(72, 'エフェクトを準備中…');
+  } else {
+    await profPhase('道路網', () => loadRoads())();
+    loadProg(25, '建物を配置中…');
+    if (KENNEY_CITY) await profPhase('建物', () => buildKenneyCity())();   // 実道路網に Kenney 建物を配置
+    loadProg(52, '公園と森を生成中…');
+    await profPhase('公園', () => buildParks().catch((e) => console.warn('公園生成失敗', e)))();   // 閉じスプラインの公園
+    await profPhase('森', () => buildForest().catch((e) => console.warn('森生成失敗', e)))();      // 空き地の森（建物確定後）
+    loadProg(62, 'エフェクトを準備中…');
+  }
+  // ステージ完成（パイプラインのコンパイルまで含む）。タイトル解禁とプレイヤー移動の解禁条件になる
+  stageReady = true;
+}
+// マント（GPUクロス）を現在位置・現在の向きで作る。空中でも落ちないよう floorY は無効化して作る。
+// エピソード切替でも呼ぶ（布は「作られた場所」に居続けるので、ワープ後は作り直すのが確実）。
+function buildPlayerCloth() {
+  const bundle = playerBundle;
+  try { player.cloth?.dispose?.(); } catch (e) { console.warn('マント破棄失敗:', e); }
+  player.cloth = null;
+  // ?nocape=1 でマントを生成しない（性能切り分け用: マントが重さの原因かを比較できる）
+  if (!bundle || !bundle.cloth || NO_CAPE || !GPU_CLOTH_OK) return;
+  try {
+    // lib/vrm-cloth の初期配置は editorTransform.ry しか回さず、モデルの向き(yaw+faceOffset)を知らない。
+    // アンカーは初期配置から再導出されるため、向きを ry に合成しないと首元が180°破綻する
+    // （Joyはspawn時 yawπ+faceOffsetπ=2π≡0で偶然無事だった）。tx/tz も同じ回転で回す。
+    const tr0 = bundle.cloth.editorTransform ?? { tx: 0, ty: 0, tz: 0, ry: 0, scale: 1 };
+    // 体の向き(three.jsのY回転)へ布の初期配置を合わせる。vrm-clothのry回転(x'=xc−zs)は
+    // three.jsのY回転(x'=xc+zs)と逆向きなので ry からは「引き」、平行移動は逆回転をかける。
+    // （旧式 ry0+yawDeg は yaw=180°=街のスポーン向きでのみ偶然一致し、90°では180°ズレて「マントが前に付く」）
+    const yawDeg = (player.yaw + player.faceOffset) * 180 / Math.PI;
+    const c0 = Math.cos((yawDeg) * Math.PI / 180), s0 = Math.sin((yawDeg) * Math.PI / 180);
+    const trAdj = { ...tr0, ry: (tr0.ry || 0) - yawDeg,
+      tx: (tr0.tx || 0) * c0 + (tr0.tz || 0) * s0,
+      tz: -(tr0.tx || 0) * s0 + (tr0.tz || 0) * c0 };
+    player.cloth = createVRMCloth({ renderer, scene, vrm: player.vrm, cloth: { ...bundle.cloth, editorTransform: trAdj }, basePos: player.pos, floorY: -1e9 });
+    if (portraitOnReady && player.cloth.clothMesh) player.cloth.clothMesh.layers.enable(PORTRAIT_LAYER);   // 立体ポートレートにも映す
+  } catch (e) { console.warn('マント生成失敗:', e); }
+}
+function spawnPlayerForStage() {   // ステージ種別ごとの開始位置へ置く
+  if (TUTORIAL && tutSpawn) {
+    player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);
+    player.yaw = Math.PI / 2; camYaw = Math.PI / 2; camPitch = 0.1;
+  } else {
+    player.pos.set(0, 230, 150);
+  }
+  player.vel.set(0, 0, 0);
+  player.vrm.scene.position.copy(player.pos);
+  player.vrm.scene.rotation.set(0, player.yaw + player.faceOffset, 0);
+  player.vrm.scene.updateMatrixWorld(true);
+  setState('idle');
 }
 // ED後/ゲームオーバーの「タイトルへ」= ページ再読込ではなくステージだけ作り直す。
 // 実測: 再読込は約7秒（うち6秒はVRMのパース）／作り直しは0.1秒程度
@@ -2397,40 +2527,15 @@ async function softRestart() {
   tut.restarting = true;
   try {
     gameMode = 'title';
-    hideGameOver();
-    // シナリオ表示・会話・HUDを畳む
-    portraitStage = false; portraitOn = false; setActiveGuest(null); clearStageBg(); setGameHudVisible(true);
-    talkQ.length = 0; talkCur = null; if (talkEls) talkEls.wrap.style.display = 'none';
-    // ゲーム状態
-    playerDead = false; playerRagOn = false; playerLandRag = false; playerDeathT = 0;
-    if (playerRagdoll) { try { setRagdollActive(playerRagdoll, false); } catch { /* noop */ } }
-    try { player.vrm.humanoid?.resetNormalizedPose?.(); } catch { /* noop */ }
-    player.eating = false; player.prey = null; player.oneShot = null; player.charging = false; player.chargeT = 0;
-    playerHp = PLAYER_HP_MAX; updateHpUI(); applyDamageFx();
-    killCount = 0; killShowT = 0; if (killEl) killEl.style.opacity = '0';
-    gp.destroyed = 0; gp.attritionPts = 0;
-    wantedPts = 0; wantedCool = 0;
-    largeBeam.active = false; if (largeBeam.mesh) largeBeam.mesh.visible = false;
-    largeBeamSound(false); eatingSound(false);
-    special.ult = episode.rules.special; special.totem = episode.rules.special;
-    // フロー/イベント
-    flowNode = null; flowBattleDone = false; flowTimer = null; flowFallback = false;
-    ev.fired.clear(); ev.flags = {}; ev.spawnAllow = {}; ev.kills.length = 0; ev.pendingOn.clear(); ev.lastPort = null;
+    resetGameState();
     // ステージを捨てて作り直す（VRM/シェーダは保持）
     stageReady = false;
     disposeStage();
-    Object.assign(tut, { ready: false, room: 0, started: false, midFired: {}, goalDone: false, cullRoom: -99,
-      rooms: [], doors: [], goal: null, targetsDown: 0, targetsTotal: 0, gateDown: false, rescued: 0, jetBase: 0,
-      dollsSpawned: false, aerialOn: false, aerialClear: false, killTalk: false, fortDown: false, fedPneuma: false,
-      feedTalk: false, boss: null, safety: null, turrets: null, fortMd: null, hurtCd: 0 });
     tutObjective('');
     await buildTutorialStage();
     stageReady = true;
     if (kenAssets.ready) resetDolls();   // 既存ドールを再利用（VRM再パースを避ける）
-    // プレイヤーを開始位置へ
-    if (tutSpawn) { player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]); player.vel.set(0, 0, 0); }
-    player.yaw = Math.PI / 2; camYaw = Math.PI / 2; camPitch = 0.1;
-    setState('idle');
+    spawnPlayerForStage();
     if (titleEl) titleEl.style.display = 'flex';   // 空文字だと cssText の flex が消えて縦並びが崩れる
     titleSleepOn = false;   // タイトルの眠りネイを作り直す
   } catch (e) {
@@ -2534,6 +2639,7 @@ function setupPortrait() {   // プレイヤーVRM読込後に呼ぶ
   // 注意: ポートレート専用のライトを足してはいけない。本編パスとライト構成が変わると
   // ノード材質が毎フレーム再コンパイルされ 16ms→1600ms に落ちる（実測）。既存ライトを共有する。
   player.vrm.scene.traverse((o) => o.layers.enable(PORTRAIT_LAYER));
+  portraitOnReady = true;
   if (player.cloth && player.cloth.clothMesh) player.cloth.clothMesh.layers.enable(PORTRAIT_LAYER);
   for (const l of [dayRefs.amb, dayRefs.sun, dayRefs.hemi, charFill.key]) if (l) l.layers.enable(PORTRAIT_LAYER);
   try { portraitLip = createLipSync(player.vrm); } catch (e) { console.warn('リップシンク初期化失敗:', e); }
@@ -3118,24 +3224,8 @@ async function loadPlayer() {
     player.mixer = new THREE.AnimationMixer(vrm.scene);
     // マント（GPUクロス）。空中でも落ちないよう floorY 無効化
     // ?nocape=1 でマントを生成しない（性能切り分け用: マントが重さの原因かを比較できる）
-    if (bundle.cloth && !NO_CAPE && GPU_CLOTH_OK) {
-      try {
-        // lib/vrm-cloth の初期配置は editorTransform.ry しか回さず、モデルの向き(yaw+faceOffset)を知らない。
-        // アンカーは初期配置から再導出されるため、向きを ry に合成しないと首元が180°破綻する
-        // （Joyはspawn時 yawπ+faceOffsetπ=2π≡0で偶然無事だった）。tx/tz も同じ回転で回す。
-        const tr0 = bundle.cloth.editorTransform ?? { tx: 0, ty: 0, tz: 0, ry: 0, scale: 1 };
-        // 体の向き(three.jsのY回転)へ布の初期配置を合わせる。vrm-clothのry回転(x'=xc−zs)は
-        // three.jsのY回転(x'=xc+zs)と逆向きなので ry からは「引き」、平行移動は逆回転をかける。
-        // （旧式 ry0+yawDeg は yaw=180°=街のスポーン向きでのみ偶然一致し、90°では180°ズレて「マントが前に付く」）
-        const yawDeg = (player.yaw + player.faceOffset) * 180 / Math.PI;
-        const c0 = Math.cos((yawDeg) * Math.PI / 180), s0 = Math.sin((yawDeg) * Math.PI / 180);
-        const trAdj = { ...tr0, ry: (tr0.ry || 0) - yawDeg,
-          tx: (tr0.tx || 0) * c0 + (tr0.tz || 0) * s0,
-          tz: -(tr0.tx || 0) * s0 + (tr0.tz || 0) * c0 };
-        player.cloth = createVRMCloth({ renderer, scene, vrm, cloth: { ...bundle.cloth, editorTransform: trAdj }, basePos: player.pos, floorY: -1e9 });
-      }
-      catch (e) { console.warn('マント生成失敗:', e); }
-    }
+    playerBundle = bundle;   // エピソード切替でマントを作り直すために保持（VRM本体は再パースしない）
+    buildPlayerCloth();
     // 飛行アニメ状態（timeline→VRMA→trim）。tps-flight と同じ状態機械
     for (const [name, def] of Object.entries(STATE_DEFS)) {
       try {
@@ -3827,7 +3917,7 @@ async function buildMapPort() {
     mesh.userData.car = portShip.proxy;
     console.log('port: ship len', Math.round(ship.size.x * ss), 'beam', Math.round(beam));
   } catch (e) { console.warn('客船生成失敗:', e); }
-  scene.add(grp);
+  addStage(grp, true);
 }
 function updatePort(dt) {
   const st = portShip;
@@ -3910,7 +4000,7 @@ function buildMapBridges() {
     }
     grpAll.add(g2);
   }
-  scene.add(grpAll);
+  addStage(grpAll, true);
   console.log('bridges:', mapBridges.length);
 }
 // ── 駅前ロータリー: 中央島（縁石＋芝＋噴水）。環道はroadsに焼き込み済み＝車は普通に周回する ──
@@ -3946,7 +4036,7 @@ async function buildRotaries() {
       grp.add(m);
     }
   }
-  scene.add(grp);
+  addStage(grp, true);
   console.log('rotaries:', mapRotaries.length);
 }
 // ── 鉄道: 複線レール＋高架（デッキ+円柱橋脚）＋駅ホーム＋列車の定期運行（.map.json rails）──
@@ -4086,7 +4176,7 @@ async function buildMapRails() {
     tcars.forEach((c, i) => { c.proxy.tRef = { tr, i }; });
     trains.push(tr);
   }
-  scene.add(grp);
+  addStage(grp, true);
   console.log('rails:', pts.length, 'pts /', Math.round(railPath.total) + 'm / 高架', elev.length, 'seg / 駅', railPath.stations.length, '/ 列車', trains.length, '編成');
 }
 function railPosAt(arc, out, tan) {
@@ -4755,7 +4845,7 @@ async function buildRoadMeshes() {
     }
   }
   const counts = await buildRoadsideProps(loadKit, _m, _q, _p, _s, _dir, _up);
-  scene.add(roadGroup);
+  addStage(roadGroup, true);
   console.log('roads:', activeEdges.length, 'lights:', lampMats.length, '+ dbl', dblMats.length, 'trees:', counts.trees);
 }
 
@@ -5093,7 +5183,7 @@ async function buildForest() {
         props.push({ kind, mesh, index: i, x: t.x, y: t.y, z: t.z, ry: t.ry, s: base * t.s, h, r: Math.max(1.5, h * 0.3), dead: false });
       }
       mesh.computeBoundingSphere();   // インスタンス全体の球＝これで視錐台カリングが効く
-      scene.add(mesh);
+  addStage(mesh);
       nChunks++;
     }
   };
@@ -5223,7 +5313,7 @@ async function buildParks() {
   }
   // 緑地メッシュ（全公園まとめて）
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x4e8f3e, roughness: 0.95, side: THREE.DoubleSide });
-  for (const gg of groundGeos) scene.add(new THREE.Mesh(gg, groundMat));
+  for (const gg of groundGeos) addStage(new THREE.Mesh(gg, groundMat), true);
   // ランタンの発光球（街灯と同じ: 夜だけ加算発光）
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
   let parkGlowMesh = null;
@@ -5235,7 +5325,7 @@ async function buildParks() {
       _m.makeTranslation(glowPos[i * 3], glowPos[i * 3 + 1], glowPos[i * 3 + 2]);
       parkGlowMesh.setMatrixAt(i, _m);
     }
-    scene.add(parkGlowMesh);
+  addStage(parkGlowMesh, true);
   }
   lantMats.forEach((it, i) => { it.glowIndex = i; it.glowMesh = parkGlowMesh; });
   // インスタンス配置＋破壊登録（種類ごとに1メッシュ）
@@ -5255,7 +5345,7 @@ async function buildParks() {
       if (it.glowIndex != null) { pr.glowIndex = it.glowIndex; pr.glowMesh = it.glowMesh; }
       props.push(pr);
     }
-    scene.add(mesh);
+  addStage(mesh, true);
   };
   addKind('hedge', hedge, hedgeMats, hs, PARK_HEDGE_H, (it, sv) => sv.set(it.sx, hs, hs));
   addKind('hedgeGate', gate, gateMats, gs, PARK_HEDGE_H, (it, sv) => sv.set(it.sx, gs, gs));
@@ -5384,7 +5474,7 @@ function drawRoadLines() {
   const pts = [];
   for (const e of activeEdges) pts.push(e.a.x, e.a.y, e.a.z, e.b.x, e.b.y, e.b.z);
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x2ad0ff, transparent: true, opacity: 0.35 })));
+  addStage(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x2ad0ff, transparent: true, opacity: 0.35 })), true);
 }
 async function spawnCars() {
   if (!activeEdges.length) return;
@@ -5406,7 +5496,7 @@ async function spawnCars() {
   for (let i = 0; i < CAR_COUNT; i++) {
     const e = pickEdgeNear(player.pos, i % 3 ? CAR_NEAR_R : 1e9);   // 2/3をプレイヤー近傍、1/3を全域へ
     const tpl = templates[i % templates.length];
-    const mesh = tpl.grp.clone(true); mesh.scale.setScalar(tpl.scale); scene.add(mesh);
+    const mesh = tpl.grp.clone(true); mesh.scale.setScalar(tpl.scale); addStage(mesh);   // テンプレのclone＝ジオメトリは捨てない
     const car = { mesh, aId: e.aId, bId: e.bId, t: Math.random(), speed: CAR_SPEED * (0.7 + Math.random() * 0.6), grabbed: false, thrown: false, dead: false };
     mesh.userData.car = car;   // レイキャストから車オブジェクトへ辿る（掴み用）
     cars.push(car);
@@ -5630,8 +5720,15 @@ function applyMapBuildings(gen) {
 }
 // ── Kenney 都市（実道路網に建物を手続き配置＝巨大ステージの土台）──
 const BLD_KIT_DIR = { city: 'city_GLB format/', suburban: 'kenney_city-kit-suburban_20/Models/GLB format/', industrial: 'Industrial_GLB format/' };
+let playerBundle = null;    // プレイヤーVRMの .npc.json バンドル（マント再生成に使う）
+let portraitOnReady = false;   // 立体ポートレートの初期化が済んだか（マント再生成時にレイヤを張り直す）
 let cityRoot = null;        // scene 直下の建物ルート（モデル単位の InstancedMesh 群）
 let stageReady = false;     // ステージ構築＋事前コンパイルまで完了したか（エピソード切替でも再利用）
+// エピソードを切り替えるとき、VRM・コンパイル済みシェーダ・FXプールは残したまま「そのステージが作った物」だけ捨てる。
+// scene直下へ置く物はここを通す。dispose=true は毎回作り直す実ジオメトリ（道路・公園・橋など）、
+// false はテンプレートのclone/共有ジオメトリ（車・森・コンテナ等。捨てると次回の生成が壊れる）。
+const stageObjs = [];
+function addStage(obj, dispose = false) { scene.add(obj); stageObjs.push({ obj, dispose }); return obj; }
 let cityDamaged = null;     // 破壊で単体化した建物のルート（レイキャスト対象に含める）
 let cityInfo = null;
 // 距離2段LOD: 近=フルモデル / 遠=バウンディングボックスの箱ポリ（頂点数を桁で削減）。定期再振り分け＋ヒステリシス
@@ -5671,8 +5768,8 @@ async function buildKenneyCity() {
 
   // モデル単位のグローバル InstancedMesh に集約（チャンク分割は InstancedMesh 個数=GPUバッファ/バインドグループ生成が
   // 数千個に膨れ、初回描画で20秒級のフリーズになる。モデル単位なら 40 個だけ＝生成が一瞬。低ポリ×インスタンスで常時描画でも軽い）
-  cityRoot = new THREE.Group(); scene.add(cityRoot);
-  cityDamaged = new THREE.Group(); scene.add(cityDamaged);   // 破壊で単体化した建物（追撃レイキャスト対象）
+  addStage(cityRoot = new THREE.Group());
+  addStage(cityDamaged = new THREE.Group());   // 破壊で単体化した建物（追撃レイキャスト対象。中身は bldModels 側で破棄）
   const byModel = new Map();
   for (const inst of gen.instances) {
     const k = inst.kit + '|' + inst.model;
@@ -8749,7 +8846,7 @@ function buildNeon() {
     if (pos[i].blink > 0) neonBlinks.push({ i, period: pos[i].blink, phase: Math.random() * pos[i].blink, r: pos[i].r, g: pos[i].g, b: pos[i].b });
   }
   if (neonBlinks.length && mesh.instanceColor) mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
-  scene.add(mesh);
+  addStage(mesh, true);
   neonMesh = mesh;
   console.log('neon lamps:', pos.length, neonBlinks.length ? `(点滅 ${neonBlinks.length})` : '');
 }
@@ -8816,7 +8913,7 @@ function buildWindowGlows() {
     mesh.setColorAt(i, _cc);
   }
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  scene.add(mesh);
+  addStage(mesh, true);
   windowGlowMesh = mesh;
   console.log('window glows:', items.length);
 }
@@ -8934,7 +9031,7 @@ async function buildSigns() {
   nm.alphaTest = 0.08;   // 切り抜き看板（背景透明PNG）に対応
   mesh.material = nm;
   mesh.frustumCulled = false;   // 街全体に散るので個別カリングは効かない（窓発光と同じ）
-  scene.add(mesh);
+  addStage(mesh, true);
   signMesh = mesh;
   console.log('signs:', n, '/ atlas', size + 'px', imgs.length + '枚');
 }
@@ -8952,7 +9049,7 @@ function buildCarLights() {
       n,
     );
     mesh.frustumCulled = false;
-    scene.add(mesh);
+    addStage(mesh, true);
     return mesh;
   };
   carHeadMesh = mk(0xfff0c0, 0.32); carHeadMat = carHeadMesh.material;
