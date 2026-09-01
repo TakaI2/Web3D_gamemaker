@@ -252,10 +252,10 @@ async function init() {
   }
   chain = chain.then(profPhase('FX/敵材質ウォーム', async () => {   // 世界完成後: 着弾FX・トーテム・地上NPC(ken)・生活エージェント
     try { warmEnemyMats(); } catch (e) { console.warn('敵材質ウォーム失敗:', e); }
-    loadImpactFx().catch((e) => console.warn('着弾FX準備失敗:', e));
-    ensureTotemFx().catch((e) => console.warn('トーテムFX準備失敗:', e));
-    try { initDebrisFx(); } catch (e) { console.warn('破片FX準備失敗:', e); }
-    try { initUltFx(); } catch (e) { console.warn('アルティメットFX準備失敗:', e); }
+    profPhase('FX:着弾', () => loadImpactFx())().catch((e) => console.warn('着弾FX準備失敗:', e));
+    profPhase('FX:トーテム', () => ensureTotemFx())().catch((e) => console.warn('トーテムFX準備失敗:', e));
+    profPhase('FX:破片', () => { try { initDebrisFx(); } catch (e) { console.warn('破片FX準備失敗:', e); } })();
+    profPhase('FX:アルティメット', () => { try { initUltFx(); } catch (e) { console.warn('アルティメットFX準備失敗:', e); } })();
     if (!NO_NPC) {   // 性能切り分け: ?nonpc=1 で住民NPCと生活エージェントを出さない
       profPhase('NPC:ken読込', () => prepareKenAssets())().then((ok) => {
         loadProg(88, 'NPCを準備中…');
@@ -267,7 +267,7 @@ async function init() {
     }
   }));
   chain.catch((e) => showError('地面/道路/建物生成失敗: ' + (e?.message || e)));
-  profPhase('プレイヤーVRM', () => loadPlayer())().then(() => { loadProg(TUTORIAL ? 30 : 78, 'キャラクターを準備中…'); return prepareBiteAssets(); }).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
+  profPhase('プレイヤーVRM', () => loadPlayer())().then(() => { loadProg(TUTORIAL ? 30 : 78, 'キャラクターを準備中…'); return profPhase('捕食アセット', () => prepareBiteAssets())(); }).catch((e) => console.warn('bite準備失敗:', e));   // TPSプレイヤー→捕食アセット
   try {
     // マルチプレイはMP専用ビルド(window.MP_BUILD)か ?mp=1 のときだけ有効化（通常のCityFlyはシングル専用のまま）
     const mpAvailable = MP_ON || !!window.MP_BUILD;
@@ -386,7 +386,8 @@ function profFrame(dtMs) {   // tick から呼ぶ。工程中のフレーム間�
     const n = profLastNote;
     profTimeline.push({ t: Math.round(performance.now()), gap: Math.round(dtMs), mode: gameMode,
       phases: [...profActive].map((r) => r.name).join('+') || '-',
-      note: n ? n.label : '-', noteAge: n ? Math.round(performance.now() - n.t) : -1 });
+      note: n ? n.label : '-', noteAge: n ? Math.round(performance.now() - n.t) : -1,
+      dmgWarm: Math.round((dmgWarmT || 0) * 100) / 100 });   // >0 なら部位溶解のウォーム中（実描画でパイプラインを温めている）
     if (profTimeline.length > 400) profTimeline.shift();
   }
   for (const r of profActive) {
@@ -1804,7 +1805,9 @@ async function buildTutorialStage() {
   const tutMats = new Set();   // 破壊対象の全材質のカーブ版を事前コンパイル（初破壊のヒッチ軽減。街と同じ資産）
   for (const md of bldModels) if (md.near) tutMats.add(md.near.material);
   prewarmCarveMats([...tutMats]);
-  try { setStatus('ステージを最適化中…'); if (renderer.compileAsync) await renderer.compileAsync(scene, camera); } catch (e) { console.warn('compileAsync', e); }
+  await profPhase('部屋:compileAsync', async () => {
+    try { setStatus('ステージを最適化中…'); if (renderer.compileAsync) await renderer.compileAsync(scene, camera); } catch (e) { console.warn('compileAsync', e); }
+  })();
   tutSpawn = [tut.rooms[0].x0 + 24, 4, 0];
   player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);   // 向きはマント生成後に loadPlayer 側で設定（布結合の回転ずれ防止）
   Object.assign(JET, { n: 6, spMin: 13, spMax: 22, orbitR: 95, killZone: 140, shotCd: 1e9, shotDmg: 0, bombCd: 1e9, resp: 5 });   // 訓練用戦闘機（低速・攻撃なし＝標的ドローン）
@@ -2152,7 +2155,7 @@ function startMode(mode) {
     if (mode === 'training') { portraitStage = false; portraitOn = false; clearStageBg(); setGameHudVisible(true); }
   }
   if (titleEl) titleEl.style.display = 'none';
-  warmDamageParts(3);   // 部位溶解のONパイプラインを実描画で温め直す
+  profPhase('被弾表現ウォーム', () => warmDamageParts(3))();   // 部位溶解のONパイプラインを実描画で温め直す
   // （起動時の5秒ウォームはタイトル読込中に空費され、プレイヤーが描かれる前に終わっていた
   //   →初回の被弾しきい値で650ms級のコンパイルストールが出ていた。ゲーム開始時に再ウォーム）
   if (mode === 'play') startFlow();   // start→story(OP)→battle の順にフローが進行
@@ -3177,7 +3180,7 @@ async function loadPlayer() {
     camTargetCur.copy(player.pos); camTargetCur.y += cam.height;
     camPosCur.copy(camTargetCur).addScaledVector(_fwd, -cam.dist);
     player.ready = true;
-    setupDamageFx(bundle, vrm).catch((e) => console.warn('damage fx初期化失敗:', e));
+    profPhase('ダメージFX', () => setupDamageFx(bundle, vrm))().catch((e) => console.warn('damage fx初期化失敗:', e));
     console.log('player ready; states=', Object.keys(player.states).length);
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
