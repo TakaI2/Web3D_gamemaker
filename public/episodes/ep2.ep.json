@@ -1,0 +1,17 @@
+{
+  "format": "episode",
+  "version": 1,
+  "id": "ep2",
+  "no": 2,
+  "title": "EP2 アルデン（仮）",
+  "subtitle": "ARDEN",
+  "map": "arden",
+  "stage": "city",
+  "flow": "ep1.flow.json",
+  "data": {
+    "talks": "ep1_talks.json",
+    "events": "ep1_events.json",
+    "speech": [],
+    "bgm": "Sound_Wave.ogg"
+  }
+}
