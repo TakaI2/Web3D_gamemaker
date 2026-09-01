@@ -301,6 +301,7 @@ const inWharf = (x, z) => !!WHARF && ((x > WHARF.x0 - 10 && x < WHARF.x1 + 10 &&
 // ═══════════ 3) 鉄道（駅数・蛇行量は設定。線形と高さは自動）═══════════
 const railSamples = [];
 const stations = [];
+const tunnels = [];   // トンネル坑口 {x,z,y,dx,dz}（dx,dz=坑口から明かり区間へ向かう向き）
 {
   const R = CFG.rail;
   const rng = mulberry(SEED + 555);
@@ -315,26 +316,64 @@ const stations = [];
     railSamples.push({ x, z });
   }
   for (let pass = 0; pass < 4; pass++) for (let i = 1; i < railSamples.length - 1; i++) railSamples[i].z = (railSamples[i - 1].z + railSamples[i].z * 2 + railSamples[i + 1].z) / 4;
-  {   // 端は山裾で打ち切り（終端駅が山麓になる）
-    let s0 = 0, s1 = railSamples.length - 1;
-    while (s0 < s1 && hAt(railSamples[s0].x, railSamples[s0].z) > 55) s0++;
-    while (s1 > s0 && hAt(railSamples[s1].x, railSamples[s1].z) > 55) s1--;
-    railSamples.splice(s1 + 1);
-    railSamples.splice(0, s0);
-  }
+  // 縦断線形。サンプル間隔10mなので 0.5m/サンプル = 勾配5%
+  const N = railSamples.length;
+  for (const s of railSamples) s.y = hAt(s.x, s.z) + 0.5;   // まずは地形なり
+  // ① 登り勾配の制限（下側包絡）: 「地形なり」を超えず、5%以内でしか登らない線形にする。
+  //    これで山では地形の方が先に上がる＝線路が山に潜る（＝トンネル区間になる）。
+  //    先に窪地埋め(max)をやると、山の高さが両端まで伝播して線路が空中に浮く（実際にそうなった）
+  for (let i = 1; i < N; i++) railSamples[i].y = Math.min(railSamples[i].y, railSamples[i - 1].y + 0.5);
+  for (let i = N - 2; i >= 0; i--) railSamples[i].y = Math.min(railSamples[i].y, railSamples[i + 1].y + 0.5);
+  // ② 局所的な構造物の最低高さを戻す（勾配制限より優先。中心部の高架・川越え）
   for (const s of railSamples) {
     const ter = hAt(s.x, s.z);
-    let y = ter + 0.5;                                             // 郊外=地上
-    if (Math.abs(s.x) <= R.elevated) y = Math.max(y, ter + 8);     // 中心部=高架
+    if (Math.abs(s.x) <= R.elevated && ter > 0) s.y = Math.max(s.y, ter + 8);
     const rv = riverAt(s.x, s.z);
-    if (rv.d < 40) y = Math.max(y, (rv.s ? rv.s.wl : 0) + 7);      // 川越え
-    s.y = y;
+    if (rv.d < 40) s.y = Math.max(s.y, (rv.s ? rv.s.wl : 0) + 7);
   }
-  for (let pass = 0; pass < 2; pass++) {   // 勾配5%制限
-    for (let i = 1; i < railSamples.length; i++) railSamples[i].y = Math.max(railSamples[i].y, railSamples[i - 1].y - 0.5);
-    for (let i = railSamples.length - 2; i >= 0; i--) railSamples[i].y = Math.max(railSamples[i].y, railSamples[i + 1].y - 0.5);
+  // ③ 下り勾配の制限（窪地埋め）。ここで残る高所は高架・橋だけなので伝播は局所的
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 1; i < N; i++) railSamples[i].y = Math.max(railSamples[i].y, railSamples[i - 1].y - 0.5);
+    for (let i = N - 2; i >= 0; i--) railSamples[i].y = Math.max(railSamples[i].y, railSamples[i + 1].y - 0.5);
   }
   for (let pass = 0; pass < 3; pass++) for (let i = 1; i < railSamples.length - 1; i++) railSamples[i].y = (railSamples[i - 1].y + railSamples[i].y * 2 + railSamples[i + 1].y) / 4;
+  // 両端はトンネル: 地形に潜る所をポータルにし、そこから少し山の中まで線路を延ばす
+  // （列車がトンネルへ吸い込まれて消え、しばらくして戻ってくる）
+  {
+    // 被り（地形−軌道）が DEEP 以上ある所を「山の中」とみなし、その境目を坑口にする。
+    // 被りが浅い所に坑門を置くと野原に建物が立っているだけに見えるので、8m は確保する
+    const DEEP = 8;
+    const cover = railSamples.map((s) => hAt(s.x, s.z) - s.y);
+    let s0 = 0; while (s0 < railSamples.length - 1 && cover[s0] >= DEEP) s0++;
+    let s1 = railSamples.length - 1; while (s1 > s0 && cover[s1] >= DEEP) s1--;
+    // 明かり区間側で地形が軌道より高い所は掘割にする（坑口までなだらかに切り通す）
+    for (let i = s0; i <= s1; i++) {
+      const s = railSamples[i];
+      if (cover[i] <= 0.4) continue;
+      const inner = 9, R = 30, bed = s.y - 0.6;
+      const i0 = clamp(Math.floor(((s.x - R) / SIZE + 0.5) * (RES - 1)), 0, RES - 1), i1 = clamp(Math.ceil(((s.x + R) / SIZE + 0.5) * (RES - 1)), 0, RES - 1);
+      const j0 = clamp(Math.floor(((s.z - R) / SIZE + 0.5) * (RES - 1)), 0, RES - 1), j1 = clamp(Math.ceil(((s.z + R) / SIZE + 0.5) * (RES - 1)), 0, RES - 1);
+      for (let jj = j0; jj <= j1; jj++) for (let ii = i0; ii <= i1; ii++) {
+        const x = (ii / (RES - 1) - 0.5) * SIZE, z = (jj / (RES - 1) - 0.5) * SIZE;
+        const d = Math.hypot(x - s.x, z - s.z);
+        if (d >= R) continue;
+        const cur = T.heights[jj * RES + ii];
+        const target = d <= inner ? bed : bed + smooth((d - inner) / (R - inner)) * (cur - bed);
+        if (target < cur) T.heights[jj * RES + ii] = target;
+      }
+    }
+
+    const EXT = 6;   // ポータルから山の中へ 60m 延ばす
+    const dirOf = (i, j) => {
+      const a = railSamples[i], b = railSamples[j];
+      const d = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+      return { dx: +((b.x - a.x) / d).toFixed(4), dz: +((b.z - a.z) / d).toFixed(4) };
+    };
+    if (s0 > 0) tunnels.push({ x: Math.round(railSamples[s0].x), z: Math.round(railSamples[s0].z), y: +railSamples[s0].y.toFixed(2), ...dirOf(s0, Math.min(s0 + 2, s1)) });
+    if (s1 < railSamples.length - 1) tunnels.push({ x: Math.round(railSamples[s1].x), z: Math.round(railSamples[s1].z), y: +railSamples[s1].y.toFixed(2), ...dirOf(s1, Math.max(s1 - 2, s0)) });
+    railSamples.splice(Math.min(railSamples.length - 1, s1 + EXT) + 1);
+    railSamples.splice(0, Math.max(0, s0 - EXT));
+  }
   // 駅は使える区間を等分した位置に置く（中央は必ず中央駅）
   const n = Math.max(2, R.stations);
   const nameOf = (i) => {
@@ -349,7 +388,7 @@ const stations = [];
     stations.push({ x: Math.round(s.x), z: Math.round(s.z), name: nameOf(i) });
   }
 }
-const rails = [{ points: railSamples.map((s) => [Math.round(s.x), Math.round(s.z), +s.y.toFixed(2)]), gauge: 5.2, stations }];
+const rails = [{ points: railSamples.map((s) => [Math.round(s.x), Math.round(s.z), +s.y.toFixed(2)]), gauge: 5.2, stations, tunnels }];
 // 線路敷の判定（道路・建物の両方で使う）。線路→道路→建物の順に作り、後段が前段を避ける。
 const RAIL_HALF = 9;          // 線路敷の半幅(m)
 const CROSS_SPACING = 340;    // 踏切の間隔(m)
@@ -715,7 +754,7 @@ for (const it of gen.instances) {
   if (!bad) for (const br of bridges) {   // 橋桁の上＋取り付け道路（坂）の範囲
     const alo = (it.x - br.x) * br.dx + (it.z - br.z) * br.dz;
     const per = -(it.x - br.x) * br.dz + (it.z - br.z) * br.dx;
-    if (Math.abs(alo) < br.len / 2 + 30 + foot && Math.abs(per) < br.w / 2 + 6 + foot) { bad = true; break; }
+    if (Math.abs(alo) < br.len / 2 + 40 + foot && Math.abs(per) < br.w / 2 + 34 + foot) { bad = true; break; }
   }
   if (!bad && railAt(it.x, it.z).d < RAIL_HALF + foot) bad = true;   // 線路敷（高架でも真下は空ける）
   if (!bad) for (const st of stations) if (Math.hypot(it.x - st.x, it.z - st.z) < 44) { bad = true; break; }
@@ -768,7 +807,7 @@ console.log('wrote:', dest, (fs.statSync(dest).size / 1024).toFixed(0) + 'KB');
 console.log('terrain h:', hMin.toFixed(1), '..', hMax.toFixed(1));
 console.log('roads:', roads.length, 'splines /', roadKm.toFixed(1) + 'km →', g.nodes.size, 'nodes /', g.edges.length, 'edges');
 console.log('rivers:', rivers.map((r) => `${r.points.length}点 ${Math.round(r.points.length * 26)}m 幅${r.points[0][2]}→${r.points.at(-1)[2]}m 水位${r.points[0][3]}→${r.points.at(-1)[3]}m`).join(' / ') || 'なし');
-console.log('rails:', railSamples.length, 'サンプル / 駅', stations.length, stations.map((s) => s.name).join(','));
+console.log('rails:', railSamples.length, 'サンプル / 駅', stations.length, stations.map((s) => s.name).join(','), '/ トンネル坑口', tunnels.length);
 console.log('bridges:', bridges.length, bridges.map((b) => b.kind + '@' + b.x + ',' + b.z).join(' '));
 console.log('buildings:', gen.instances.length, 'auto (removed', removed.length, ') + added', added.length, '/ zones', JSON.stringify(gen.zones));
 console.log('rotaries:', rotaries.length, '/ parks:', parks.length, '/ forest cells:', fCells, '/ wharf:', WHARF ? `${WHARF.x0}..${WHARF.x1}` : 'なし');

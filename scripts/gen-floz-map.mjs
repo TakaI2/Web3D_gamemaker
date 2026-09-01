@@ -567,7 +567,7 @@ for (const it of gen.instances) {
   if (!bad) for (const br of bridges) {
     const alo = (it.x - br.x) * br.dx + (it.z - br.z) * br.dz;
     const per = -(it.x - br.x) * br.dz + (it.z - br.z) * br.dx;
-    if (Math.abs(alo) < br.len / 2 + 30 + foot && Math.abs(per) < br.w / 2 + 6 + foot) { bad = true; break; }
+    if (Math.abs(alo) < br.len / 2 + 40 + foot && Math.abs(per) < br.w / 2 + 34 + foot) { bad = true; break; }
   }
   if (!bad) for (const s of railSamples) if (Math.hypot(it.x - s.x, it.z - s.z) < 9 + foot) { bad = true; break; }   // 線路敷
   if (!bad) for (const st2 of stations) if (Math.hypot(it.x - st2.x, it.z - st2.z) < 44) { bad = true; break; } // 駅前広場

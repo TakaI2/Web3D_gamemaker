@@ -4209,6 +4209,28 @@ async function buildMapRails() {
     grp.add(sg);
   }
   // 列車: train-electric-city（a=先頭/末尾・b/c=客車）×2編成（上り/下り）
+  // トンネル坑口（山に潜る所。線路はそのまま山の中へ延びているので、列車は吸い込まれて消える）
+  for (const t of (line.tunnels || [])) {
+    const tg = new THREE.Group();
+    tg.position.set(t.x, t.y, t.z);
+    tg.rotation.y = Math.atan2(t.dx, t.dz);   // +Z が明かり区間側
+    const stoneM = new THREE.MeshStandardMaterial({ color: 0x8d8f92, roughness: 0.95 });
+    const darkM = new THREE.MeshBasicMaterial({ color: 0x07090c });
+    const W = (railPath.gauge || 5.2) + 8.6, H = 9.2, D = 3.2;   // 開口幅/高さ/坑門の厚み
+    const put = (w, h, d, x, y, z, m = stoneM) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      mesh.position.set(x, y, z);
+      tg.add(mesh);
+    };
+    put(3.0, H + 3.2, D, W / 2 + 1.5, H / 2 - 1.6 + 1.6, 0);      // 左右の坑門
+    put(3.0, H + 3.2, D, -(W / 2 + 1.5), H / 2 - 1.6 + 1.6, 0);
+    put(W + 6, 3.2, D, 0, H + 1.6, 0);                            // 楣（まぐさ）
+    put(W + 6, 2.2, 1.2, 0, H + 3.9, 0.6);                        // 笠石
+    const hole = new THREE.Mesh(new THREE.PlaneGeometry(W, H + 1.2), darkM);   // 坑内の闇
+    hole.position.set(0, (H + 1.2) / 2 - 1.6, -D / 2 - 0.4);
+    tg.add(hole);
+    grp.add(tg);
+  }
   const CAR_LEN = 14;
   const carGeo = {};
   for (const nm of ['a', 'b', 'c']) {
@@ -4222,7 +4244,9 @@ async function buildMapRails() {
     g.scale(s, s, s);
     carGeo[nm] = { g, mat: asset.material };
   }
+  const TRAINS_PER_TRACK = 2;   // 1方向あたりの編成数。頻度はこれに比例する
   for (const [track, dir] of [[-1, 1], [1, -1]]) {
+   for (let ti = 0; ti < TRAINS_PER_TRACK; ti++) {
     const tcars = [];
     for (const [nm, flip] of [['a', true], ['b', true], ['c', true], ['b', true], ['a', false]]) {   // 先頭a+客車3両+末尾a（基準向きは実物合わせで反転済み）
       const g = carGeo[nm].g.clone();
@@ -4234,9 +4258,12 @@ async function buildMapRails() {
       mesh.userData.car = c.proxy;   // 照準レイの掴みでプロキシへ辿れるように
       tcars.push(c);
     }
-    const tr = { cars: tcars, track, dir, arc: railPath.total * (dir > 0 ? 0.35 : 0.65), speed: 0, stopT: 0, state: 'run', heldIdx: 0, wreckT: 0 };
+    // 同じ線路の編成は等間隔にずらして配置＝どこにいても列車に出会いやすくする
+    const frac = ((dir > 0 ? 0.35 : 0.65) + ti / TRAINS_PER_TRACK) % 1;
+    const tr = { cars: tcars, track, dir, arc: railPath.total * frac, speed: 0, stopT: 0, state: 'run', heldIdx: 0, wreckT: 0 };
     tcars.forEach((c, i) => { c.proxy.tRef = { tr, i }; });
     trains.push(tr);
+   }
   }
   addStage(grp, true);
   console.log('rails:', pts.length, 'pts /', Math.round(railPath.total) + 'm / 高架', elev.length, 'seg / 駅', railPath.stations.length, '/ 列車', trains.length, '編成');
