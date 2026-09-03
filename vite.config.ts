@@ -141,9 +141,10 @@ export default defineConfig({
               const allowed: Record<string, string> = { npc: 'npc', timeline: 'timeline', models: 'models', story: 'story', flow: 'flow', speech: 'speech', stage: 'stages', ragdoll: 'ragdoll', fx: 'fx', bitealign: 'bitealign', city: 'cities', room: 'rooms', map: 'maps', vrma: 'vrma', vamp_param: 'vamp_param', image: 'image', tools: 'tools', damage: 'damage', cityfly: 'cityfly', advertise: 'advertise' };
               const sub = allowed[dir];
               // 看板テクスチャは advertise/<セット名>/uv1.png のように1階層だけサブフォルダを許す。
-              // 各要素を basename 化してから末尾2つに絞る＝'..' や絶対パスは通らない
+              // models は Paint Editor 用に generated/<id>/paint.json の2階層まで許す。
+              // 各要素を basename 化してから末尾N個に絞る＝'..' や絶対パスは通らない
               const segs = String(filename || '').split('/').map((x) => path.basename(x)).filter((x) => x && x !== '.' && x !== '..');
-              const safe = segs.slice(-2).join('/');
+              const safe = segs.slice(-(dir === 'models' ? 3 : 2)).join('/');
               if (!sub || !safe) { res.statusCode = 400; res.end('bad request'); return; }
               const outDir = path.join(pub, sub);
               fs.mkdirSync(path.dirname(path.join(outDir, safe)), { recursive: true });
@@ -365,6 +366,29 @@ export default defineConfig({
           const files = kits.length ? kits : all;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(files));
+        });
+
+        // 生成オブジェクト一覧（public/models/generated/<id>/model.glb）。Jet Editor 等の
+        // 「面ペイント」対象をドロップダウンで選ぶための一覧。1フォルダ=1オブジェクト、
+        // ファイル名は model.glb / paint.json に固定（ゲーム側の読み込みパスも同じ規約に依存する）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/models/generated-manifest.json')) return next();
+          const dir = path.join(pub, 'models', 'generated');
+          const items: { id: string; hasGlb: boolean; hasPaint: boolean }[] = [];
+          if (fs.existsSync(dir)) {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (!entry.isDirectory()) continue;
+              const sub = path.join(dir, entry.name);
+              items.push({
+                id: entry.name,
+                hasGlb: fs.existsSync(path.join(sub, 'model.glb')),
+                hasPaint: fs.existsSync(path.join(sub, 'paint.json')),
+              });
+            }
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(items));
         });
 
         // タイムライン一覧: 既定は VRMA モーション(.vrma)。?ext=timeline.json で TL(JSON) を返す

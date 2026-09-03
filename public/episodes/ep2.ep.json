@@ -15,6 +15,6 @@
     "bgm": "Sound_Wave.ogg"
   },
   "rules": {
-    "jetModel": "custom"
+    "jetModel": "jet-custom"
   }
 }
