@@ -36,6 +36,42 @@ import { uniform, color, float, positionWorld, mx_noise_float, clamp, texture, u
 let renderer, scene, camera, pivot, groundGroup;
 const keysDown = {};
 let locked = false, recentered = false;
+// ── ポーズ機能 ──
+let paused = false;
+const PAUSE_ENABLED = !window.MP_BUILD;   // MP専用ビルドは他プレイヤーが止まらないため無効化
+let pauseEl = null;
+function loopingAudios() { return [gameBgm, lgBeamSnd, eatSnd].filter((a) => a); }   // 一時停止/再開の対象
+function ensurePauseUI() {
+  if (pauseEl) return;
+  pauseEl = document.createElement('div');
+  pauseEl.style.cssText = 'position:fixed;inset:0;z-index:38;display:none;flex-direction:column;gap:22px;'
+    + 'align-items:center;justify-content:center;background:rgba(6,8,16,0.6);';
+  const title = document.createElement('div');
+  title.textContent = 'PAUSE';
+  title.style.cssText = "font:900 54px 'Yu Gothic','Arial Black',Meiryo,sans-serif;color:#dfe8ff;letter-spacing:0.12em;text-shadow:0 4px 16px #000;";
+  const btnCss = 'font:700 20px Meiryo,sans-serif;padding:11px 40px;border-radius:10px;cursor:pointer;border:1px solid rgba(255,255,255,0.4);color:#fff;';
+  const resume = document.createElement('button');
+  resume.textContent = '再開'; resume.style.cssText = btnCss + 'background:#2a5fa0;';
+  resume.onclick = () => togglePause(false);
+  const toTitle = document.createElement('button');
+  toTitle.textContent = 'タイトルへ戻る'; toTitle.style.cssText = btnCss + 'background:#3a3f4a;';
+  toTitle.onclick = () => { togglePause(false); runFlowEnd(null); };
+  pauseEl.append(title, resume, toTitle);
+  document.body.appendChild(pauseEl);
+}
+function togglePause(next = !paused) {
+  if (next === paused) return;
+  if (next && (!PAUSE_ENABLED || gameMode !== 'play')) return;
+  paused = next;
+  ensurePauseUI();
+  pauseEl.style.display = paused ? 'flex' : 'none';
+  if (paused) {
+    try { document.exitPointerLock(); } catch { /* noop */ }
+    for (const a of loopingAudios()) { a._resumeAfterPause = !a.paused; if (!a.paused) a.pause(); }
+  } else {
+    for (const a of loopingAudios()) if (a._resumeAfterPause) { a.play().catch(() => {}); a._resumeAfterPause = false; }
+  }
+}
 // TPS プレイヤー（tps-flight から移植・WebGL）
 const KENNEY_CITY = true;   // 実道路網に Kenney 建物を手続き配置（破壊・都市ゲームの土台）
 const PLAYER_NPC = 'nei_v2.npc.json';
@@ -3346,7 +3382,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get buildProf() { return buildProf; },
+window.__fly = { get paused() { return paused; }, get gameBgmPaused() { return gameBgm ? gameBgm.paused : null; }, get buildProf() { return buildProf; },
   lookFrom: (x, y, z, pitch = -0.9, yaw = 0) => {   // 調査用: 指定座標へワープして視点角も指定する
     player.pos.set(x, y, z); player.vel.set(0, 0, 0);
     player.yaw = yaw; camYaw = yaw; camPitch = pitch;
@@ -5676,6 +5712,8 @@ function setupControls() {
   });
   window.addEventListener('keydown', (e) => {
     if (agentEd.open && e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // 入力欄への打鍵はゲームに流さない
+    if (e.code === 'Escape' && PAUSE_ENABLED && !agentEd.open && (gameMode === 'play' || paused)) { togglePause(); return; }
+    if (paused) return;   // ポーズ中はメニュー操作以外のキーを無視
     if (e.code === 'KeyM') { toggleAgentEd(); return; }
     if (agentEd.open) return;   // エディタ表示中はゲーム操作を止める
     keysDown[e.code] = true;
@@ -10707,8 +10745,9 @@ function updateSpider(dt) {
 }
 
 function tick() {
-  const dtRaw = _clock.getDelta();
+  const dtRaw = _clock.getDelta();   // 一時停止中も呼び続けて捨てる＝再開直後にdtが跳ねて物理が破綻するのを防ぐ
   if (PROF) profFrame(dtRaw * 1000);
+  if (paused) { renderer.render(scene, camera); renderPortrait(); return; }   // 全系統を一括停止。静止画のまま描画
   const dt = Math.min(dtRaw, 1 / 30);
   if (SHOW_FPS) updateFpsMeter();
   updateFlight(dt);
