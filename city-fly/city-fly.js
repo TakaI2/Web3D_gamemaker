@@ -5899,7 +5899,7 @@ function setupControls() {
   });
   window.addEventListener('keydown', (e) => {
     if (agentEd.open && e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // 入力欄への打鍵はゲームに流さない
-    if (e.code === 'Escape' && PAUSE_ENABLED && !agentEd.open && (gameMode === 'play' || paused)) { togglePause(); return; }
+    if ((e.code === 'Escape' || e.code === 'KeyP') && PAUSE_ENABLED && !agentEd.open && (gameMode === 'play' || paused)) { togglePause(); return; }
     if (paused) return;   // ポーズ中はメニュー操作以外のキーを無視
     if (e.code === 'KeyM') { toggleAgentEd(); return; }
     if (agentEd.open) return;   // エディタ表示中はゲーム操作を止める
