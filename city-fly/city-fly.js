@@ -36,101 +36,11 @@ import { uniform, color, float, positionWorld, mx_noise_float, clamp, texture, u
 let renderer, scene, camera, pivot, groundGroup;
 const keysDown = {};
 let locked = false, recentered = false;
-// ── ポーズ中の巻き戻しプレビュー用: プレイヤーのトランスフォームを常時リングバッファへ記録 ──
-// 「入力を録って再シミュレーション」ではなく「トランスフォームを録って再生」方式。
-// 理由: Math.random()が無シードで多用され、マントはWebGPU compute駆動で決定的再現が無いため。
-const REPLAY_HZ = 20, REPLAY_BUFFER_SEC = 3;           // 常時保持する秒数（スライダは直近1秒までなので余裕を見た値）
-const REPLAY_N = REPLAY_HZ * REPLAY_BUFFER_SEC;        // 60サンプル
-const REPLAY_FIELDS = 10;                              // x,y,z,qx,qy,qz,qw,stateCode,stateTime,hp
-// 事前確保のFloat32Array 1本へ上書きし続ける（GCゼロ。実測: .tmp/_perf3.cjs）
-const replayBuf = new Float32Array(REPLAY_N * REPLAY_FIELDS);
-let replayHead = 0, replayCount = 0, replayAcc = 0;
-let PLAYER_STATE_NAMES = null;   // player.states のキー一覧（起動後に確定するので遅延構築）
-function recordPlayerSample() {
-  if (!player.ready || !player.current) return;
-  if (!PLAYER_STATE_NAMES) PLAYER_STATE_NAMES = Object.keys(player.states);
-  const code = PLAYER_STATE_NAMES.indexOf(player.current);
-  const st = player.states[player.current];
-  const o = replayHead * REPLAY_FIELDS;
-  const q = player.vrm.scene.quaternion, p2 = player.vrm.scene.position;
-  replayBuf[o] = p2.x; replayBuf[o + 1] = p2.y; replayBuf[o + 2] = p2.z;
-  replayBuf[o + 3] = q.x; replayBuf[o + 4] = q.y; replayBuf[o + 5] = q.z; replayBuf[o + 6] = q.w;
-  replayBuf[o + 7] = code < 0 ? 0 : code;
-  replayBuf[o + 8] = st ? st.action.time : 0;
-  replayBuf[o + 9] = playerHp;
-  replayHead = (replayHead + 1) % REPLAY_N;
-  replayCount = Math.min(REPLAY_N, replayCount + 1);
-}
-function updateReplayRecorder(dt) {
-  if (NO_RECORD || gameMode !== 'play') return;   // OP/ED/タイトル中は録らない
-  replayAcc += dt;
-  if (replayAcc < 1 / REPLAY_HZ) return;
-  replayAcc -= 1 / REPLAY_HZ;
-  recordPlayerSample();
-}
-// 記録開始からの経過秒(0..)に対応する記録2点を線形補間する
-function sampleReplayAt(tSec) {
-  const idxF = Math.max(0, Math.min(replayCount - 1, tSec * REPLAY_HZ));
-  const i0 = Math.floor(idxF), i1 = Math.min(replayCount - 1, i0 + 1), frac = idxF - i0;
-  const oldest = (replayHead - replayCount + REPLAY_N) % REPLAY_N;
-  const s0 = (oldest + i0) % REPLAY_N * REPLAY_FIELDS, s1 = (oldest + i1) % REPLAY_N * REPLAY_FIELDS;
-  const lerp = (k) => replayBuf[s0 + k] + (replayBuf[s1 + k] - replayBuf[s0 + k]) * frac;
-  // クォータニオンは線形補間→正規化（nlerp。20Hzサンプルなら十分な近似で毎フレームslerpするコストを避ける）
-  let qx = lerp(3), qy = lerp(4), qz = lerp(5), qw = lerp(6);
-  const qlen = Math.hypot(qx, qy, qz, qw) || 1; qx /= qlen; qy /= qlen; qz /= qlen; qw /= qlen;
-  return {
-    x: lerp(0), y: lerp(1), z: lerp(2), qx, qy, qz, qw,
-    stateCode: replayBuf[s0 + 7], stateTime: replayBuf[s0 + 8], hp: replayBuf[s0 + 9],   // 離散値は手前側サンプルでステップ
-  };
-}
 // ── ポーズ機能 ──
 let paused = false;
 const PAUSE_ENABLED = !window.MP_BUILD;   // MP専用ビルドは他プレイヤーが止まらないため無効化
 let pauseEl = null;
 function loopingAudios() { return [gameBgm, lgBeamSnd, eatSnd].filter((a) => a); }   // 一時停止/再開の対象
-// ── ポーズ中の巻き戻しプレビュー: リングバッファ（上のrecordPlayerSample等）を使い、直近1秒をスライダで見返せる ──
-let pauseRewindSec = 0;                              // スライダの値（0=現在 〜 REWIND_MAX_SEC=最大どれだけ過去か）
-const REWIND_MAX_SEC = 1.0;
-const pauseBaseQ = new THREE.Quaternion();           // ポーズに入った瞬間の「現在」の姿勢（スライダ0地点として復元する）
-let pauseBaseStateName = null, pauseBaseStateTime = 0;
-function placePauseCamera(cx, cy, cz) {   // 指定座標を中心に、既存のcamYaw/camPitch/cam.distでカメラを直置きする
-  camForwardRight();
-  _desiredTarget.set(cx, cy + cam.height, cz).addScaledVector(_right, cam.side);
-  _desiredPos.copy(_desiredTarget).addScaledVector(_fwd, -cam.dist);
-  camPosCur.copy(_desiredPos); camTargetCur.copy(_desiredTarget);
-  camera.position.copy(camPosCur); camera.lookAt(camTargetCur);
-}
-function applyPauseRewind(dt) {
-  if (pauseRewindSec <= 0.001) {   // スライダが0＝ポーズに入った瞬間の「現在」の姿勢へ戻す
-    player.vrm.scene.position.copy(player.pos);
-    player.vrm.scene.quaternion.copy(pauseBaseQ);
-    if (pauseBaseStateName && player.states[pauseBaseStateName]) {
-      if (pauseBaseStateName !== player.current) setState(pauseBaseStateName);
-      player.states[pauseBaseStateName].action.time = pauseBaseStateTime;
-      player.mixer.update(0);
-    }
-    player.vrm.update(0);
-    placePauseCamera(player.pos.x, player.pos.y, player.pos.z);
-    return;
-  }
-  const nowSec = replayCount / REPLAY_HZ;
-  const smp = sampleReplayAt(Math.max(0, nowSec - pauseRewindSec));
-  player.vrm.scene.position.set(smp.x, smp.y, smp.z);
-  player.vrm.scene.quaternion.set(smp.qx, smp.qy, smp.qz, smp.qw);
-  const stateName = PLAYER_STATE_NAMES && PLAYER_STATE_NAMES[smp.stateCode];
-  if (stateName && player.states[stateName]) {
-    if (stateName !== player.current) setState(stateName);
-    player.states[stateName].action.time = smp.stateTime;
-    player.mixer.update(0);
-  }
-  player.vrm.update(0);
-  if (player.cloth) {   // マントは記録せず、補間済み位置でその場に再生させる（決定的な再現は不要）
-    const fy = groundYAt(smp.x, smp.z, smp.y) ?? -1e9;
-    if (player.cloth.setFloorY) player.cloth.setFloorY(fy + 0.02);
-    player.cloth.update(dt, 0);
-  }
-  placePauseCamera(smp.x, smp.y, smp.z);
-}
 function ensurePauseUI() {
   if (pauseEl) return;
   // 全画面の暗転はしない（ゲーム画面をそのまま見せ、ドラッグで視点操作できるようにするため）。
@@ -147,18 +57,8 @@ function ensurePauseUI() {
   title.style.cssText = "font:900 26px 'Yu Gothic','Arial Black',Meiryo,sans-serif;color:#dfe8ff;letter-spacing:0.1em;"
     + 'text-shadow:0 2px 8px #000;margin-bottom:4px;';
   const hint = document.createElement('div');
-  hint.textContent = 'ドラッグ: 視点操作';
+  hint.textContent = 'ドラッグ: 視点操作 ／ ホイール・ピンチ: ズーム';
   hint.style.cssText = 'font:12px Meiryo,sans-serif;color:#9ab;margin-bottom:4px;';
-  const rewindLabel = document.createElement('div');
-  rewindLabel.textContent = '直前の位置: 現在';
-  rewindLabel.style.cssText = 'font:12px Meiryo,sans-serif;color:#9ab;';
-  const rewindSlider = document.createElement('input');
-  rewindSlider.type = 'range'; rewindSlider.min = '0'; rewindSlider.max = String(REWIND_MAX_SEC); rewindSlider.step = '0.01'; rewindSlider.value = '0';
-  rewindSlider.style.cssText = 'width:100%;margin-bottom:4px;';
-  rewindSlider.addEventListener('input', () => {
-    pauseRewindSec = parseFloat(rewindSlider.value) || 0;
-    rewindLabel.textContent = pauseRewindSec <= 0.001 ? '直前の位置: 現在' : `直前の位置: ${pauseRewindSec.toFixed(2)}秒前`;
-  });
   const btnCss = 'font:700 16px Meiryo,sans-serif;padding:11px 0;border-radius:9px;cursor:pointer;border:1px solid rgba(255,255,255,0.4);color:#fff;';
   const resume = document.createElement('button');
   resume.textContent = '再開'; resume.style.cssText = btnCss + 'background:#2a5fa0;';
@@ -166,10 +66,9 @@ function ensurePauseUI() {
   const toTitle = document.createElement('button');
   toTitle.textContent = 'タイトルへ戻る'; toTitle.style.cssText = btnCss + 'background:#3a3f4a;';
   toTitle.onclick = () => { togglePause(false); runFlowEnd(null); };
-  panel.append(title, hint, rewindLabel, rewindSlider, resume, toTitle);
+  panel.append(title, hint, resume, toTitle);
   pauseEl.appendChild(panel);
   document.body.appendChild(pauseEl);
-  pauseEl.__slider = rewindSlider; pauseEl.__label = rewindLabel;
 }
 function togglePause(next = !paused) {
   if (next === paused) return;
@@ -181,25 +80,9 @@ function togglePause(next = !paused) {
     try { document.exitPointerLock(); } catch { /* noop */ }
     for (const a of loopingAudios()) { a._resumeAfterPause = !a.paused; if (!a.paused) a.pause(); }
     sirenCtx?.suspend();   // パトカーのサイレンはHTMLAudioでなくWebAudio発振器で鳴らし続けるため個別に止める
-    pauseBaseQ.copy(player.vrm.scene.quaternion);   // 巻き戻しスライダの「現在」地点として保存
-    pauseBaseStateName = player.current;
-    pauseBaseStateTime = player.states[player.current]?.action.time ?? 0;
-    pauseRewindSec = 0;
-    pauseEl.__slider.value = '0'; pauseEl.__label.textContent = '直前の位置: 現在';
   } else {
     for (const a of loopingAudios()) if (a._resumeAfterPause) { a.play().catch(() => {}); a._resumeAfterPause = false; }
     sirenCtx?.resume();
-    if (pauseRewindSec > 0) {   // 巻き戻しを見たまま再開しても、実際のゲームは「現在」から続く
-      player.vrm.scene.position.copy(player.pos);
-      player.vrm.scene.quaternion.copy(pauseBaseQ);
-      if (pauseBaseStateName && player.states[pauseBaseStateName]) {
-        if (pauseBaseStateName !== player.current) setState(pauseBaseStateName);
-        player.states[pauseBaseStateName].action.time = pauseBaseStateTime;
-        player.mixer.update(0);
-      }
-      player.vrm.update(0);
-      pauseRewindSec = 0;
-    }
   }
 }
 // TPS プレイヤー（tps-flight から移植・WebGL）
@@ -583,7 +466,6 @@ const NO_PORTRAIT = _qs.get('noportrait') === '1';   // 会話ウィンドウの
 const NO_CITY = _qs.get('nocity') === '1';
 const NO_NPC = _qs.get('nonpc') === '1';
 const NO_FOREST = _qs.get('noforest') === '1';   // 性能切り分け: 森を生やさない
-const NO_RECORD = _qs.get('norecord') === '1';   // 性能切り分け: リプレイ録画を止める（録画コストの計測用）
 const PUB_ROOT = '../';   // public直下への相対パス（distビルドが './' へ書換える。BGM/gif等の動的パスに使用）
 const DIAG = _qs.get('diag') === '1';
 const DPR_CAP = parseFloat(_qs.get('dpr') || '') || 0;   // 例 ?dpr=1 で等倍（GPU負荷を大きく下げる）
@@ -3514,7 +3396,7 @@ async function loadPlayer() {
 }
 
 window.__fly = { get paused() { return paused; }, get gameBgmPaused() { return gameBgm ? gameBgm.paused : null; },
-  get sirenState() { return sirenCtx ? sirenCtx.state : 'none'; }, forceSiren: (on) => updateSiren(0, on, 50), get camDist() { return cam.dist; }, get replayCount() { return replayCount; }, killPlayer: () => playerDamage(9999), get pauseRewindSec() { return pauseRewindSec; }, get buildProf() { return buildProf; },
+  get sirenState() { return sirenCtx ? sirenCtx.state : 'none'; }, forceSiren: (on) => updateSiren(0, on, 50), get camDist() { return cam.dist; }, killPlayer: () => playerDamage(9999), get buildProf() { return buildProf; },
   lookFrom: (x, y, z, pitch = -0.9, yaw = 0) => {   // 調査用: 指定座標へワープして視点角も指定する
     player.pos.set(x, y, z); player.vel.set(0, 0, 0);
     player.yaw = yaw; camYaw = yaw; camPitch = pitch;
@@ -10952,8 +10834,8 @@ function updateSpider(dt) {
 function tick() {
   const dtRaw = _clock.getDelta();   // 一時停止中も呼び続けて捨てる＝再開直後にdtが跳ねて物理が破綻するのを防ぐ
   if (PROF) profFrame(dtRaw * 1000);
-  if (paused) {   // 全系統を一括停止。カメラ操作・巻き戻しスライダのプレビューだけ毎フレーム反映する
-    applyPauseRewind(Math.min(dtRaw, 1 / 30));
+  if (paused) {   // 全系統を一括停止。カメラだけはドラッグ操作に応じて動かす（他は静止したまま）
+    updateCamera(1);   // dt=1でcam.followの指数追従がほぼ収束＝実質スナップ（プレイヤー自身は動かないので違和感がない）
     camera.updateMatrixWorld();
     renderer.render(scene, camera); renderPortrait();
     return;
@@ -11010,7 +10892,6 @@ function tick() {
   if (speechUI) speechUI.update(dt, kenScreenPos);   // 頭上セリフバブル
   if (KENNEY_CITY) updateDamage(dt);
   if (KENNEY_CITY && bldModels.length) { _lodT -= dt; if (_lodT <= 0) { _lodT = LOD_INTERVAL; partitionBuildings(); } }   // 建物LODの定期再振り分け
-  updateReplayRecorder(dt);
   updateCamera(dt);
   camera.updateMatrixWorld();
   if (++_dbg % 30 === 0) {
