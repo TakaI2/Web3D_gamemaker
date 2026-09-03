@@ -104,7 +104,7 @@ if (fs.existsSync(mapsSrc)) {
 const texPngs = new Set(['electric.png']);   // アルティメット乱射のシート（コードから直接参照）
 const rewriteTexPaths = (text) => text.replace(/\.\.\/([\w\-. %@]+\.png)/g, (_, name) => { texPngs.add(name); return './tex/' + name; });
 // 共有 lib（すべて CDN 依存のみ。念のため ../lib/ を ./ へ）
-for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js', 'episode.js','vrm-expressions.js', 'vrm-tk.js', 'pose-kit.js', 'grab-shapes.js']) {
+for (const f of ['vrm-cloth.js', 'sheen-util.js', 'cityfly-mp.js', 'kenney-buildings.js', 'room-gen.js', 'terrain.js', 'fx-mesh.js', 'fx-beam.js', 'fx-tornado.js', 'fx-particles.js', 'fx-textures.js', 'fx-dissolve.js', 'vrm-ragdoll.js', 'npc-speech.js', 'speech-ui.js', 'speech-set.js', 'lip-sync.js', 'scenario2d.js', 'flow-runner.js', 'episode.js','vrm-expressions.js', 'vrm-tk.js', 'pose-kit.js', 'grab-shapes.js', 'jet-shapes.js']) {
   const libSrc = rewriteTexPaths(fs.readFileSync(path.join(root, 'lib', f), 'utf8')
     .replace(/\.\.\/lib\//g, './')
     .replace(/\.\.\/speech\//g, './speech/'));   // speech-set.js は import.meta.url 相対（distではlibがルート直下）
