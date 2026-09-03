@@ -38,6 +38,7 @@ const keysDown = {};
 let locked = false, recentered = false;
 // ── ポーズ機能 ──
 let paused = false;
+let suppressAutoPause = false;   // ゲームオーバー表示・生活NPCエディタ等、意図的な解除では自動ポーズしない
 const PAUSE_ENABLED = !window.MP_BUILD;   // MP専用ビルドは他プレイヤーが止まらないため無効化
 let pauseEl = null;
 function loopingAudios() { return [gameBgm, lgBeamSnd, eatSnd].filter((a) => a); }   // 一時停止/再開の対象
@@ -2291,6 +2292,7 @@ function warmDamageParts(frames = 8) {   // frames = 全部位アクティブで
 let dmgWarmDone = false;   // 部位溶解のウォームを最後までやり切ったか（やり切っていればゲーム開始時の再ウォームは不要）
 function showGameOver() {
   if (goEl) return;
+  suppressAutoPause = true;   // 下のexitPointerLockで自動ポーズが誤発火しないように
   goEl = document.createElement('div');
   goEl.style.cssText = 'position:fixed;inset:0;z-index:39;display:flex;flex-direction:column;gap:26px;align-items:center;justify-content:center;background:rgba(12,0,8,0.55);';
   goEl.innerHTML = '<div style="font:900 76px \'Yu Gothic\',\'Arial Black\',Meiryo,sans-serif;color:#ff4a5e;letter-spacing:0.1em;text-shadow:0 4px 20px #000;">GAME OVER</div>';
@@ -5718,7 +5720,16 @@ function setupControls() {
       else fireLargeBeam();   // チャージ解放＝5秒貫通ビーム
     } else if (e.button === 2) releaseGrab();   // 離すと投擲（tps-flight同様の振り回し投げ）
   });
-  document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === cv; });
+  document.addEventListener('pointerlockchange', () => {
+    const wasLocked = locked;
+    locked = document.pointerLockElement === cv;
+    // Escape押下時、ブラウザは keydown をページへ渡さずロック解除だけを行う（既知の仕様）。
+    // そのため keydown 側のEscape判定だけでは1回目の押下でポーズできない＝ここで検知して補う
+    if (wasLocked && !locked) {
+      if (suppressAutoPause) suppressAutoPause = false;
+      else if (PAUSE_ENABLED && gameMode === 'play' && !paused) togglePause(true);
+    }
+  });
   document.addEventListener('mousemove', (e) => {
     if (!locked) return;
     camYaw -= e.movementX * 0.0024; camPitch -= e.movementY * 0.0024;
@@ -7685,7 +7696,7 @@ function toggleAgentEd() {
   const el = $('agent-ed');
   if (el) el.style.display = agentEd.open ? 'flex' : 'none';
   if (agentEd.open) {
-    if (document.pointerLockElement) document.exitPointerLock();
+    if (document.pointerLockElement) { suppressAutoPause = true; document.exitPointerLock(); }
     for (const k of Object.keys(keysDown)) keysDown[k] = false;   // 押しっぱなし解除
     if (!agents.length) { setStatus('エージェント未生成（都市の読込完了を待ってください）'); }
     initAgentEdOnce();
