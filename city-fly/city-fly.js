@@ -36,6 +36,192 @@ import { uniform, color, float, positionWorld, mx_noise_float, clamp, texture, u
 let renderer, scene, camera, pivot, groundGroup;
 const keysDown = {};
 let locked = false, recentered = false;
+// ── リプレイ（キルカム）: 死亡/ボス撃破の直近を録画し、少し遅れて巻き戻し再生する ──
+// 記録は「入力を録って再シミュレーション」ではなく「トランスフォームを録って再生」方式。
+// 理由: Math.random()が無シードで多用され、マントはWebGPU compute駆動で決定的再現が無いため。
+// v1スコープ: プレイヤーの死亡のみに対応（ボス撃破への横展開は今回の範囲外・design.md参照）。
+const REPLAY_HZ = 20, REPLAY_BUFFER_SEC = 20;          // 常時保持する秒数（記録能力の上限）
+const REPLAY_N = REPLAY_HZ * REPLAY_BUFFER_SEC;        // 400サンプル
+const REPLAY_FIELDS = 10;                              // x,y,z,qx,qy,qz,qw,stateCode,stateTime,hp
+const POST_ROLL_SEC = 2.2;                             // トリガー後もこの秒数はライブで録画を続けてから巻き戻る
+const PLAYBACK_WINDOW_SEC = 7;                         // 実際に再生する長さ（バッファはこれより長く保持していてもよい）
+// 事前確保のFloat32Array 1本へ上書きし続ける（GCゼロ。実測: .tmp/_perf3.cjs）
+const replayBuf = new Float32Array(REPLAY_N * REPLAY_FIELDS);
+let replayHead = 0, replayCount = 0, replayAcc = 0;
+let PLAYER_STATE_NAMES = null;   // player.states のキー一覧（起動後に確定するので遅延構築）
+function recordPlayerSample() {
+  if (!player.ready || !player.current) return;
+  if (!PLAYER_STATE_NAMES) PLAYER_STATE_NAMES = Object.keys(player.states);
+  const code = PLAYER_STATE_NAMES.indexOf(player.current);
+  const st = player.states[player.current];
+  const o = replayHead * REPLAY_FIELDS;
+  const q = player.vrm.scene.quaternion, p2 = player.vrm.scene.position;
+  replayBuf[o] = p2.x; replayBuf[o + 1] = p2.y; replayBuf[o + 2] = p2.z;
+  replayBuf[o + 3] = q.x; replayBuf[o + 4] = q.y; replayBuf[o + 5] = q.z; replayBuf[o + 6] = q.w;
+  replayBuf[o + 7] = code < 0 ? 0 : code;
+  replayBuf[o + 8] = st ? st.action.time : 0;
+  replayBuf[o + 9] = playerHp;
+  replayHead = (replayHead + 1) % REPLAY_N;
+  replayCount = Math.min(REPLAY_N, replayCount + 1);
+}
+function updateReplayRecorder(dt) {
+  if (gameMode !== 'play') return;   // OP/ED/タイトル中は録らない
+  replayAcc += dt;
+  if (replayAcc < 1 / REPLAY_HZ) return;
+  replayAcc -= 1 / REPLAY_HZ;
+  recordPlayerSample();
+}
+// 再生時刻(0..durationSec, durationSec=バッファ全長)に対応する記録2点を線形補間する
+function sampleReplayAt(tSec) {
+  const idxF = Math.max(0, Math.min(replayCount - 1, tSec * REPLAY_HZ));
+  const i0 = Math.floor(idxF), i1 = Math.min(replayCount - 1, i0 + 1), frac = idxF - i0;
+  const oldest = (replayHead - replayCount + REPLAY_N) % REPLAY_N;
+  const s0 = (oldest + i0) % REPLAY_N * REPLAY_FIELDS, s1 = (oldest + i1) % REPLAY_N * REPLAY_FIELDS;
+  const lerp = (k) => replayBuf[s0 + k] + (replayBuf[s1 + k] - replayBuf[s0 + k]) * frac;
+  // クォータニオンは線形補間→正規化（nlerp。20Hzサンプルなら十分な近似で毎フレームslerpするコストを避ける）
+  let qx = lerp(3), qy = lerp(4), qz = lerp(5), qw = lerp(6);
+  const qlen = Math.hypot(qx, qy, qz, qw) || 1; qx /= qlen; qy /= qlen; qz /= qlen; qw /= qlen;
+  return {
+    x: lerp(0), y: lerp(1), z: lerp(2), qx, qy, qz, qw,
+    stateCode: replayBuf[s0 + 7], stateTime: replayBuf[s0 + 8], hp: replayBuf[s0 + 9],   // 離散値は手前側サンプルでステップ
+  };
+}
+const killcam = {
+  pending: null, active: false, subjectKind: null, playT: 0, windowStartSec: 0, durationSec: 0,
+  speed: 1, skipRequested: false,
+  cam: { yaw: 0, pitch: 0.3, dist: 9, idleT: 0, dragging: false },
+};
+function queueKillcam(subjectKind) {
+  if (killcam.pending || killcam.active) return;
+  killcam.pending = { subjectKind, t: 0 };
+}
+function updateKillcamPending(dt) {
+  const pnd = killcam.pending;
+  if (!pnd) return;
+  pnd.t += dt;
+  if (pnd.t >= POST_ROLL_SEC) { killcam.pending = null; startKillcamPlayback(pnd.subjectKind); }
+}
+function startKillcamPlayback(subjectKind) {
+  const totalSec = replayCount / REPLAY_HZ;
+  killcam.subjectKind = subjectKind;
+  killcam.windowStartSec = Math.max(0, totalSec - PLAYBACK_WINDOW_SEC);
+  killcam.durationSec = totalSec - killcam.windowStartSec;
+  killcam.playT = 0; killcam.speed = 1; killcam.skipRequested = false;
+  killcam.cam.yaw = camYaw; killcam.cam.pitch = 0.3; killcam.cam.dist = 9; killcam.cam.idleT = 0;
+  killcam.active = true;
+  try { document.exitPointerLock(); } catch { /* noop */ }
+  setGameHudVisible(false);   // 通常HUDを隠して演出に集中させる（キルカム専用UIだけ表示）
+  if (tut.hintEl) tut.hintEl.style.visibility = 'hidden';
+  if (tut.objEl) tut.objEl.style.visibility = 'hidden';
+  if (talkEls) talkEls.wrap.style.visibility = 'hidden';
+  ensureKillcamUI();
+  showKillcamUI(true);
+}
+function updateKillcamPlayback(dt) {
+  killcam.playT += dt * killcam.speed;
+  if (killcam.playT >= killcam.durationSec || killcam.skipRequested) { endKillcam(); return; }
+  const smp = sampleReplayAt(killcam.windowStartSec + killcam.playT);
+  player.vrm.scene.position.set(smp.x, smp.y, smp.z);
+  player.vrm.scene.quaternion.set(smp.qx, smp.qy, smp.qz, smp.qw);
+  const stateName = PLAYER_STATE_NAMES && PLAYER_STATE_NAMES[smp.stateCode];
+  if (stateName && player.states[stateName]) {
+    if (stateName !== player.current) setState(stateName);
+    const st = player.states[stateName];
+    st.action.time = smp.stateTime;
+    player.mixer.update(0);
+  }
+  player.vrm.update(0);
+  if (player.cloth) {   // マントは記録せず、補間済み位置でその場に再生させる（決定的な再現は不要）
+    const fy = groundYAt(smp.x, smp.z, smp.y) ?? -1e9;
+    if (player.cloth.setFloorY) player.cloth.setFloorY(fy + 0.02);
+    player.cloth.update(dt * killcam.speed, 0);
+  }
+  updateKillcamCamera(dt, smp);
+}
+function updateKillcamCamera(dt, smp) {
+  const kc = killcam.cam;
+  if (!kc.dragging) {
+    kc.idleT += dt;
+    kc.yaw += dt * 0.18;   // ドラッグが無い間はゆっくり自動オービット（演出の既定動作）
+  }
+  const cp = Math.cos(kc.pitch), sp = Math.sin(kc.pitch);
+  const cx = smp.x + cp * Math.sin(kc.yaw) * kc.dist;
+  const cy = smp.y + 1.2 + sp * kc.dist;
+  const cz = smp.z + cp * Math.cos(kc.yaw) * kc.dist;
+  camera.position.set(cx, cy, cz);
+  camera.lookAt(smp.x, smp.y + 1.0, smp.z);
+}
+function endKillcam() {
+  killcam.active = false;
+  showKillcamUI(false);
+  setGameHudVisible(true);
+  if (tut.hintEl) tut.hintEl.style.visibility = '';
+  if (tut.objEl) tut.objEl.style.visibility = '';
+  if (talkEls) talkEls.wrap.style.visibility = '';
+  // ライブの世界は録画停止時点のまま凍結されていた＝そこから続きを再開する。
+  // updatePlayerDeath側のGAME OVER自動発火が killcam.pending/active を見ているので、
+  // 次フレームで自然に showGameOver() が呼ばれる（ここで明示的に呼ぶ必要はない）
+}
+// ── キルカムのUI: 通常は右端にたたまれ、PCはタブクリック／スマホは右端からのスライドで開く ──
+let killcamUiEl = null, killcamPanelOpen = false;
+function ensureKillcamUI() {
+  if (killcamUiEl) return;
+  killcamUiEl = document.createElement('div');
+  killcamUiEl.style.cssText = 'position:fixed;top:0;right:0;height:100%;z-index:41;display:none;pointer-events:none;';
+  const panel = document.createElement('div');
+  panel.style.cssText = 'position:absolute;top:0;right:0;height:100%;width:220px;transform:translateX(100%);'
+    + 'transition:transform 0.25s ease;background:rgba(8,10,20,0.86);border-left:1px solid rgba(140,150,255,0.4);'
+    + 'pointer-events:auto;padding:64px 16px 16px;box-sizing:border-box;color:#dfe6ff;font:14px Meiryo,sans-serif;';
+  const tab = document.createElement('div');
+  tab.textContent = '◀ カメラ';
+  tab.style.cssText = 'position:absolute;top:200px;right:0;transform:translateX(0);writing-mode:vertical-rl;'
+    + 'background:rgba(8,10,20,0.86);border:1px solid rgba(140,150,255,0.4);border-right:none;border-radius:8px 0 0 8px;'
+    + 'padding:12px 6px;cursor:pointer;pointer-events:auto;color:#dfe6ff;font:13px Meiryo,sans-serif;letter-spacing:0.05em;'
+    + 'transition:right 0.25s ease;';
+  tab.addEventListener('click', () => setKillcamPanelOpen(!killcamPanelOpen));
+  const title = document.createElement('div');
+  title.textContent = 'リプレイ'; title.style.cssText = 'font:700 15px Meiryo,sans-serif;margin-bottom:10px;';
+  const hint = document.createElement('div');
+  hint.textContent = 'ドラッグ: 視点操作'; hint.style.cssText = 'font:12px Meiryo,sans-serif;color:#9ab;margin-bottom:14px;';
+  const speedRow = document.createElement('div');
+  speedRow.style.cssText = 'display:flex;gap:6px;margin-bottom:14px;';
+  const mkSpeedBtn = (label, v) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'flex:1;padding:8px 0;border-radius:6px;border:1px solid rgba(255,255,255,0.3);'
+      + 'background:#1b2a45;color:#dfe;cursor:pointer;font:12px Meiryo,sans-serif;';
+    b.addEventListener('click', () => { killcam.speed = v; for (const el of speedRow.children) el.style.background = '#1b2a45'; b.style.background = '#2a5fa0'; });
+    return b;
+  };
+  const b1 = mkSpeedBtn('0.25x', 0.25), b2 = mkSpeedBtn('0.5x', 0.5), b3 = mkSpeedBtn('1x', 1), b4 = mkSpeedBtn('2x', 2);
+  b3.style.background = '#2a5fa0';
+  speedRow.append(b1, b2, b3, b4);
+  const skip = document.createElement('button');
+  skip.textContent = 'スキップ';
+  skip.style.cssText = 'width:100%;padding:10px 0;border-radius:8px;border:1px solid rgba(255,255,255,0.3);'
+    + 'background:#3a3f4a;color:#fff;cursor:pointer;font:13px Meiryo,sans-serif;';
+  skip.addEventListener('click', () => { killcam.skipRequested = true; });
+  panel.append(title, hint, speedRow, skip);
+  killcamUiEl.append(panel, tab);
+  document.body.appendChild(killcamUiEl);
+  killcamPanelOpen = false;
+  panel.__setOpen = (open) => { panel.style.transform = open ? 'translateX(0)' : 'translateX(100%)'; tab.style.right = open ? '220px' : '0'; };
+  killcamUiEl.__panel = panel;
+}
+function setKillcamPanelOpen(open) {
+  killcamPanelOpen = open;
+  killcamUiEl?.__panel.__setOpen(open);
+}
+function showKillcamUI(show) {
+  if (!killcamUiEl) return;
+  killcamUiEl.style.display = show ? 'block' : 'none';
+  setKillcamPanelOpen(false);   // 毎回たたまれた状態から開始
+  if (show) {
+    const btns = killcamUiEl.__panel.querySelectorAll('button');
+    for (const el of btns) el.style.background = '#1b2a45';
+    btns[2].style.background = '#2a5fa0';   // 1x
+  }
+}
 // ── ポーズ機能 ──
 let paused = false;
 const PAUSE_ENABLED = !window.MP_BUILD;   // MP専用ビルドは他プレイヤーが止まらないため無効化
@@ -3168,7 +3354,7 @@ function playerDamage(n, dir) {
 }
 function startPlayerDeath(dir) {
   playerDead = true; playerDeathT = 0; playerRagOn = false;
-  if (gameMode === 'play') ev.pendingOn.add('playerDead');
+  if (gameMode === 'play') { ev.pendingOn.add('playerDead'); queueKillcam('player'); }
   player.charging = false; largeBeam.active = false;
   if (grabbedCar) releaseGrab();
   triggerOneShot('bighit');   // dead03 を再生し切ってからラグドール化
@@ -3214,7 +3400,7 @@ function updatePlayerDeath(dt) {
     player.vrm.update(dt);
   }
   if (gameMode === 'play') {   // 本編: 死亡＝ゲームオーバー（リトライ=その場復帰 or タイトルへ）
-    if (playerDeathT >= dieDur + 1.5) showGameOver();
+    if (playerDeathT >= dieDur + 1.5 && !killcam.pending && !killcam.active) showGameOver();
     return;
   }
   if (playerDeathT >= dieDur + 5) {   // 5秒後にリセット（トレーニング）
@@ -3382,7 +3568,7 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get paused() { return paused; }, get gameBgmPaused() { return gameBgm ? gameBgm.paused : null; }, get buildProf() { return buildProf; },
+window.__fly = { get paused() { return paused; }, get gameBgmPaused() { return gameBgm ? gameBgm.paused : null; }, get killcam() { return killcam; }, get replayCount() { return replayCount; }, killPlayer: () => playerDamage(9999), get killcamPanelOpen() { return killcamPanelOpen; }, setKillcamPanelOpen, get buildProf() { return buildProf; },
   lookFrom: (x, y, z, pitch = -0.9, yaw = 0) => {   // 調査用: 指定座標へワープして視点角も指定する
     player.pos.set(x, y, z); player.vel.set(0, 0, 0);
     player.yaw = yaw; camYaw = yaw; camPitch = pitch;
@@ -5687,7 +5873,7 @@ function updateCars(dt) {
 
 function setupControls() {
   const cv = renderer.domElement;
-  cv.addEventListener('click', () => { if (!locked && !agentEd.open) cv.requestPointerLock(); });
+  cv.addEventListener('click', () => { if (!locked && !agentEd.open && !killcam.active) cv.requestPointerLock(); });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());   // 右クリックメニュー抑止
   cv.addEventListener('mousedown', (e) => {
     if (!locked) return;
@@ -5724,6 +5910,35 @@ function setupControls() {
   window.addEventListener('wheel', (e) => {   // 速度は段階制（SPEEDゲージの■と1対1）
     stepSpeed(e.deltaY < 0 ? 1 : -1);
   });
+  // ── キルカムの演出カメラ操作: ドラッグで視点、右端スワイプでカメラパネルを開く（PC/スマホ共通のPointer Events）──
+  let kcDrag = null;
+  cv.addEventListener('pointerdown', (e) => {
+    if (!killcam.active) return;
+    if (e.clientX > window.innerWidth - 28 && !killcamPanelOpen) return;   // 右端はパネル開閉ジェスチャに譲る
+    kcDrag = { x: e.clientX, y: e.clientY };
+    killcam.cam.dragging = true;
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!killcam.active || !kcDrag) return;
+    const dx = e.clientX - kcDrag.x, dy = e.clientY - kcDrag.y;
+    kcDrag.x = e.clientX; kcDrag.y = e.clientY;
+    killcam.cam.yaw -= dx * 0.0065;
+    killcam.cam.pitch = Math.max(-1.2, Math.min(1.3, killcam.cam.pitch - dy * 0.0065));
+  });
+  window.addEventListener('pointerup', () => { kcDrag = null; killcam.cam.dragging = false; });
+  // スマホ: 画面右端からの左スワイプでカメラパネルを開く（タブのタップでも同じことができる）
+  let kcEdgeSwipe = null;
+  window.addEventListener('touchstart', (e) => {
+    if (!killcam.active || killcamPanelOpen || !IS_TOUCH) return;
+    const t = e.touches[0];
+    if (t.clientX > window.innerWidth - 40) kcEdgeSwipe = t.clientX;
+  }, { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    if (kcEdgeSwipe == null) return;
+    const t = e.touches[0];
+    if (kcEdgeSwipe - t.clientX > 30) { setKillcamPanelOpen(true); kcEdgeSwipe = null; }
+  }, { passive: true });
+  window.addEventListener('touchend', () => { kcEdgeSwipe = null; });
   if (IS_TOUCH) setupTouchControls(cv);
 }
 
@@ -10748,6 +10963,11 @@ function tick() {
   const dtRaw = _clock.getDelta();   // 一時停止中も呼び続けて捨てる＝再開直後にdtが跳ねて物理が破綻するのを防ぐ
   if (PROF) profFrame(dtRaw * 1000);
   if (paused) { renderer.render(scene, camera); renderPortrait(); return; }   // 全系統を一括停止。静止画のまま描画
+  if (killcam.active) {   // リプレイ再生中: 通常の物理/AI/イベントは進めず、記録済みトランスフォームをなぞるだけ
+    updateKillcamPlayback(Math.min(dtRaw, 1 / 30));
+    renderer.render(scene, camera);
+    return;
+  }
   const dt = Math.min(dtRaw, 1 / 30);
   if (SHOW_FPS) updateFpsMeter();
   updateFlight(dt);
@@ -10800,6 +11020,8 @@ function tick() {
   if (speechUI) speechUI.update(dt, kenScreenPos);   // 頭上セリフバブル
   if (KENNEY_CITY) updateDamage(dt);
   if (KENNEY_CITY && bldModels.length) { _lodT -= dt; if (_lodT <= 0) { _lodT = LOD_INTERVAL; partitionBuildings(); } }   // 建物LODの定期再振り分け
+  updateReplayRecorder(dt);
+  updateKillcamPending(dt);
   updateCamera(dt);
   camera.updateMatrixWorld();
   if (++_dbg % 30 === 0) {
