@@ -23,6 +23,7 @@ import { createTkBeam } from '../lib/vrm-tk.js';
 import { registerCustomExpressions, resetEmotionExpressions } from '../lib/vrm-expressions.js';
 import { createFlow } from '../lib/flow-runner.js';
 import { normalizeEpisode, legacyEpisode, episodeFileFor, nextEpisodeOf } from '../lib/episode.js';
+import { buildLegacyJet, JET_DEFAULT_COLORS } from '../lib/jet-shapes.js';
 import { createRagdoll, setRagdollActive, updateRagdoll, updateRagdollRecovery, applyRagdollImpulse, disposeRagdoll } from '../lib/vrm-ragdoll.js';
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
 import { generateBuildings, instanceId } from '../lib/kenney-buildings.js';
@@ -5842,6 +5843,7 @@ function setupTouchControls(cv) {
   for (const id of ['btn-up', 'btn-down']) { const el = $(id); if (el) el.style.display = 'none'; }   // 昇降ボタンは廃止（視点＋移動で昇降できる）
   $('joystick-base').style.display = 'none';
   $('touch-charge').style.display = 'none';
+  $('btn-pause').addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); togglePause(); }, { passive: false });
   const hint = $('hint');
   if (hint) hint.textContent = '左半分ドラッグ=移動 / 右半分ドラッグ=視点 / 右タップ=ビーム / 長押し=掴む(対象なしはチャージ→離してラージ) / 掴み中は指を離すと投擲';
   locked = true;   // タッチはポインタロック不要＝入力を常時有効化
@@ -9855,48 +9857,57 @@ function updateJetBombs(dt) {
   }
 }
 
+// 旧戦闘機の形状は lib/jet-shapes.js（Paint Editorと共有）。色は public/cityfly/jet-colors.json を
+// 使う。未保存なら既定色（従来のハードコード値と同じ）のまま
+let legacyJetColors = null, legacyJetColorsLoading = null;
+function loadLegacyJetColors() {
+  if (legacyJetColors) return Promise.resolve(legacyJetColors);
+  if (legacyJetColorsLoading) return legacyJetColorsLoading;
+  legacyJetColorsLoading = (async () => {
+    try { const r = await fetch('../cityfly/jet-colors.json'); legacyJetColors = r.ok ? await r.json() : JET_DEFAULT_COLORS; }
+    catch { legacyJetColors = JET_DEFAULT_COLORS; }
+    return legacyJetColors;
+  })();
+  return legacyJetColorsLoading;
+}
 function makeJetMesh(jet) {
-  const g = new THREE.Group();
-  const mBody = new THREE.MeshStandardMaterial({ color: 0x16121e, metalness: 0.7, roughness: 0.35 });
-  const mAcc = new THREE.MeshStandardMaterial({ color: 0x5b2fa8, metalness: 0.6, roughness: 0.4 });
-  const mGlow = new THREE.MeshStandardMaterial({ color: 0x2a1140, emissive: 0x9a5cff, emissiveIntensity: 2.2 });
-  const fus = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.3, 10), mBody); g.add(fus);            // 胴体（機首=+Z）
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.85, 3.2, 8), mBody);
-  nose.rotation.x = Math.PI / 2; nose.position.z = 6.5; g.add(nose);
-  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.7, 10, 8), mGlow);
-  canopy.scale.set(0.8, 0.6, 1.6); canopy.position.set(0, 0.7, 2.6); g.add(canopy);
-  for (const sgn of [-1, 1]) {   // 後退翼＋垂直尾翼
-    const wing = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.16, 3.2), mAcc);
-    wing.position.set(sgn * 3.1, 0, -1.2); wing.rotation.y = sgn * 0.55; g.add(wing);
-    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.9, 1.7), mAcc);
-    tail.position.set(sgn * 0.9, 1.1, -4.4); tail.rotation.z = sgn * -0.35; g.add(tail);
-  }
-  const engine = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.72, 1.2, 10), mGlow);
-  engine.rotation.x = Math.PI / 2; engine.position.z = -5.2; g.add(engine);
-  g.userData.car = jet;   // 掴みレイキャストの逆引き（車と同じ流儀）
-  jet.flashMats = [mBody, mAcc];   // 被弾フラッシュ用（emissiveを一瞬赤に）
-  return g;
+  const { group, materials } = buildLegacyJet(THREE, legacyJetColors || JET_DEFAULT_COLORS);
+  group.userData.car = jet;   // 掴みレイキャストの逆引き（車と同じ流儀）
+  jet.flashMats = [materials.mBody, materials.mAcc];   // 被弾フラッシュ用（emissiveを一瞬赤に）
+  return group;
 }
 // ── 自作モデルの戦闘機（Blender書き出しGLB）。既存 makeJetMesh() は変更せず、
 // episode.rules.jetModel==='custom' のときだけ差し替える。読み込み失敗時は自動で従来機にフォールバック ──
 const JET_CUSTOM_LEN = 12;   // 現行機と同じ寸法感（全長目安）に自動スケールする基準値(m)
-let jetCustomTpl = null, jetCustomFailed = false, jetCustomLoading = null;
+let jetCustomTpl = null, jetCustomFailed = false, jetCustomLoading = null, jetCustomPainted = false;
+// 生成オブジェクトは public/models/generated/<id>/model.glb に統一（Jet Editor 等の面ペイント対象と
+// 同じ規約）。episode.rules.jetModel には生成オブジェクトの<id>をそのまま書く（例: 'jet-custom'）
+function jetCustomBase() { return '../models/generated/' + episode.rules.jetModel + '/'; }
 function loadJetCustomModel() {
   if (jetCustomTpl || jetCustomFailed) return Promise.resolve(!!jetCustomTpl);
   if (jetCustomLoading) return jetCustomLoading;
   jetCustomLoading = (async () => {
     try {
       const loader = new GLTFLoader();
-      const gltf = await loader.loadAsync(new URL('../models/jet-custom/jet.glb', location.href).href);
+      const gltf = await loader.loadAsync(new URL(jetCustomBase() + 'model.glb', location.href).href);
       const tpl = bakeModel(gltf.scene);
       if (!tpl) throw new Error('bakeModel: メッシュが見つかりません');
-      // 実測(2026-09-04): このモデルは書き出し時の軸の都合で機首がローカル-Z側にあり、
-      // 何もしないと lookAt()（機首=+Zを進行方向へ向ける前提）で尾部が前を向いて飛ぶ。
-      // 180度回して機首を+Zへ寄せる（毎回描画時ではなく、共有テンプレートに対して起動時1回だけ）
-      tpl.geometry.rotateY(Math.PI);
-      splitJetCockpitRegion(tpl.geometry);   // 機首先端(+Z)付近をマテリアルindex1(コクピット)へ分離
+      // Paint Editor で面ペイントした結果(paint.json)があればそれを使う。無ければ機首から22%を
+      // コクピット扱いにする簡易ヒューリスティックへフォールバック（旧方式。実物を塗ったら不要になる）
+      let paint = null;
+      try {
+        const r = await fetch(new URL(jetCustomBase() + 'paint.json', location.href).href);
+        if (r.ok) paint = await r.json();
+      } catch { /* paint.json 無し=フォールバック */ }
+      // 前後反転はモデル固有の問題（このBlender書き出しは機首がローカル-Z側だった）なので、
+      // ハードコードせず paint.json 側に持たせる（Paint Editorの反転ボタンで調整・保存）。
+      // 塗装データがまだ無い間は、実測で判明した現状（反転が必要）を暫定既定値にする
+      if (paint ? paint.flip180 : true) tpl.geometry.rotateY(Math.PI);
+      if (paint && Array.isArray(paint.colors) && paint.colors.length) tpl.geometry = applyJetPaint(tpl.geometry, paint);
+      else splitJetCockpitRegion(tpl.geometry);   // 機首先端(+Z)付近をマテリアルindex1(コクピット)へ分離
       jetCustomTpl = tpl;
-      console.log('自作戦闘機モデルを読込みました:', tpl.size);
+      jetCustomPainted = !!paint;
+      console.log('自作戦闘機モデルを読込みました:', tpl.size, paint ? '(塗装データあり)' : '(簡易配色)');
       return true;
     } catch (e) {
       console.warn('自作戦闘機モデルの読込に失敗（従来機にフォールバック）:', e);
@@ -9910,6 +9921,28 @@ function loadJetCustomModel() {
 // 実測(2026-09-04): 先端の頂点そのものは隣接三角形が1枚しかなく点にしか見えないため、
 // 先端からの距離(全長比)で範囲を取る＝「その周辺のポリゴン」を実際に見える広さで拾う。
 const JET_COCKPIT_FRACTION = 0.22;   // 機首から全長の何割をコクピット領域にするか
+// Jet Editor で保存した面ペイント(paint.json={colors:[...], glow:[...]}、要素数=三角形数)を適用する。
+// 面ごとに独立した色にするため頂点を共有させない(non-indexed)。glow:trueの面は色そのままで
+// 加算合成のオーバーレイメッシュを別途重ね描きし、疑似的な発光にする（emissiveの頂点カラー化は
+// シェーダ改造が要るため、加算ブレンドの重ね描きで代替＝各面が塗った色のまま光って見える）
+function applyJetPaint(geometry, paint) {
+  const nonIndexed = geometry.toNonIndexed();
+  geometry.dispose();
+  const triCount = nonIndexed.attributes.position.count / 3;
+  const colors = paint.colors || [], glowFlags = paint.glow || [];
+  const colorArr = new Float32Array(nonIndexed.attributes.position.count * 3);
+  const glowTris = [];
+  const c = new THREE.Color();
+  for (let t = 0; t < triCount; t++) {
+    c.set(colors[t] || '#888888');
+    for (let v = 0; v < 3; v++) { const vi = (t * 3 + v) * 3; colorArr[vi] = c.r; colorArr[vi + 1] = c.g; colorArr[vi + 2] = c.b; }
+    if (glowFlags[t]) glowTris.push(t);
+  }
+  nonIndexed.setAttribute('color', new THREE.BufferAttribute(colorArr, 3));
+  nonIndexed.userData.glowIndices = glowTris.flatMap((t) => [t * 3, t * 3 + 1, t * 3 + 2]);
+  console.log('自作戦闘機: 塗装データを適用', triCount, '面 / 発光', glowTris.length, '面');
+  return nonIndexed;
+}
 function splitJetCockpitRegion(geometry) {
   const pos = geometry.attributes.position;
   const idx = geometry.index;
@@ -9930,17 +9963,38 @@ function splitJetCockpitRegion(geometry) {
 }
 function makeJetMeshCustom(jet) {
   const g = new THREE.Group();
-  // 旧戦闘機(makeJetMesh)と同じ紫系統。本体=mBody相当、コクピット=mGlow相当(発光)
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x16121e, metalness: 0.7, roughness: 0.35 });
-  const cockpitMat = new THREE.MeshStandardMaterial({ color: 0x2a1140, emissive: 0x9a5cff, emissiveIntensity: 2.2 });
-  const mesh = new THREE.Mesh(jetCustomTpl.geometry, [bodyMat, cockpitMat]);
   const size = jetCustomTpl.size;
   const scale = JET_CUSTOM_LEN / Math.max(0.01, size.z);   // モデルのZ長を基準に現行機と同じ寸法感へ揃える
-  mesh.scale.setScalar(scale);
-  mesh.position.y = -size.y * scale / 2 - jetCustomTpl.baseY * scale;   // 底面基準→機体中心へ（機首=+Z、上のrotateYで補正済み）
-  g.add(mesh);
+  const posY = -size.y * scale / 2 - jetCustomTpl.baseY * scale;   // 底面基準→機体中心へ（機首=+Z、rotateYで補正済み）
+  if (jetCustomPainted) {
+    // Jet Editorで塗装済み: 頂点カラー1枚 + 発光面だけ加算合成の重ね描き
+    const bodyMat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.5, roughness: 0.45 });
+    const mesh = new THREE.Mesh(jetCustomTpl.geometry, bodyMat);
+    mesh.scale.setScalar(scale); mesh.position.y = posY;
+    g.add(mesh);
+    jet.flashMats = [bodyMat];   // 被弾フラッシュは本体側のみ（重ね描きのglowはMeshBasicMaterialでemissive非対応のため）
+    const glowIdx = jetCustomTpl.geometry.userData.glowIndices;
+    if (glowIdx && glowIdx.length) {
+      const glowGeo = new THREE.BufferGeometry();
+      glowGeo.setAttribute('position', jetCustomTpl.geometry.attributes.position);
+      glowGeo.setAttribute('color', jetCustomTpl.geometry.attributes.color);
+      glowGeo.setIndex(glowIdx);
+      const glowMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+      const glowMesh = new THREE.Mesh(glowGeo, glowMat);
+      glowMesh.scale.setScalar(scale); glowMesh.position.y = posY;
+      glowMesh.renderOrder = 1;
+      g.add(glowMesh);
+    }
+  } else {
+    // 未塗装: 機首から22%を仮のコクピット色にする簡易ヒューリスティック（旧戦闘機と同じ紫系統）
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x16121e, metalness: 0.7, roughness: 0.35 });
+    const cockpitMat = new THREE.MeshStandardMaterial({ color: 0x2a1140, emissive: 0x9a5cff, emissiveIntensity: 2.2 });
+    const mesh = new THREE.Mesh(jetCustomTpl.geometry, [bodyMat, cockpitMat]);
+    mesh.scale.setScalar(scale); mesh.position.y = posY;
+    g.add(mesh);
+    jet.flashMats = [bodyMat, cockpitMat];
+  }
   g.userData.car = jet;   // 掴みレイキャストの逆引き（既存機と同じ流儀）
-  jet.flashMats = [bodyMat, cockpitMat];  // 被弾フラッシュ用（emissiveを一瞬赤に）
   return g;
 }
 // 噴射コーン: 街灯の発光と同じ加算メッシュを機体後方に付け、高速に伸び縮みさせる（頂点更新なし＝軽量）
@@ -9968,11 +10022,12 @@ function jetAirPos(out, r) {
 // 使う機体の生成関数を決める。自作モデル指定(episode.rules.jetModel==='custom')で未読込ならnullを返し、
 // 呼び出し側(updateJets)の毎フレーム再試行に任せる＝専用の待機処理を作らずに済む
 function jetMeshFactory() {
-  if (episode.rules.jetModel === 'custom') {
+  if (episode.rules.jetModel) {   // 値は生成オブジェクトの<id>（例: 'jet-custom'）
     if (jetCustomTpl) return makeJetMeshCustom;
     if (!jetCustomFailed) { loadJetCustomModel(); return null; }   // 読込中/開始直後→今回は待つ
     // 失敗時はここを素通りして従来機へフォールバック
   }
+  if (!legacyJetColors) { loadLegacyJetColors(); return null; }   // 色データの読込待ち（数フレームで解決）
   return makeJetMesh;
 }
 function spawnJets() {
