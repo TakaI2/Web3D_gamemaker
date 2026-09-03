@@ -65,7 +65,7 @@ function recordPlayerSample() {
   replayCount = Math.min(REPLAY_N, replayCount + 1);
 }
 function updateReplayRecorder(dt) {
-  if (gameMode !== 'play') return;   // OP/ED/タイトル中は録らない
+  if (NO_RECORD || gameMode !== 'play') return;   // OP/ED/タイトル中は録らない
   replayAcc += dt;
   if (replayAcc < 1 / REPLAY_HZ) return;
   replayAcc -= 1 / REPLAY_HZ;
@@ -639,6 +639,7 @@ const NO_PORTRAIT = _qs.get('noportrait') === '1';   // 会話ウィンドウの
 const NO_CITY = _qs.get('nocity') === '1';
 const NO_NPC = _qs.get('nonpc') === '1';
 const NO_FOREST = _qs.get('noforest') === '1';   // 性能切り分け: 森を生やさない
+const NO_RECORD = _qs.get('norecord') === '1';   // 性能切り分け: リプレイ録画を止める（録画コストの計測用）
 const PUB_ROOT = '../';   // public直下への相対パス（distビルドが './' へ書換える。BGM/gif等の動的パスに使用）
 const DIAG = _qs.get('diag') === '1';
 const DPR_CAP = parseFloat(_qs.get('dpr') || '') || 0;   // 例 ?dpr=1 で等倍（GPU負荷を大きく下げる）
@@ -3354,7 +3355,7 @@ function playerDamage(n, dir) {
 }
 function startPlayerDeath(dir) {
   playerDead = true; playerDeathT = 0; playerRagOn = false;
-  if (gameMode === 'play') { ev.pendingOn.add('playerDead'); queueKillcam('player'); }
+  if (gameMode === 'play') { ev.pendingOn.add('playerDead'); if (!window.MP_BUILD) queueKillcam('player'); }
   player.charging = false; largeBeam.active = false;
   if (grabbedCar) releaseGrab();
   triggerOneShot('bighit');   // dead03 を再生し切ってからラグドール化
