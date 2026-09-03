@@ -229,20 +229,31 @@ let pauseEl = null;
 function loopingAudios() { return [gameBgm, lgBeamSnd, eatSnd].filter((a) => a); }   // 一時停止/再開の対象
 function ensurePauseUI() {
   if (pauseEl) return;
+  // 全画面の暗転はしない（ゲーム画面をそのまま見せ、ドラッグで視点操作できるようにするため）。
+  // ボタン類は右端の小さいパネルに寄せる（killcamのカメラパネルと同じ配置の考え方）
   pauseEl = document.createElement('div');
-  pauseEl.style.cssText = 'position:fixed;inset:0;z-index:38;display:none;flex-direction:column;gap:22px;'
-    + 'align-items:center;justify-content:center;background:rgba(6,8,16,0.6);';
+  pauseEl.style.cssText = 'position:fixed;top:0;right:0;height:100%;z-index:38;display:none;pointer-events:none;';
+  const panel = document.createElement('div');
+  panel.style.cssText = 'position:absolute;top:50%;right:16px;transform:translateY(-50%);width:220px;'
+    + 'background:rgba(8,10,20,0.86);border:1px solid rgba(140,150,255,0.4);border-radius:12px;'
+    + 'pointer-events:auto;padding:22px 18px;box-sizing:border-box;color:#dfe6ff;font:14px Meiryo,sans-serif;'
+    + 'display:flex;flex-direction:column;gap:14px;align-items:stretch;';
   const title = document.createElement('div');
   title.textContent = 'PAUSE';
-  title.style.cssText = "font:900 54px 'Yu Gothic','Arial Black',Meiryo,sans-serif;color:#dfe8ff;letter-spacing:0.12em;text-shadow:0 4px 16px #000;";
-  const btnCss = 'font:700 20px Meiryo,sans-serif;padding:11px 40px;border-radius:10px;cursor:pointer;border:1px solid rgba(255,255,255,0.4);color:#fff;';
+  title.style.cssText = "font:900 26px 'Yu Gothic','Arial Black',Meiryo,sans-serif;color:#dfe8ff;letter-spacing:0.1em;"
+    + 'text-shadow:0 2px 8px #000;margin-bottom:4px;';
+  const hint = document.createElement('div');
+  hint.textContent = 'ドラッグ: 視点操作';
+  hint.style.cssText = 'font:12px Meiryo,sans-serif;color:#9ab;margin-bottom:4px;';
+  const btnCss = 'font:700 16px Meiryo,sans-serif;padding:11px 0;border-radius:9px;cursor:pointer;border:1px solid rgba(255,255,255,0.4);color:#fff;';
   const resume = document.createElement('button');
   resume.textContent = '再開'; resume.style.cssText = btnCss + 'background:#2a5fa0;';
   resume.onclick = () => togglePause(false);
   const toTitle = document.createElement('button');
   toTitle.textContent = 'タイトルへ戻る'; toTitle.style.cssText = btnCss + 'background:#3a3f4a;';
   toTitle.onclick = () => { togglePause(false); runFlowEnd(null); };
-  pauseEl.append(title, resume, toTitle);
+  panel.append(title, hint, resume, toTitle);
+  pauseEl.appendChild(panel);
   document.body.appendChild(pauseEl);
 }
 function togglePause(next = !paused) {
@@ -250,7 +261,7 @@ function togglePause(next = !paused) {
   if (next && (!PAUSE_ENABLED || gameMode !== 'play')) return;
   paused = next;
   ensurePauseUI();
-  pauseEl.style.display = paused ? 'flex' : 'none';
+  pauseEl.style.display = paused ? 'block' : 'none';
   if (paused) {
     try { document.exitPointerLock(); } catch { /* noop */ }
     for (const a of loopingAudios()) { a._resumeAfterPause = !a.paused; if (!a.paused) a.pause(); }
@@ -5874,7 +5885,7 @@ function updateCars(dt) {
 
 function setupControls() {
   const cv = renderer.domElement;
-  cv.addEventListener('click', () => { if (!locked && !agentEd.open && !killcam.active) cv.requestPointerLock(); });
+  cv.addEventListener('click', () => { if (!locked && !agentEd.open && !killcam.active && !paused) cv.requestPointerLock(); });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());   // 右クリックメニュー抑止
   cv.addEventListener('mousedown', (e) => {
     if (!locked) return;
@@ -5927,6 +5938,16 @@ function setupControls() {
     killcam.cam.pitch = Math.max(-1.2, Math.min(1.3, killcam.cam.pitch - dy * 0.0065));
   });
   window.addEventListener('pointerup', () => { kcDrag = null; killcam.cam.dragging = false; });
+  // ポーズ中の視点操作: ポインタロックは外れているのでドラッグでcamYaw/camPitchを直接動かす
+  let pauseDrag = null;
+  cv.addEventListener('pointerdown', (e) => { if (paused) pauseDrag = { x: e.clientX, y: e.clientY }; });
+  window.addEventListener('pointermove', (e) => {
+    if (!paused || !pauseDrag) return;
+    camYaw -= (e.clientX - pauseDrag.x) * 0.0045;
+    camPitch = Math.max(-1.25, Math.min(1.35, camPitch - (e.clientY - pauseDrag.y) * 0.0045));
+    pauseDrag.x = e.clientX; pauseDrag.y = e.clientY;
+  });
+  window.addEventListener('pointerup', () => { pauseDrag = null; });
   // スマホ: 画面右端からの左スワイプでカメラパネルを開く（タブのタップでも同じことができる）
   let kcEdgeSwipe = null;
   window.addEventListener('touchstart', (e) => {
@@ -10963,7 +10984,12 @@ function updateSpider(dt) {
 function tick() {
   const dtRaw = _clock.getDelta();   // 一時停止中も呼び続けて捨てる＝再開直後にdtが跳ねて物理が破綻するのを防ぐ
   if (PROF) profFrame(dtRaw * 1000);
-  if (paused) { renderer.render(scene, camera); renderPortrait(); return; }   // 全系統を一括停止。静止画のまま描画
+  if (paused) {   // 全系統を一括停止。カメラだけはドラッグ操作に応じて動かす（他は静止したまま）
+    updateCamera(1);   // dt=1でcam.followの指数追従がほぼ収束＝実質スナップ（プレイヤー自身は動かないので違和感がない）
+    camera.updateMatrixWorld();
+    renderer.render(scene, camera); renderPortrait();
+    return;
+  }
   if (killcam.active) {   // リプレイ再生中: 通常の物理/AI/イベントは進めず、記録済みトランスフォームをなぞるだけ
     updateKillcamPlayback(Math.min(dtRaw, 1 / 30));
     renderer.render(scene, camera);
