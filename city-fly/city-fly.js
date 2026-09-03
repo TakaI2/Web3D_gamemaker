@@ -95,6 +95,10 @@ function togglePause(next = !paused) {
     sirenCtx?.suspend();   // パトカーのサイレンはHTMLAudioでなくWebAudio発振器で鳴らし続けるため個別に止める
     pauseBaseYaw = camYaw; pauseBasePitch = camPitch; pauseBaseDist = cam.dist;   // 再開時に戻す元アングル
     pausePanOffset.set(0, 0, 0);
+    // ポーズ中はdtが進まないため慣性(player.vel)が減衰せず、再開直後もポーズ前の速度のまま滑り出してしまう
+    // （キーを離していても「動きっぱなし」に見える原因）。時間停止＝慣性も止める、として速度を消す
+    player.vel.set(0, 0, 0);
+    for (const k of Object.keys(keysDown)) keysDown[k] = false;   // 押しっぱなし状態も解除（フォーカス移動等の保険）
   } else {
     for (const a of loopingAudios()) if (a._resumeAfterPause) { a.play().catch(() => {}); a._resumeAfterPause = false; }
     sirenCtx?.resume();
@@ -5721,7 +5725,14 @@ function updateCars(dt) {
 
 function setupControls() {
   const cv = renderer.domElement;
-  cv.addEventListener('click', () => { if (!locked && !agentEd.open && !paused) cv.requestPointerLock(); });
+  cv.addEventListener('click', () => {
+    if (locked || agentEd.open || paused) return;
+    // Escapeでロック解除した直後(~1.25秒)はブラウザが再ロック要求を拒否する仕様（Chromium）。
+    // ポーズ→解除→即クリックで再開しようとすると reject され、キャッチしないとunhandled rejectionになる。
+    // 実害はない（次のクリックで普通に成功する）ので握りつぶす
+    const p = cv.requestPointerLock();
+    if (p && p.catch) p.catch(() => { /* 再ロック抑制期間中。次のクリックで再試行される */ });
+  });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());   // 右クリックメニュー抑止
   cv.addEventListener('mousedown', (e) => {
     if (!locked) return;
