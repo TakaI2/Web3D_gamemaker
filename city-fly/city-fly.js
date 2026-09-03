@@ -5913,7 +5913,7 @@ function setupControls() {
   });
   window.addEventListener('keydown', (e) => {
     if (agentEd.open && e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // 入力欄への打鍵はゲームに流さない
-    if ((e.code === 'Escape' || e.code === 'KeyP') && PAUSE_ENABLED && !agentEd.open && (gameMode === 'play' || paused)) { togglePause(); return; }
+    if (e.code === 'Escape' && PAUSE_ENABLED && !agentEd.open && (gameMode === 'play' || paused)) { togglePause(); return; }
     if (paused) return;   // ポーズ中はメニュー操作以外のキーを無視
     if (e.code === 'KeyM') { toggleAgentEd(); return; }
     if (agentEd.open) return;   // エディタ表示中はゲーム操作を止める
@@ -10027,6 +10027,43 @@ function makeJetMesh(jet) {
   jet.flashMats = [mBody, mAcc];   // 被弾フラッシュ用（emissiveを一瞬赤に）
   return g;
 }
+// ── 自作モデルの戦闘機（Blender書き出しGLB）。既存 makeJetMesh() は変更せず、
+// episode.rules.jetModel==='custom' のときだけ差し替える。読み込み失敗時は自動で従来機にフォールバック ──
+const JET_CUSTOM_LEN = 12;   // 現行機と同じ寸法感（全長目安）に自動スケールする基準値(m)
+let jetCustomTpl = null, jetCustomFailed = false, jetCustomLoading = null;
+function loadJetCustomModel() {
+  if (jetCustomTpl || jetCustomFailed) return Promise.resolve(!!jetCustomTpl);
+  if (jetCustomLoading) return jetCustomLoading;
+  jetCustomLoading = (async () => {
+    try {
+      const loader = new GLTFLoader();
+      const gltf = await loader.loadAsync(new URL('../models/jet-custom/jet.glb', location.href).href);
+      const tpl = bakeModel(gltf.scene);
+      if (!tpl) throw new Error('bakeModel: メッシュが見つかりません');
+      jetCustomTpl = tpl;
+      console.log('自作戦闘機モデルを読込みました:', tpl.size);
+      return true;
+    } catch (e) {
+      console.warn('自作戦闘機モデルの読込に失敗（従来機にフォールバック）:', e);
+      jetCustomFailed = true;
+      return false;
+    }
+  })();
+  return jetCustomLoading;
+}
+function makeJetMeshCustom(jet) {
+  const g = new THREE.Group();
+  const mat = jetCustomTpl.material.clone();   // 被弾フラッシュ(emissive)で機体ごとに色を変えるため複製
+  const mesh = new THREE.Mesh(jetCustomTpl.geometry, mat);
+  const size = jetCustomTpl.size;
+  const scale = JET_CUSTOM_LEN / Math.max(0.01, size.z);   // モデルのZ長を基準に現行機と同じ寸法感へ揃える
+  mesh.scale.setScalar(scale);
+  mesh.position.y = -size.y * scale / 2 - jetCustomTpl.baseY * scale;   // 底面基準→機体中心へ（機首=+Z前提）
+  g.add(mesh);
+  g.userData.car = jet;   // 掴みレイキャストの逆引き（既存機と同じ流儀）
+  jet.flashMats = [mat];  // 被弾フラッシュ用（emissiveを一瞬赤に）
+  return g;
+}
 // 噴射コーン: 街灯の発光と同じ加算メッシュを機体後方に付け、高速に伸び縮みさせる（頂点更新なし＝軽量）
 const _exGeo = (() => { const g = new THREE.ConeGeometry(1, 1, 7, 1, true); g.rotateX(-Math.PI / 2); g.translate(0, 0, -0.5); return g; })();   // 基部=原点 → -Z へ長さ1
 const _exMat = new THREE.MeshBasicMaterial({ color: 0xffa050, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
@@ -10049,11 +10086,23 @@ function jetAirPos(out, r) {
   out.y = Math.max(player.pos.y + 60, groundYAt(out.x, out.z, player.pos.y + 400) + 70);
   return out;
 }
+// 使う機体の生成関数を決める。自作モデル指定(episode.rules.jetModel==='custom')で未読込ならnullを返し、
+// 呼び出し側(updateJets)の毎フレーム再試行に任せる＝専用の待機処理を作らずに済む
+function jetMeshFactory() {
+  if (episode.rules.jetModel === 'custom') {
+    if (jetCustomTpl) return makeJetMeshCustom;
+    if (!jetCustomFailed) { loadJetCustomModel(); return null; }   // 読込中/開始直後→今回は待つ
+    // 失敗時はここを素通りして従来機へフォールバック
+  }
+  return makeJetMesh;
+}
 function spawnJets() {
+  const factory = jetMeshFactory();
+  if (!factory) return;   // 自作モデル読込待ち（次フレームのupdateJetsが再試行する）
   for (let i = 0; i < JET.n; i++) {
     const jet = { jet: true, hitR: JET.hitR, grabbed: false, thrown: false, dead: false, tornado: false,
       flyVel: new THREE.Vector3(), phase: Math.random() * Math.PI * 2, mesh: null, vel: null, angVel: null, holdVel: null };
-    jet.mesh = makeJetMesh(jet);
+    jet.mesh = factory(jet);
     jetAirPos(jet.mesh.position, 380 + Math.random() * 120);
     jet.flyVel.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize().multiplyScalar(JET.spMax * 0.8);
     scene.add(jet.mesh);
