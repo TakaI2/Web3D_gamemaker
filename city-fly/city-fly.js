@@ -42,6 +42,18 @@ let suppressAutoPause = false;   // ゲームオーバー表示・生活NPCエ�
 const PAUSE_ENABLED = !window.MP_BUILD;   // MP専用ビルドは他プレイヤーが止まらないため無効化
 let pauseEl = null;
 function loopingAudios() { return [gameBgm, lgBeamSnd, eatSnd].filter((a) => a); }   // 一時停止/再開の対象
+// ポーズ中のカメラ操作: 見た目だけ動かし、再開時は元のアングルへ必ず戻す
+const pausePanOffset = new THREE.Vector3();   // 平行移動量（ワールド座標）。移動制限あり
+const PAN_MAX = 6;                            // 平行移動できる最大距離(m)
+let pauseBaseYaw = 0, pauseBasePitch = 0, pauseBaseDist = 4;
+function updatePauseCamera() {   // カメラをスナップ配置（ドラッグ視点・ズーム・平行移動をまとめて反映）
+  camForwardRight();
+  _desiredTarget.copy(player.pos); _desiredTarget.y += cam.height;
+  _desiredTarget.addScaledVector(_right, cam.side).add(pausePanOffset);
+  _desiredPos.copy(_desiredTarget).addScaledVector(_fwd, -cam.dist);
+  camPosCur.copy(_desiredPos); camTargetCur.copy(_desiredTarget);
+  camera.position.copy(camPosCur); camera.lookAt(camTargetCur);
+}
 function ensurePauseUI() {
   if (pauseEl) return;
   // 全画面の暗転はしない（ゲーム画面をそのまま見せ、ドラッグで視点操作できるようにするため）。
@@ -58,7 +70,7 @@ function ensurePauseUI() {
   title.style.cssText = "font:900 26px 'Yu Gothic','Arial Black',Meiryo,sans-serif;color:#dfe8ff;letter-spacing:0.1em;"
     + 'text-shadow:0 2px 8px #000;margin-bottom:4px;';
   const hint = document.createElement('div');
-  hint.textContent = 'ドラッグ: 視点操作 ／ ホイール・ピンチ: ズーム';
+  hint.textContent = 'ドラッグ: 視点操作 ／ ホイール・ピンチ: ズーム ／ 中ドラッグ・2本指: 平行移動';
   hint.style.cssText = 'font:12px Meiryo,sans-serif;color:#9ab;margin-bottom:4px;';
   const btnCss = 'font:700 16px Meiryo,sans-serif;padding:11px 0;border-radius:9px;cursor:pointer;border:1px solid rgba(255,255,255,0.4);color:#fff;';
   const resume = document.createElement('button');
@@ -81,9 +93,13 @@ function togglePause(next = !paused) {
     try { document.exitPointerLock(); } catch { /* noop */ }
     for (const a of loopingAudios()) { a._resumeAfterPause = !a.paused; if (!a.paused) a.pause(); }
     sirenCtx?.suspend();   // パトカーのサイレンはHTMLAudioでなくWebAudio発振器で鳴らし続けるため個別に止める
+    pauseBaseYaw = camYaw; pauseBasePitch = camPitch; pauseBaseDist = cam.dist;   // 再開時に戻す元アングル
+    pausePanOffset.set(0, 0, 0);
   } else {
     for (const a of loopingAudios()) if (a._resumeAfterPause) { a.play().catch(() => {}); a._resumeAfterPause = false; }
     sirenCtx?.resume();
+    camYaw = pauseBaseYaw; camPitch = pauseBasePitch; cam.dist = pauseBaseDist;   // 元のカメラアングルへ復元
+    pausePanOffset.set(0, 0, 0);
   }
 }
 // TPS プレイヤー（tps-flight から移植・WebGL）
@@ -3398,7 +3414,9 @@ async function loadPlayer() {
 }
 
 window.__fly = { get paused() { return paused; }, get gameBgmPaused() { return gameBgm ? gameBgm.paused : null; },
-  get sirenState() { return sirenCtx ? sirenCtx.state : 'none'; }, forceSiren: (on) => updateSiren(0, on, 50), get camDist() { return cam.dist; }, killPlayer: () => playerDamage(9999), get buildProf() { return buildProf; },
+  get sirenState() { return sirenCtx ? sirenCtx.state : 'none'; }, forceSiren: (on) => updateSiren(0, on, 50), get camDist() { return cam.dist; },
+  get camYaw() { return camYaw; }, get camPitch() { return camPitch; }, get pausePan() { return pausePanOffset.toArray(); },
+  killPlayer: () => playerDamage(9999), get buildProf() { return buildProf; },
   lookFrom: (x, y, z, pitch = -0.9, yaw = 0) => {   // 調査用: 指定座標へワープして視点角も指定する
     player.pos.set(x, y, z); player.vel.set(0, 0, 0);
     player.yaw = yaw; camYaw = yaw; camPitch = pitch;
@@ -5750,22 +5768,27 @@ function setupControls() {
     if (paused) { cam.dist = Math.max(1.8, Math.min(14, cam.dist + e.deltaY * 0.01)); return; }   // ポーズ中: ズームイン/アウト
     stepSpeed(e.deltaY < 0 ? 1 : -1);   // 通常時: 速度は段階制（SPEEDゲージの■と1対1）
   });
-  // ポーズ中のピンチ操作でズーム（スマホ）
-  let pausePinchDist = null;
+  // ポーズ中のピンチ操作でズーム＋2本指ドラッグで平行移動（スマホ。2本指の間隔=ズーム/中点の移動=平行移動）
+  let pausePinchDist = null, pausePinchMid = null;
+  const touchMid = (e) => ({ x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 });
   window.addEventListener('touchstart', (e) => {
     if (!paused || e.touches.length !== 2) return;
     pausePinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    pausePinchMid = touchMid(e);
   }, { passive: true });
   window.addEventListener('touchmove', (e) => {
     if (!paused || pausePinchDist == null || e.touches.length !== 2) return;
     const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
     cam.dist = Math.max(1.8, Math.min(14, cam.dist - (d - pausePinchDist) * 0.02));   // 指を広げる=近づく(ズームイン)
     pausePinchDist = d;
+    const mid = touchMid(e);
+    panCamera(mid.x - pausePinchMid.x, mid.y - pausePinchMid.y, 0.012);   // 2本指を同じ方向へ動かす=平行移動（フリック）
+    pausePinchMid = mid;
   }, { passive: true });
-  window.addEventListener('touchend', (e) => { if (e.touches.length < 2) pausePinchDist = null; });
-  // ポーズ中の視点操作: ポインタロックは外れているのでドラッグでcamYaw/camPitchを直接動かす
+  window.addEventListener('touchend', (e) => { if (e.touches.length < 2) { pausePinchDist = null; pausePinchMid = null; } });
+  // ポーズ中の視点操作: ポインタロックは外れているので左ドラッグでcamYaw/camPitchを直接動かす
   let pauseDrag = null;
-  cv.addEventListener('pointerdown', (e) => { if (paused) pauseDrag = { x: e.clientX, y: e.clientY }; });
+  cv.addEventListener('pointerdown', (e) => { if (paused && e.button === 0) pauseDrag = { x: e.clientX, y: e.clientY }; });
   window.addEventListener('pointermove', (e) => {
     if (!paused || !pauseDrag) return;
     camYaw -= (e.clientX - pauseDrag.x) * 0.0045;
@@ -5773,6 +5796,27 @@ function setupControls() {
     pauseDrag.x = e.clientX; pauseDrag.y = e.clientY;
   });
   window.addEventListener('pointerup', () => { pauseDrag = null; });
+  // ポーズ中のホイール押し込み(中ボタン)ドラッグで平行移動（移動制限あり。PAN_MAX参照）
+  function panCamera(dx, dy, speed) {
+    camForwardRight();
+    pausePanOffset.addScaledVector(_right, -dx * speed);
+    pausePanOffset.y += dy * speed;
+    const len = pausePanOffset.length();
+    if (len > PAN_MAX) pausePanOffset.multiplyScalar(PAN_MAX / len);
+  }
+  let pausePan = null;
+  cv.addEventListener('pointerdown', (e) => {
+    if (!paused || e.button !== 1) return;
+    e.preventDefault();
+    pausePan = { x: e.clientX, y: e.clientY };
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!paused || !pausePan) return;
+    panCamera(e.clientX - pausePan.x, e.clientY - pausePan.y, 0.012);
+    pausePan.x = e.clientX; pausePan.y = e.clientY;
+  });
+  window.addEventListener('pointerup', () => { pausePan = null; });
+  window.addEventListener('auxclick', (e) => { if (paused && e.button === 1) e.preventDefault(); });   // 中クリックの既定動作(オートスクロール等)を抑止
   if (IS_TOUCH) setupTouchControls(cv);
 }
 
@@ -10846,7 +10890,7 @@ function tick() {
   const dtRaw = _clock.getDelta();   // 一時停止中も呼び続けて捨てる＝再開直後にdtが跳ねて物理が破綻するのを防ぐ
   if (PROF) profFrame(dtRaw * 1000);
   if (paused) {   // 全系統を一括停止。カメラだけはドラッグ操作に応じて動かす（他は静止したまま）
-    updateCamera(1);   // dt=1でcam.followの指数追従がほぼ収束＝実質スナップ（プレイヤー自身は動かないので違和感がない）
+    updatePauseCamera();   // ドラッグ視点・ズーム・平行移動をまとめて反映（プレイヤー自身は動かないのでスナップでよい）
     camera.updateMatrixWorld();
     renderer.render(scene, camera); renderPortrait();
     return;
