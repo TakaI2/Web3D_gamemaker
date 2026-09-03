@@ -13,5 +13,8 @@
     "events": "ep1_events.json",
     "speech": [],
     "bgm": "Sound_Wave.ogg"
+  },
+  "rules": {
+    "jetModel": "custom"
   }
 }
