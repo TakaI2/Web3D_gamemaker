@@ -258,15 +258,17 @@ function ensurePauseUI() {
 }
 function togglePause(next = !paused) {
   if (next === paused) return;
-  if (next && (!PAUSE_ENABLED || gameMode !== 'play')) return;
+  if (next && (!PAUSE_ENABLED || gameMode !== 'play' || killcam.active)) return;   // リプレイ再生中は二重に止めない
   paused = next;
   ensurePauseUI();
   pauseEl.style.display = paused ? 'block' : 'none';
   if (paused) {
     try { document.exitPointerLock(); } catch { /* noop */ }
     for (const a of loopingAudios()) { a._resumeAfterPause = !a.paused; if (!a.paused) a.pause(); }
+    sirenCtx?.suspend();   // パトカーのサイレンはHTMLAudioでなくWebAudio発振器で鳴らし続けるため個別に止める
   } else {
     for (const a of loopingAudios()) if (a._resumeAfterPause) { a.play().catch(() => {}); a._resumeAfterPause = false; }
+    sirenCtx?.resume();
   }
 }
 // TPS プレイヤー（tps-flight から移植・WebGL）
@@ -3580,7 +3582,8 @@ async function loadPlayer() {
   } catch (e) { showError('プレイヤー読込失敗: ' + (e?.message || e)); }
 }
 
-window.__fly = { get paused() { return paused; }, get gameBgmPaused() { return gameBgm ? gameBgm.paused : null; }, get killcam() { return killcam; }, get replayCount() { return replayCount; }, killPlayer: () => playerDamage(9999), get killcamPanelOpen() { return killcamPanelOpen; }, setKillcamPanelOpen, get buildProf() { return buildProf; },
+window.__fly = { get paused() { return paused; }, get gameBgmPaused() { return gameBgm ? gameBgm.paused : null; },
+  get sirenState() { return sirenCtx ? sirenCtx.state : 'none'; }, forceSiren: (on) => updateSiren(0, on, 50), get camDist() { return cam.dist; }, get killcam() { return killcam; }, get replayCount() { return replayCount; }, killPlayer: () => playerDamage(9999), get killcamPanelOpen() { return killcamPanelOpen; }, setKillcamPanelOpen, get buildProf() { return buildProf; },
   lookFrom: (x, y, z, pitch = -0.9, yaw = 0) => {   // 調査用: 指定座標へワープして視点角も指定する
     player.pos.set(x, y, z); player.vel.set(0, 0, 0);
     player.yaw = yaw; camYaw = yaw; camPitch = pitch;
@@ -5919,9 +5922,23 @@ function setupControls() {
     if (e.code === 'KeyT') timeScale = timeScale === 1 ? 10 : timeScale === 10 ? 60 : 1;   // 時間の早送り（動作確認用）
   });
   window.addEventListener('keyup', (e) => { keysDown[e.code] = false; });
-  window.addEventListener('wheel', (e) => {   // 速度は段階制（SPEEDゲージの■と1対1）
-    stepSpeed(e.deltaY < 0 ? 1 : -1);
+  window.addEventListener('wheel', (e) => {
+    if (paused) { cam.dist = Math.max(1.8, Math.min(14, cam.dist + e.deltaY * 0.01)); return; }   // ポーズ中: ズームイン/アウト
+    stepSpeed(e.deltaY < 0 ? 1 : -1);   // 通常時: 速度は段階制（SPEEDゲージの■と1対1）
   });
+  // ポーズ中のピンチ操作でズーム（スマホ）
+  let pausePinchDist = null;
+  window.addEventListener('touchstart', (e) => {
+    if (!paused || e.touches.length !== 2) return;
+    pausePinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+  }, { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    if (!paused || pausePinchDist == null || e.touches.length !== 2) return;
+    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    cam.dist = Math.max(1.8, Math.min(14, cam.dist - (d - pausePinchDist) * 0.02));   // 指を広げる=近づく(ズームイン)
+    pausePinchDist = d;
+  }, { passive: true });
+  window.addEventListener('touchend', (e) => { if (e.touches.length < 2) pausePinchDist = null; });
   // ── キルカムの演出カメラ操作: ドラッグで視点、右端スワイプでカメラパネルを開く（PC/スマホ共通のPointer Events）──
   let kcDrag = null;
   cv.addEventListener('pointerdown', (e) => {
