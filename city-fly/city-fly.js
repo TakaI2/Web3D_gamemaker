@@ -1309,6 +1309,7 @@ function buildTutRoom3(geoms) {   // 部屋3: 空中戦訓練（下層に破壊�
   tut.root.add(ring); tut.root.add(pillar);
   tut.safety = { x: sx, z: sz, r: srad, ring, pillar };
   tut.rescued = 0; tut.jetBase = 0; tut.dollsSpawned = false; tut.aerialClear = false;
+  tut.killTalk = false; tut.killDoneT = 0;
 }
 const tutProps = [];
 const _tutGlowGeo = new THREE.SphereGeometry(0.8, 10, 8);
@@ -1770,6 +1771,7 @@ function buildTutRoom6() {   // 部屋6: ボス戦（グラブ可能な巨大オ
   buildTutBoss();
 }
 const TUT_SUCK_DUR = 4.5;   // セーフティエリア吸い込みの所要秒（ゆっくり）
+const TUT_RESCUE_SKIP = 120;   // 撃墜条件達成後この秒数で救助未達でも次へ進ませる（詰まり回避）
 function tutDollSpot(i) {   // ダミードールの配置（部屋3のリング状スポット）
   const R = tut.rooms[2], cx = (R.x0 + R.x1) / 2;
   const sp = TUT_DOLL_SPOTS[i % TUT_DOLL_SPOTS.length];
@@ -1886,6 +1888,7 @@ function updateTutRoom3(dt) {
       m.pos.copy(m.vrm.scene.position);
       m.suck = { t: 0, y0: _kQ.y, ang: Math.atan2(_kQ.z - sa.z, _kQ.x - sa.x), r: Math.max(0.5, Math.hypot(_kQ.x - sa.x, _kQ.z - sa.z)) };
       playSfx('se1.ogg', 0.5);
+      playSfx('Short_Accent17-1_Low_.ogg', 0.8);   // ドールを安全エリアに運ぶたびのアクセント音
       if (tut.rescued === 1) queueTalk('r3_mid');
       if (tut.rescued < 5) {   // 補充
         const spot = TUT_DOLL_SPOTS[(Math.random() * TUT_DOLL_SPOTS.length) | 0];
@@ -1895,16 +1898,20 @@ function updateTutRoom3(dt) {
     }
   }
   if (!tut.killTalk && tutJetKills() >= 20) { tut.killTalk = true; queueTalk('r3_kills'); }   // 撃墜数達成
-  if (!tut.aerialClear && tutJetKills() >= 20 && tut.rescued >= 5) {   // クリア: 隔壁解放＋訓練機撤収
-    tut.aerialClear = true;
-    queueTalk('r3_clear');
-    ev.spawnAllow.jet = false;
-    for (const j of jets) { j.dead = true; j.mesh.visible = false; }
-    jets.length = 0;
-    setTutDoor(2, true);
-    tutHint('goal');
-    tutRefreshObjective();
-  }
+  if (tut.killTalk && !tut.aerialClear) tut.killDoneT += dt;   // 撃墜達成後の経過時間（救助が進まない時の救済に使う）
+  if (!tut.aerialClear && tutJetKills() >= 20 && tut.rescued >= 5) tutAerialClear('r3_clear');
+  // 撃墜条件だけ満たして救助が進まないまま TUT_RESCUE_SKIP 秒経過＝救助はスキップして先へ進ませる
+  else if (!tut.aerialClear && tut.killDoneT >= TUT_RESCUE_SKIP) tutAerialClear('r3_rescue_skip');
+}
+function tutAerialClear(talkId) {   // 部屋3クリア: 隔壁解放＋訓練機撤収
+  tut.aerialClear = true;
+  queueTalk(talkId);
+  ev.spawnAllow.jet = false;
+  for (const j of jets) { j.dead = true; j.mesh.visible = false; }
+  jets.length = 0;
+  setTutDoor(2, true);
+  tutHint('goal');
+  tutRefreshObjective();
 }
 async function buildTutorialStage() {
   grabHitCfg = await grabHitP;   // 当たり判定の上書き（エディタ保存分）
@@ -2616,7 +2623,7 @@ function resetGameState() {
   // チュートリアル進行
   Object.assign(tut, { ready: false, room: 0, started: false, midFired: {}, goalDone: false, cullRoom: -99,
     rooms: [], doors: [], goal: null, targetsDown: 0, targetsTotal: 0, gateDown: false, rescued: 0, jetBase: 0,
-    dollsSpawned: false, aerialOn: false, aerialClear: false, killTalk: false, fortDown: false, fedPneuma: false,
+    dollsSpawned: false, aerialOn: false, aerialClear: false, killTalk: false, killDoneT: 0, fortDown: false, fedPneuma: false,
     feedTalk: false, boss: null, safety: null, turrets: null, fortMd: null, hurtCd: 0 });
 }
 // ステージ本体の構築（地形 → 部屋 or 街）。init とエピソード切替の共通経路。
