@@ -15,6 +15,7 @@
     "bgm": "Sound_Wave.ogg"
   },
   "rules": {
-    "jetModel": "jet-custom"
+    "jetModel": "jet-custom",
+    "seaCarrier": true
   }
 }

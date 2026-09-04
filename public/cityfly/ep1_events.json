@@ -96,6 +96,10 @@
         {
           "type": "spawn",
           "enemy": "spider"
+        },
+        {
+          "type": "advance",
+          "enemy": "spider"
         }
       ]
     },

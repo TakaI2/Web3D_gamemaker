@@ -552,6 +552,51 @@ let mapParkCfg = {};     // .map.json の公園設定 {hedgeOvr}（map-editorの
 const waterMeshes = [];
 let waterNearMat = null, waterFarMat = null, _waterLodT = 0;
 const WATER_FAR = 600;   // これ以上離れた水面は静的マテリアルへ（LOD）
+// ── 海の位置（.map.json の water[] から算出。敵の襲来方向・母艦の停泊位置に使う）──
+// 河川の末端も level が 0 付近になるので、面積で相対的に弾いて「海」だけを拾う。
+const SEA_MIN_AREA_RATIO = 0.1;   // 最大タイル面積のこの割合未満は海とみなさない
+const SEA_SHORE_STEP = 20;        // 海岸探索の刻み(m)
+let seaInfo = null, _seaTried = false;
+function ensureSeaInfo() {   // collBoxes（市街範囲）が要るのでステージ構築後に一度だけ算出
+  if (seaInfo || _seaTried) return seaInfo;
+  const lv0 = mapWater.filter((w) => w.level === 0);
+  if (!lv0.length || !collBoxes.length) return null;   // collBoxes未構築なら次フレーム以降に再挑戦
+  _seaTried = true;
+  const maxArea = Math.max(...lv0.map((w) => w.w * w.d));
+  const rects = lv0.filter((w) => w.w * w.d >= maxArea * SEA_MIN_AREA_RATIO);
+  if (!rects.length) return null;
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, sx = 0, sz = 0, sa = 0;
+  for (const r of rects) {
+    x0 = Math.min(x0, r.x - r.w / 2); x1 = Math.max(x1, r.x + r.w / 2);
+    z0 = Math.min(z0, r.z - r.d / 2); z1 = Math.max(z1, r.z + r.d / 2);
+    const a = r.w * r.d; sx += r.x * a; sz += r.z * a; sa += a;
+  }
+  const cx = sx / sa, cz = sz / sa;
+  let bx0 = 1e9, bx1 = -1e9, bz0 = 1e9, bz1 = -1e9;   // 市街中心＝建物コリジョンの範囲中心
+  for (const b of collBoxes) { if (b.top <= b.bottom) continue; bx0 = Math.min(bx0, b.x); bx1 = Math.max(bx1, b.x); bz0 = Math.min(bz0, b.z); bz1 = Math.max(bz1, b.z); }
+  if (bx0 > bx1) return null;
+  const ccx = (bx0 + bx1) / 2, ccz = (bz0 + bz1) / 2;
+  const dl = Math.hypot(cx - ccx, cz - ccz) || 1;
+  const dirX = (cx - ccx) / dl, dirZ = (cz - ccz) / dl;
+  seaInfo = { rects, x0, x1, z0, z1, cx, cz, level: 0, dirX, dirZ, shoreX: cx, shoreZ: cz, cityX: ccx, cityZ: ccz };
+  for (let t = 0; t <= dl + SEA_SHORE_STEP; t += SEA_SHORE_STEP) {   // 市街中心から海へ進み、最初に海へ入る点＝海岸
+    const px = ccx + dirX * t, pz = ccz + dirZ * t;
+    if (inSeaXZ(px, pz)) { seaInfo.shoreX = px; seaInfo.shoreZ = pz; break; }
+  }
+  console.log('sea:', rects.length, 'tiles / shore', seaInfo.shoreX.toFixed(0), seaInfo.shoreZ.toFixed(0), '/ dir', dirX.toFixed(2), dirZ.toFixed(2));
+  return seaInfo;
+}
+function inSeaXZ(x, z) {
+  const s = seaInfo;
+  const rects = s ? s.rects : mapWater.filter((w) => w.level === 0);
+  for (const r of rects) if (Math.abs(x - r.x) <= r.w / 2 && Math.abs(z - r.z) <= r.d / 2) return true;
+  return false;
+}
+function seaAngleFrom(pos) {   // jetAirPos の角度規約（x=cos, z=sin）に合わせた海の方角
+  const s = ensureSeaInfo();
+  if (!s) return null;
+  return Math.atan2(s.cz - pos.z, s.cx - pos.x);
+}
 function buildMapWater() {
   // 法線マップをcanvasで生成（アセット不要・柔らかいノイズ）
   const cv = document.createElement('canvas');
@@ -2205,11 +2250,12 @@ function cityDamagePct() { return cityInfo && cityInfo.count ? Math.min(100, gp.
 function attritionPct() { return Math.min(100, gp.attritionPts); }
 function enemyAllowed(kind) {   // 敵出現のモード制御（本編の投入は events.json 駆動）
   if (TUTORIAL) return !!ev.spawnAllow[kind];   // チュートリアル: ステージ進行が明示解禁した敵のみ
-  if (kind === 'walker' && spider) return false;   // スパイダーキャリア出現中はウォーカーを出さない
+  if (kind === 'walker' && spider && !spider.carrier) return false;   // 市街を歩くスパイダー出現中はウォーカーを出さない（母艦は供給源なので除く）
   if (gameMode === 'training') return true;
   if (gameMode !== 'play') return false;   // title / op / ed 中は敵なし
   if (ev.flags.warEnd) return false;   // 終戦後は増援なし（ED遷移はP4）
   if (kind === 'jet') return true;
+  if (kind === 'spider' && episode.rules.seaCarrier) return true;   // 母艦は開始時から沖に停泊させる（進攻開始はイベント側）
   return !!ev.spawnAllow[kind];   // walker/spider は events.json の投入指示で解禁
 }
 // ── ロード進捗バー（画面下部。ボタンの「準備中…」表示とは独立） ──
@@ -2572,6 +2618,7 @@ function disposeStage({ keepKens = true } = {}) {
     groundGroup.remove(c);
   }
   waterMeshes.length = 0; cars.length = 0; trains.length = 0;
+  seaInfo = null; _seaTried = false;   // マップが変わるので海の算出結果を捨てる
   portShip = null; portCont = null; railPath = null; roadGroup = null;
   activeEdges = []; roadNodes = new Map(); cityInfo = null;
   if (walker) walkerRemove();
@@ -2769,6 +2816,7 @@ function evalEvents() {   // 本編のみ・各イベント1回発火。しき�
 function runEvAction(a) {
   if (a.type === 'talk') queueTalk(a.talk);
   else if (a.type === 'spawn') ev.spawnAllow[a.enemy] = true;   // 投入指示（enemyAllowed が参照）
+  else if (a.type === 'advance') { if (a.enemy === 'spider') spiderAdvance(); }   // 沖で待機中の母艦を上陸・進攻させる
   else if (a.type === 'flag') ev.flags[a.flag] = true;
   else if (a.type === 'unlock') unlockSpecial(a.skill || 'all');   // 必殺技の解放
   else if (a.type === 'scenario') playScenario(a.scenario, a.after || 'play');
@@ -3462,6 +3510,8 @@ window.__fly = { get paused() { return paused; }, get gameBgmPaused() { return g
   get sirenState() { return sirenCtx ? sirenCtx.state : 'none'; }, forceSiren: (on) => updateSiren(0, on, 50), get camDist() { return cam.dist; },
   get camYaw() { return camYaw; }, get camPitch() { return camPitch; }, get pausePan() { return pausePanOffset.toArray(); },
   killPlayer: () => playerDamage(9999), get buildProf() { return buildProf; },
+  get sea() { return ensureSeaInfo(); }, get spider() { return spider; }, get walker() { return walker; }, spiderAdvance,   // 海からの侵攻の確認用
+
   lookFrom: (x, y, z, pitch = -0.9, yaw = 0) => {   // 調査用: 指定座標へワープして視点角も指定する
     player.pos.set(x, y, z); player.vel.set(0, 0, 0);
     player.yaw = yaw; camYaw = yaw; camPitch = pitch;
@@ -10069,8 +10119,14 @@ function updateExhaust(ex) {   // アフターバーナー風の明滅（スケ�
   if (!ex) return;
   ex.scale.z = ex.userData.exLen * (0.6 + 0.4 * Math.abs(Math.sin(exhaustT * 26 + ex.userData.exPhase)));
 }
+const JET_SEA_SPREAD = Math.PI / 3;   // 海の方角から ±この角度の範囲で飛来させる
 function jetAirPos(out, r) {
-  const a = Math.random() * Math.PI * 2;
+  if (spider && spider.carrier && !spider.dying) {   // 母艦が健在なら甲板から発進する
+    const a = Math.random() * Math.PI * 2, rr = 30 + Math.random() * 40;
+    return out.set(spider.pos.x + Math.cos(a) * rr, spider.pos.y + SP.bodyH, spider.pos.z + Math.sin(a) * rr);
+  }
+  const sa = seaAngleFrom(player.pos);   // 海があるマップは海側から、無ければ従来どおり全方位
+  const a = sa === null ? Math.random() * Math.PI * 2 : sa + (Math.random() - 0.5) * 2 * JET_SEA_SPREAD;
   out.set(player.pos.x + Math.cos(a) * r, 0, player.pos.z + Math.sin(a) * r);
   out.y = Math.max(player.pos.y + 60, groundYAt(out.x, out.z, player.pos.y + 400) + 70);
   return out;
@@ -10333,9 +10389,17 @@ function spawnWalker() {
   for (const b of collBoxes) { if (b.top <= b.bottom) continue; x0 = Math.min(x0, b.x); x1 = Math.max(x1, b.x); z0 = Math.min(z0, b.z); z1 = Math.max(z1, b.z); }
   if (x0 > x1) return;
   const bounds = { x0: x0 + 30, x1: x1 - 30, z0: z0 + 30, z1: z1 - 30 };
-  const ang = Math.random() * Math.PI * 2;
-  const px = Math.max(bounds.x0, Math.min(bounds.x1, player.pos.x + Math.cos(ang) * 250));
-  const pz = Math.max(bounds.z0, Math.min(bounds.z1, player.pos.z + Math.sin(ang) * 250));
+  // 母艦が健在なら真下の海底へ降ろす（海中を歩いて海岸へ上陸する）。それ以外は従来どおりプレイヤー周辺に湧く
+  const carrier = spider && spider.carrier && !spider.dying ? spider : null;
+  let px, pz;
+  if (carrier) {
+    const a = Math.random() * Math.PI * 2, rr = 20 + Math.random() * 40;
+    px = carrier.pos.x + Math.cos(a) * rr; pz = carrier.pos.z + Math.sin(a) * rr;
+  } else {
+    const ang = Math.random() * Math.PI * 2;
+    px = Math.max(bounds.x0, Math.min(bounds.x1, player.pos.x + Math.cos(ang) * 250));
+    pz = Math.max(bounds.z0, Math.min(bounds.z1, player.pos.z + Math.sin(ang) * 250));
+  }
   const { flashU: wkFlashU, cmBody, cmLeg, matAcc } = ensureWkMats();   // 使い回し（再コンパイル防止）
   const matBody = cmBody.mat, matLeg = cmLeg.mat;
   const root = new THREE.Group();
@@ -10380,6 +10444,10 @@ function spawnWalker() {
     target: null, retargetT: 0, smashT: 0, beamT: WK.beamCd, swayT: 0,
     hp: WK.hp, carve: { sets: [cmBody, cmLeg], pts: [] }, dying: false, dieT: 0, accMeshes: [], flashU: wkFlashU,
   };
+  if (carrier) {   // 上陸目標＝海岸のすぐ内側。到達すると徘徊コードが市街目標へ切り替える＝そのまま蹂躙に移る
+    const sea = ensureSeaInfo();
+    if (sea) { walker.target = { x: sea.shoreX - sea.dirX * 60, z: sea.shoreZ - sea.dirZ * 60 }; walker.retargetT = 999; }
+  }
   root.traverse((o) => { if (o.isMesh && o.material === matAcc) walker.accMeshes.push(o); });
   for (const lg of legs) walker.accMeshes.push(lg.kneeBall);
   for (const lg of legs) {   // 初期の足位置＝ホーム
@@ -10636,6 +10704,7 @@ const SP = {
   bellyCd: 0.55, bellyR: 130, bellyDmg: 8,          // 腹部砲門（真下の敵へ戦闘機ショット連射）
   hp: 240, respawnSec: 60, fallSec: 3.2, meltSec: 3.4,
   killZone: 260,
+  offshore: 900, deckClear: 42,   // 母艦モード: 海岸からの沖出し距離／脚を伸ばして胴体を水面より上げる高さ
 };
 let spider = null, spiderCd = 0;
 const spMissiles = [];
@@ -10647,9 +10716,17 @@ function spawnSpider() {
   for (const b of collBoxes) { if (b.top <= b.bottom) continue; x0 = Math.min(x0, b.x); x1 = Math.max(x1, b.x); z0 = Math.min(z0, b.z); z1 = Math.max(z1, b.z); }
   if (x0 > x1) return;
   const bounds = { x0: x0 + 60, x1: x1 - 60, z0: z0 + 60, z1: z1 - 60 };
-  const ang = Math.random() * Math.PI * 2;
-  const px = Math.max(bounds.x0, Math.min(bounds.x1, player.pos.x + Math.cos(ang) * 450));
-  const pz = Math.max(bounds.z0, Math.min(bounds.z1, player.pos.z + Math.sin(ang) * 450));
+  // 母艦モード（rules.seaCarrier）: 海岸から沖へ出た海上に停泊する。それ以外は従来どおり市街にランダム出現
+  const sea = episode.rules.seaCarrier ? ensureSeaInfo() : null;
+  let px, pz;
+  if (sea) {
+    px = Math.max(sea.x0 + 120, Math.min(sea.x1 - 120, sea.shoreX + sea.dirX * SP.offshore));
+    pz = Math.max(sea.z0 + 120, Math.min(sea.z1 - 120, sea.shoreZ + sea.dirZ * SP.offshore));
+  } else {
+    const ang = Math.random() * Math.PI * 2;
+    px = Math.max(bounds.x0, Math.min(bounds.x1, player.pos.x + Math.cos(ang) * 450));
+    pz = Math.max(bounds.z0, Math.min(bounds.z1, player.pos.z + Math.sin(ang) * 450));
+  }
   const { flashU: spFlashU, cmBody, cmLeg, matAcc } = ensureSpMats();   // 使い回し（再コンパイル防止）
   const matBody = cmBody.mat, matLeg = cmLeg.mat;
   const root = new THREE.Group();
@@ -10704,11 +10781,14 @@ function spawnSpider() {
   }
   scene.add(root);
   const gy = groundYAt(px, pz, 500);
+  // 母艦は脚を伸ばして直立＝胴体を水面より上に出す。通常は接地して股関節高さに立つ
+  const bodyY = sea ? sea.level + SP.deckClear : gy + SP.hipY;
   spider = {
     root, turret, pitchPivot, muzzleTip, bellyGuns, legs, bounds,
-    pos: new THREE.Vector3(px, gy + SP.hipY, pz), yaw: Math.random() * Math.PI * 2,
+    pos: new THREE.Vector3(px, bodyY, pz), yaw: sea ? Math.atan2(-sea.dirX, -sea.dirZ) : Math.random() * Math.PI * 2,   // 母艦は街の方を向いて待機
     target: null, retargetT: 0, smashT: 0, beamT: SP.beamCd, mslT: SP.mslCd, bellyT: 0, swayT: 0,
     hp: SP.hp, carve: { sets: [cmBody, cmLeg], pts: [] }, dying: false, dieT: 0, accMeshes: [], flashU: spFlashU,
+    carrier: !!sea, mode: sea ? 'wait' : 'roam', invuln: !!sea,   // 待機中の母艦は無敵（分岐して進攻を始めると解ける）
   };
   root.traverse((o) => { if (o.isMesh && o.material === matAcc) spider.accMeshes.push(o); });
   for (const lg of legs) {
@@ -10716,9 +10796,10 @@ function spawnSpider() {
     lg.foot.copy(lg.homeOff).applyAxisAngle(_wkYAxis, spider.yaw).add(spider.pos);
     lg.foot.y = groundYAt(lg.foot.x, lg.foot.z, spider.pos.y + 300);
   }
+  root.position.copy(spider.pos); root.rotation.y = spider.yaw;   // 待機モードは移動処理を通らないのでここで確定させる
   window.__spider = spider;
   window.__spiderDbg = { get msl() { return spMissiles; }, get bolts() { return enemyBolts; }, hit: spiderHit, fireMsl: spFireMissiles, destroyMsl: destroySpMissile, fireBolt: fireEnemyBolt };
-  console.log('spider spawn', px.toFixed(0), pz.toFixed(0));
+  console.log('spider spawn', px.toFixed(0), pz.toFixed(0), spider.carrier ? '(母艦: 沖で待機)' : '');
 }
 function spSolveLeg(lg, yaw, quat) {   // 2ボーンIK（ウォーカーと同形・寸法のみ）
   if (quat) _spV1.copy(lg.hipOff).applyQuaternion(quat).add(spider.pos);
@@ -10744,8 +10825,18 @@ function spSolveLeg(lg, yaw, quat) {   // 2ボーンIK（ウォーカーと同�
   wkOrient(lg.tibia, knee, foot);
   lg.footMesh.position.copy(foot).y += 2.4;
 }
+// シナリオ分岐で待機を解除＝海岸へ歩き出す。上陸後は徘徊コードが自動で市街目標へ切り替える（＝街を襲い始める）
+function spiderAdvance() {
+  if (!spider || spider.dying || spider.mode !== 'wait') return;
+  const sea = ensureSeaInfo();
+  spider.mode = 'roam';
+  spider.invuln = false;
+  if (sea) { spider.target = { x: sea.shoreX - sea.dirX * 60, z: sea.shoreZ - sea.dirZ * 60 }; spider.retargetT = 999; }   // まず海岸のすぐ内側へ
+  console.log('spider advance: 上陸開始');
+}
 function spiderHit(point, dmg) {
   if (!spider || spider.dying) return;
+  if (spider.invuln) { spawnImpactFx(point, 1.2); playSfxAt('bomb_short.ogg', point, 0.35); return; }   // 待機中の母艦は装甲が弾く
   spider.hp -= dmg;
   spider.flashU.value = 1;
   const c = spider.carve;
@@ -10918,6 +11009,12 @@ function updateSpider(dt) {
     if (mu >= 1.1) spiderRemove();
     return;
   }
+  // ── 待機中の母艦: 沖に停泊したまま動かない（脚IKと武装は下の共通処理がそのまま動く）──
+  if (w.mode === 'wait') {
+    if (sphereOnScreen(w.pos, 200)) for (const lg of w.legs) spSolveLeg(lg, w.yaw);
+    updateSpiderGuns(dt);
+    return;
+  }
   // ── 徘徊 ──
   w.retargetT -= dt;
   if (!w.target || w.retargetT <= 0 || Math.hypot(w.target.x - w.pos.x, w.target.z - w.pos.z) < 50) {
@@ -10987,6 +11084,11 @@ function updateSpider(dt) {
       }
     }
   }
+  updateSpiderGuns(dt);
+}
+// ── 母艦/歩行のどちらでも動く武装処理（主砲・誘導ミサイル・腹部砲門）──
+function updateSpiderGuns(dt) {
+  const w = spider;
   // ── 主砲（キルゾーン内=プレイヤー/外=町。俯角が届かない真下は腹部砲門の担当）──
   const dx = player.pos.x - w.pos.x, dz = player.pos.z - w.pos.z;
   const distP = Math.hypot(dx, dz);
