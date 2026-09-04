@@ -70,9 +70,6 @@ function ensurePauseUI() {
   title.textContent = 'PAUSE';
   title.style.cssText = "font:900 26px 'Yu Gothic','Arial Black',Meiryo,sans-serif;color:#dfe8ff;letter-spacing:0.1em;"
     + 'text-shadow:0 2px 8px #000;margin-bottom:4px;';
-  const hint = document.createElement('div');
-  hint.textContent = 'ドラッグ: 視点操作 ／ ホイール・ピンチ: ズーム ／ 中ドラッグ・2本指: 平行移動';
-  hint.style.cssText = 'font:12px Meiryo,sans-serif;color:#9ab;margin-bottom:4px;';
   const btnCss = 'font:700 16px Meiryo,sans-serif;padding:11px 0;border-radius:9px;cursor:pointer;border:1px solid rgba(255,255,255,0.4);color:#fff;';
   const resume = document.createElement('button');
   resume.textContent = '再開'; resume.style.cssText = btnCss + 'background:#2a5fa0;';
@@ -80,9 +77,44 @@ function ensurePauseUI() {
   const toTitle = document.createElement('button');
   toTitle.textContent = 'タイトルへ戻る'; toTitle.style.cssText = btnCss + 'background:#3a3f4a;';
   toTitle.onclick = () => { togglePause(false); runFlowEnd(null); };
-  panel.append(title, hint, resume, toTitle);
+  panel.append(title, resume, toTitle);
   pauseEl.appendChild(panel);
   document.body.appendChild(pauseEl);
+  ensureCameraTab();
+}
+// ── カメラ操作の説明タブ: 普段は右端にたたまれ、PCはタブクリック／スマホは右端スワイプで開く ──
+let cameraTabEl = null, cameraTabOpen = false;
+function ensureCameraTab() {
+  if (cameraTabEl) return;
+  cameraTabEl = document.createElement('div');
+  cameraTabEl.style.cssText = 'position:fixed;top:0;right:0;height:100%;z-index:37;display:none;pointer-events:none;';
+  const panel = document.createElement('div');
+  panel.style.cssText = 'position:absolute;top:0;right:0;height:100%;width:220px;transform:translateX(100%);'
+    + 'transition:transform 0.25s ease;background:rgba(8,10,20,0.86);border-left:1px solid rgba(140,150,255,0.4);'
+    + 'pointer-events:auto;padding:20px 18px;box-sizing:border-box;color:#dfe6ff;font:13px Meiryo,sans-serif;';
+  panel.textContent = 'ドラッグ: 視点操作\n\nホイール・ピンチ: ズーム\n\n中ドラッグ・2本指: 平行移動';
+  panel.style.whiteSpace = 'pre-line'; panel.style.lineHeight = '1.7';
+  const tab = document.createElement('div');
+  tab.textContent = '◀ カメラ';
+  tab.style.cssText = 'position:absolute;top:110px;right:0;writing-mode:vertical-rl;'
+    + 'background:rgba(8,10,20,0.86);border:1px solid rgba(140,150,255,0.4);border-right:none;border-radius:8px 0 0 8px;'
+    + 'padding:14px 7px;cursor:pointer;pointer-events:auto;color:#dfe6ff;font:13px Meiryo,sans-serif;letter-spacing:0.05em;'
+    + 'transition:right 0.25s ease;';
+  tab.addEventListener('click', () => setCameraTabOpen(!cameraTabOpen));
+  cameraTabEl.append(panel, tab);
+  document.body.appendChild(cameraTabEl);
+  cameraTabEl.__panel = panel; cameraTabEl.__tab = tab;
+}
+function setCameraTabOpen(open) {
+  cameraTabOpen = open;
+  if (!cameraTabEl) return;
+  cameraTabEl.__panel.style.transform = open ? 'translateX(0)' : 'translateX(100%)';
+  cameraTabEl.__tab.style.right = open ? '220px' : '0';
+}
+function showCameraTab(show) {
+  ensureCameraTab();
+  cameraTabEl.style.display = show ? 'block' : 'none';
+  setCameraTabOpen(false);   // 毎回たたまれた状態から開始（普段は右にたたまれている）
 }
 function togglePause(next = !paused) {
   if (next === paused) return;
@@ -90,6 +122,7 @@ function togglePause(next = !paused) {
   paused = next;
   ensurePauseUI();
   pauseEl.style.display = paused ? 'block' : 'none';
+  showCameraTab(paused);
   if (paused) {
     try { document.exitPointerLock(); } catch { /* noop */ }
     for (const a of loopingAudios()) { a._resumeAfterPause = !a.paused; if (!a.paused) a.pause(); }
@@ -5844,6 +5877,22 @@ function setupTouchControls(cv) {
   $('joystick-base').style.display = 'none';
   $('touch-charge').style.display = 'none';
   $('btn-pause').addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); togglePause(); }, { passive: false });
+  // ポーズ中のみ有効: 画面右端からの左スワイプでカメラ操作タブを開く
+  let camSwipeStartX = null, camSwipeStartY = null;
+  window.addEventListener('touchstart', (e) => {
+    if (!paused) return;
+    const t = e.touches[0];
+    if (t.clientX > window.innerWidth - 40) { camSwipeStartX = t.clientX; camSwipeStartY = t.clientY; }
+  }, { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    if (!paused || camSwipeStartX == null) return;
+    const t = e.touches[0];
+    if (camSwipeStartX - t.clientX > 30 && Math.abs(t.clientY - camSwipeStartY) < 60) {
+      setCameraTabOpen(true);
+      camSwipeStartX = null;
+    }
+  }, { passive: true });
+  window.addEventListener('touchend', () => { camSwipeStartX = null; });
   const hint = $('hint');
   if (hint) hint.textContent = '左半分ドラッグ=移動 / 右半分ドラッグ=視点 / 右タップ=ビーム / 長押し=掴む(対象なしはチャージ→離してラージ) / 掴み中は指を離すと投擲';
   locked = true;   // タッチはポインタロック不要＝入力を常時有効化
