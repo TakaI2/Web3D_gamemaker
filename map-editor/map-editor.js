@@ -32,6 +32,7 @@ function buildTerrain(data) {
   if (roadEd.roads.length) renderRoads();   // 道路ラインの高さも追従
   renderVeg();                    // 植生プレビューの高さも追従
   renderParks();                  // 公園プレビューの高さも追従
+  drapePins();                    // ピンの高さも追従
 }
 
 function pickGround(e) {
@@ -174,6 +175,7 @@ function setRoadMode(on) {
   if (on && waterEd.on) setWaterMode(false);
   if (on && vegEd.on) setVegMode(false);
   if (on && parkEd.on) setParkMode(false);
+  if (on && pinEd.on) setPinMode(false);
   brushMesh.visible = false;
   if (!on) { roadEd.active = null; roadEd.sel = null; renderRoads(); }
   setStatus(on ? '道路編集: 「＋新しい道路」→地形をクリックで点を追加 / 点ドラッグで移動 / 右クリックで終了' : '地形ブラシモード');
@@ -447,6 +449,7 @@ function setBldMode(on) {
   if (on) {
     if (roadEd.on) setRoadMode(false);
     if (waterEd.on) setWaterMode(false);
+    if (pinEd.on) setPinMode(false);
     if (vegEd.on) setVegMode(false);
     if (parkEd.on) setParkMode(false);
     brushMesh.visible = false;
@@ -548,6 +551,7 @@ function setParkMode(on) {
     if (roadEd.on) setRoadMode(false);
     if (bldEd.on) setBldMode(false);
     if (waterEd.on) setWaterMode(false);
+    if (pinEd.on) setPinMode(false);
     if (vegEd.on) setVegMode(false);
     brushMesh.visible = false;
     setStatus('公園編集: 「＋新しい公園」→クリックで頂点追加（自動で閉じる） / 頂点ドラッグで移動 / Del削除');
@@ -659,6 +663,115 @@ function parkDeletePark() {
   renderParks();
 }
 
+// ── ピン（目印）: {name,x,y,z} のリスト。設置地点の座標を記録し、マップと一緒に保存する ──
+// 読み込んだマップJSONそのもの。保存時の土台にして、このエディタが編集しないフィールドを守る
+let loadedMap = null;
+const pinEd = { on: false, list: [], group: null, seq: 0 };
+const PIN_H = 60;   // 棒の長さ(m)。マップ全体(6400m四方)を引きで見ても分かる程度に立ち上げる
+
+function setPinMode(on) {
+  pinEd.on = on;
+  $('btn-pin-mode').className = on ? 'on' : 'sub';
+  if (on) {
+    if (roadEd.on) setRoadMode(false);
+    if (bldEd.on) setBldMode(false);
+    if (vegEd.on) setVegMode(false);
+    if (parkEd.on) setParkMode(false);
+    if (waterEd.on) setWaterMode(false);
+    brushMesh.visible = false;
+    setStatus('ピン配置: 地形をクリックで設置（その場所の座標を記録）');
+  }
+}
+function pinLabel(text) {   // 名前を描いた板（スプライト＝常に正面を向く）
+  const cv = document.createElement('canvas');
+  const ctx = cv.getContext('2d');
+  ctx.font = 'bold 44px system-ui, sans-serif';
+  cv.width = Math.max(64, Math.ceil(ctx.measureText(text).width) + 32); cv.height = 64;
+  const c2 = cv.getContext('2d');
+  c2.font = 'bold 44px system-ui, sans-serif';
+  c2.fillStyle = 'rgba(10,14,26,0.82)';
+  c2.fillRect(0, 0, cv.width, cv.height);
+  c2.fillStyle = '#ffe9a0'; c2.textBaseline = 'middle';
+  c2.fillText(text, 16, cv.height / 2 + 2);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
+  sp.scale.set(cv.width / cv.height * 0.032, 0.032, 1);   // sizeAttenuation:false＝画面高に対する比率。引いても寄っても同じ見た目
+  sp.renderOrder = 7;
+  return sp;
+}
+function renderPins() {
+  if (pinEd.group) {
+    scene.remove(pinEd.group);
+    pinEd.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) { o.material.map?.dispose(); o.material.dispose(); } });
+  }
+  pinEd.group = new THREE.Group();
+  for (const pin of pinEd.list) {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, PIN_H, 6), new THREE.MeshBasicMaterial({ color: 0xffe080, depthTest: false }));
+    pole.position.set(pin.x, pin.y + PIN_H / 2, pin.z);
+    pole.renderOrder = 6;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 10), new THREE.MeshBasicMaterial({ color: 0xff5a6a, depthTest: false }));
+    head.position.set(pin.x, pin.y + PIN_H, pin.z);
+    head.renderOrder = 6;
+    const lb = pinLabel(pin.name);
+    lb.position.set(pin.x, pin.y + PIN_H + 16, pin.z);
+    pinEd.group.add(pole, head, lb);
+  }
+  scene.add(pinEd.group);
+  renderPinList();
+}
+function renderPinList() {
+  const box = $('pin-list');
+  box.innerHTML = '';
+  if (!pinEd.list.length) {
+    box.innerHTML = '<div style="font-size:10px;color:#667;">ピンはまだありません</div>';
+    return;
+  }
+  pinEd.list.forEach((pin, i) => {
+    const row = document.createElement('div');
+    row.className = 'pin-row';
+    const name = document.createElement('input');
+    name.type = 'text'; name.value = pin.name;
+    name.addEventListener('change', () => { pin.name = name.value || ('ピン' + (i + 1)); renderPins(); });
+    const go = document.createElement('button');
+    go.className = 'go';
+    go.textContent = `${Math.round(pin.x)}, ${Math.round(pin.z)}`;
+    go.title = `標高 ${pin.y.toFixed(1)}m — クリックでこの場所へ視点移動`;
+    go.addEventListener('click', () => focusPin(pin));
+    const del = document.createElement('button');
+    del.className = 'del'; del.textContent = '×'; del.title = '削除';
+    del.addEventListener('click', () => { pinEd.list.splice(i, 1); renderPins(); });
+    row.append(name, go, del);
+    box.appendChild(row);
+  });
+}
+function focusPin(pin) {   // 現在の視点方向・距離を保ったまま注視点だけピンへ移す
+  const off = camera.position.clone().sub(orbit.target);
+  orbit.target.set(pin.x, pin.y, pin.z);
+  camera.position.copy(orbit.target).add(off);
+  orbit.update();
+  setStatus(`ピン「${pin.name}」 X ${pin.x.toFixed(1)} / Z ${pin.z.toFixed(1)} / 標高 ${pin.y.toFixed(1)}m`);
+}
+function pinPointerDown(e) {
+  if (e.button !== 0) return;
+  const p = pickGround(e);
+  if (!p) return;
+  pinEd.seq++;
+  pinEd.list.push({ name: 'ピン' + pinEd.seq, x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2) });
+  renderPins();
+  setStatus(`ピン設置: X ${p.x.toFixed(1)} / Z ${p.z.toFixed(1)} / 標高 ${p.y.toFixed(1)}m`);
+}
+function drapePins() {   // 地形を作り直したらピンの高さを追従させる（道路・植生と同じ扱い）
+  if (!pinEd.list.length || !terrain) return;
+  for (const pin of pinEd.list) pin.y = +terrain.heightAt(pin.x, pin.z).toFixed(2);
+  renderPins();
+}
+function showCoord(p) {
+  $('coord').textContent = p
+    ? `X ${p.x.toFixed(1)} / Z ${p.z.toFixed(1)} / 標高 ${p.y.toFixed(1)}m`
+    : 'X ---- / Z ---- / 標高 ----';
+}
+
 // ── 水面編集: 矩形 {x,z,w,d,level} のリスト。半透明青プレーンで表示 ──
 const waterEd = { on: false, list: [], sel: -1, dragging: false, placing: false, group: null };
 
@@ -670,6 +783,7 @@ function setWaterMode(on) {
     if (bldEd.on) setBldMode(false);
     if (vegEd.on) setVegMode(false);
     if (parkEd.on) setParkMode(false);
+    if (pinEd.on) setPinMode(false);
     brushMesh.visible = false;
     setStatus('水面編集: ＋水面→クリック設置 / クリック選択→ドラッグ移動 / スライダ調整 / Del削除');
   } else { waterEd.sel = -1; waterEd.placing = false; }
@@ -778,6 +892,7 @@ function setVegMode(on) {
     if (roadEd.on) setRoadMode(false);
     if (bldEd.on) setBldMode(false);
     if (waterEd.on) setWaterMode(false);
+    if (pinEd.on) setPinMode(false);
     if (parkEd.on) setParkMode(false);
     ensureVeg();
     setStatus('植生ペイント: 左ドラッグで塗る / Shift+ドラッグで消す / 半径は地形ブラシと共通');
@@ -1206,16 +1321,22 @@ function disposeGamePv(keepState) {
 async function saveMap() {
   const name = ($('save-name').value || 'map').replace(/[^\w\-]/g, '');
   const roads = roadEd.roads.filter((r) => r.points.length >= 2);
+  // 元の読み込みJSONを土台にして上書きする。こうしないと、このエディタが扱わない
+  // bridges / rails / rotaries / port / rivers が保存のたびに消える（実際に arden で消失した）
   const json = {
+    ...(loadedMap || {}),
     format: 'city-map', version: 1, name,
     terrain: { ...serializeTerrain(terrain.data), attribution: false },
     roads,
     osmRoads: roads.some((r) => r.osm),   // OSM由来の道路を含む＝出典表記が必要なまま
-    buildings: { seed: 20260706, removed: [...bldEd.removed], moved: bldEd.moved, added: bldEd.added },
+    // 建物シードと生成パラメータ(params.spacing など)はマップ固有。読み込んだ値をそのまま引き継ぐ
+    // （落とすとシードが変わり街並みが総入れ替え／spacingが既定15に戻って建物が減る）
+    buildings: { ...(loadedMap?.buildings || {}), seed: loadedMap?.buildings?.seed ?? 20260706, removed: [...bldEd.removed], moved: bldEd.moved, added: bldEd.added },
     water: waterEd.list,
     forest: vegHasAny() ? { cell: vegEd.cell, res: vegEd.res, yOff: vegEd.yOff, model: vegEd.model || undefined, treeH: vegEd.treeH, data: b64(vegEd.data) } : undefined,
     parks: parkEd.list.filter((pk) => pk.points.length >= 3).map((pk) => ({ points: pk.points, fountain: pk.fountain || 'round' })),
     parkCfg: { hedgeOvr: parkEd.ovr },
+    pins: pinEd.list,
   };
   try {
     const r = await fetch('../api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'map', filename: name + '.map.json', content: JSON.stringify(json) }) });
@@ -1236,6 +1357,7 @@ async function loadMap() {
   if (!f) return;
   try {
     const j = await (await fetch('../maps/' + f)).json();
+    loadedMap = j;   // このエディタが編集しないフィールド(bridges/rails/rotaries/port/rivers等)は保存時にそのまま引き継ぐ
     buildTerrain(deserializeTerrain(j.terrain));
     roadEd.roads = (j.roads || []).map((r) => ({ points: (r.points || []).map((p) => [p[0], p[1]]), closed: !!r.closed, osm: !!r.osm }));
     roadEd.importedOsm = roadEd.roads.some((r) => r.osm);
@@ -1265,6 +1387,9 @@ async function loadMap() {
     }
     renderVeg();
     if (town.on) await refreshTown();
+    pinEd.list = (j.pins || []).map((q, i) => ({ name: q.name || ('ピン' + (i + 1)), x: q.x, y: q.y, z: q.z }));
+    pinEd.seq = pinEd.list.length;
+    renderPins();
     $('save-name').value = j.name || f.replace(/\.map\.json$/, '');
     setStatus(`読み込み: ${f}（道路${roadEd.roads.length}本）`);
   } catch (e) { setStatus('読み込み失敗: ' + e.message); }
@@ -1311,6 +1436,7 @@ function init() {
   // 入力
   renderer.domElement.addEventListener('pointerdown', (e) => {
     if (vegEd.on) { if (e.button === 0) brushing = true; return; }   // 植生＝ブラシ扱い
+    if (pinEd.on) { pinPointerDown(e); return; }
     if (parkEd.on) { parkPointerDown(e); return; }
     if (waterEd.on) { waterPointerDown(e); return; }
     if (bldEd.on) { bldPointerDown(e); return; }
@@ -1333,13 +1459,15 @@ function init() {
   });
   renderer.domElement.addEventListener('pointermove', (e) => {
     if (!terrain) return;
+    const p = pickGround(e);   // モードに関わらず座標表示を更新する（レイはここで1回だけ）
+    showCoord(p);
     if (!vegEd.on) {   // 植生モードはブラシリング＋塗りのパスをそのまま使う
+      if (pinEd.on) { brushMesh.visible = false; return; }
       if (parkEd.on) { parkPointerMove(e); return; }
       if (waterEd.on) { waterPointerMove(e); return; }
       if (bldEd.on) { bldPointerMove(e); return; }
       if (roadEd.on) { roadPointerMove(e); return; }
     }
-    const p = pickGround(e);
     if (p) {
       brushMesh.visible = true;
       brushMesh.position.set(p.x, p.y + 1.5, p.z);
@@ -1481,6 +1609,8 @@ function init() {
       setStatus(`地形をクリックして${tier === 'house' ? '住宅' : tier === 'mid' ? '中層ビル' : '高層ビル'}を設置`);
     });
   }
+  $('btn-pin-mode').addEventListener('click', () => setPinMode(!pinEd.on));
+  $('btn-pin-clear').addEventListener('click', () => { pinEd.list.length = 0; pinEd.seq = 0; renderPins(); });
   $('btn-save').addEventListener('click', saveMap);
   $('btn-load').addEventListener('click', loadMap);
   window.addEventListener('resize', () => {
@@ -1494,6 +1624,7 @@ function init() {
   noiseTerrain(d, { seed: 1, amp: 260 });
   autoColorize(d);
   buildTerrain(d);
+  renderPins();   // 一覧の初期表示（空メッセージ）
   refreshLoadList();
   renderer.setAnimationLoop(() => {
     if (vegEd.dirty && performance.now() - vegEd.lastBuild > 150) renderVeg();   // 塗り中は8Hzで再構築

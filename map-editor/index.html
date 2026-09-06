@@ -23,12 +23,20 @@
     .row { display: flex; gap: 6px; } .row > * { flex: 1; }
     .val { color: #e6ecf5; min-width: 38px; text-align: right; }
     #hint { position: fixed; bottom: 8px; left: 8px; z-index: 20; background: rgba(0,0,0,0.5); color: #9ab; padding: 6px 10px; border-radius: 4px; font-size: 11px; line-height: 1.6; }
+    #coord { position: fixed; top: 40px; left: 8px; z-index: 20; background: rgba(0,0,0,0.55); color: #cfe; padding: 6px 10px; border-radius: 4px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre; }
+    /* flex: 0 0 auto がないと、overflow指定によりmin-heightが0扱いになりパネル溢れ時に高さ0まで潰れる */
+    #pin-list { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; max-height: 190px; overflow-y: auto; }
+    .pin-row { display: flex; align-items: center; gap: 4px; }
+    .pin-row input { flex: 1; min-width: 0; }
+    .pin-row .go { background: #24314f; color: #9fd0ff; border: 1px solid #2a3756; border-radius: 4px; padding: 3px 5px; font-size: 10px; font-family: ui-monospace, monospace; cursor: pointer; white-space: nowrap; }
+    .pin-row .del { background: #5a2b32; color: #fff; border: none; border-radius: 4px; padding: 4px 7px; font-size: 11px; cursor: pointer; }
   </style>
 </head>
 <body>
   <div id="app"></div>
   <div id="topbar"><a href="../hub/">← 一覧</a></div>
   <div id="status">読み込み中…</div>
+  <div id="coord">X ---- / Z ---- / 標高 ----</div>
   <div id="panel">
     <h3>新規地形</h3>
     <label>シード <input type="number" id="gen-seed" value="1" style="width:80px"></label>
@@ -112,6 +120,13 @@
     </select></label>
     <label>生垣の重なり <input type="range" id="park-ovr" min="1" max="2.5" step="0.05" value="1.1"><span class="val" id="park-ovr-val">1.10</span></label>
     <div style="font-size:10px;color:#667;">クリックで頂点を追加（自動で閉じる・右クリックで引き終わり）。ゲームでは境界に生垣（道路に最も近い区画がゲート）、中央に噴水、各頂点の内側にランタン（夜発光）、中は緑地になります。</div>
+    <h3>ピン（目印）</h3>
+    <div class="row">
+      <button id="btn-pin-mode" class="sub">📍 ピン配置モード</button>
+      <button id="btn-pin-clear" class="sub">全消去</button>
+    </div>
+    <div id="pin-list"></div>
+    <div style="font-size:10px;color:#667;">ピンモード中に地形をクリックで設置（その場所の座標を記録）。座標ボタンでその場所へ視点移動、名前は編集可、×で削除。マップと一緒に保存されます。</div>
     <h3>町プレビュー</h3>
     <button id="btn-town" class="sub">道路＋建物を地形に載せる</button>
     <button id="btn-gamepv" class="sub">🎮 実モデル表示（ゲームの見た目）</button>

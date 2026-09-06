@@ -325,11 +325,20 @@ async function init() {
     (f.startsWith('city_GLB format/') && /\/building-[\w-]+\.glb$/.test('/' + f) && !f.includes('low-detail')) ||
     (f.includes('kenney_city-kit-suburban') && /building-type-[a-u]\.glb$/.test(f)) ||
     /kenney_city-kit-roads.*light-curved\.glb$/.test(f));
+  // 生成オブジェクト（Blender等で作った塔など。models/manifest.json のキット絞り込みには載らないので別途足す）
+  const gen = [];
+  try {
+    for (const it of await (await fetch('../models/generated-manifest.json')).json()) {
+      if (it.hasGlb) gen.push('generated/' + it.id + '/model.glb');
+    }
+  } catch { /* 開発サーバー以外では一覧を取れない */ }
   const sel = $('model-list');
-  for (const f of list) {
+  for (const f of [...gen, ...list]) {
     const o = document.createElement('option');
     o.value = f;
-    o.textContent = (entries[f]?.length ? '● ' : '') + f.split('/').pop().replace('.glb', '');
+    // 生成オブジェクトはフォルダ名が名前（model.glb 固定のため）
+    const label = f.startsWith('generated/') ? f.split('/')[1] + '（生成）' : f.split('/').pop().replace('.glb', '');
+    o.textContent = (entries[f]?.length ? '● ' : '') + label;
     sel.appendChild(o);
   }
   sel.addEventListener('change', () => loadModel(sel.value).catch((e) => setStatus('読込失敗: ' + e.message)));

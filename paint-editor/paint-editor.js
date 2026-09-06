@@ -10,7 +10,8 @@ import * as THREE from 'https://esm.sh/three@0.184.0';
 import { OrbitControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'https://esm.sh/three@0.184.0/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'https://esm.sh/three@0.184.0/examples/jsm/utils/BufferGeometryUtils.js';
-import { buildLegacyJet, JET_DEFAULT_COLORS } from '../lib/jet-shapes.js';
+import { TransformControls } from 'https://esm.sh/three@0.184.0/examples/jsm/controls/TransformControls.js';
+import { buildLegacyJet, JET_DEFAULT_COLORS, JET_CUSTOM_LEN } from '../lib/jet-shapes.js';
 
 const $ = (id) => document.getElementById(id);
 const app = $('app');
@@ -27,12 +28,28 @@ renderer.setSize(innerWidth, innerHeight);
 app.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 1, 0);
+// 排気位置ギズモ（本編と同じ意味の translate。ドラッグ中はOrbitControlsを止める）
+const transformControls = new TransformControls(camera, renderer.domElement);
+transformControls.setMode('translate'); transformControls.size = 0.8;
+transformControls.addEventListener('dragging-changed', (e) => { controls.enabled = !e.value; });
+scene.add(transformControls.getHelper ? transformControls.getHelper() : transformControls);
+let exhaustEditMode = false;
 scene.add(new THREE.HemisphereLight(0xcfe4ff, 0x30384a, 1.2));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(10, 16, 8); scene.add(sun);
 scene.add(new THREE.GridHelper(60, 24, 0x3a4a68, 0x232c40));
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
+// 進行方向の矢印＝常に「シーンの固定+Z」（root直下の子にすると反転時にモデルと一緒に回ってしまい、
+// 反転が合っているかの目印にならない。scene直下に固定して、モデル側をrootごと回して合わせる）
+const fwdArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0), JET_CUSTOM_LEN * 0.9, 0x3adf7c, JET_CUSTOM_LEN * 0.18, JET_CUSTOM_LEN * 0.1);
+fwdArrow.visible = false;
+scene.add(fwdArrow);
+
 let current = null;   // { kind:'legacy'|'painted', root, ... }
+// ゲーム側はflip180のとき geometry.rotateY(Math.PI) を直接頂点データへ焼き込む(R空間→G空間、(x,y,z)→(-x,y,-z))。
+// エディタは表示上rootを回すだけでマーカー自身の座標は常にR空間のまま保つので、保存/読込時にだけ
+// この変換（自己逆変換）を掛けて一致させる（掛け忘れると反転時に排気位置がズレる）
+function flipXZ(p, flip) { return flip ? { ...p, x: -p.x, z: -p.z } : p; }
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 
@@ -53,10 +70,24 @@ async function buildObjList() {
 objSel.addEventListener('change', () => loadSelected(objSel.value));
 
 function clearCurrent() {
+  transformControls.detach();
+  setExhaustMode(false);
   if (current?.root) { scene.remove(current.root); current.root.traverse((o) => { o.geometry?.dispose(); }); }
   current = null;
+  fwdArrow.visible = false;
+  $('flip180').classList.remove('on');
+  $('flip180').style.display = ''; $('exhaustMode').style.display = '';   // 塔で隠した戦闘機専用ボタンを戻す
   $('legacySwatches').style.display = 'none';
   $('paintPanel').style.display = 'none';
+}
+function setExhaustMode(on) {
+  exhaustEditMode = on;
+  $('exhaustMode')?.classList.toggle('on', on);
+  $('exhaustFields').style.display = on ? 'block' : 'none';
+  if (current?.kind === 'painted') {
+    if (on) transformControls.attach(current.exhaustMarker);
+    else transformControls.detach();
+  }
 }
 
 // ══════════ 旧戦闘機モード（3色スウォッチ） ══════════
@@ -117,6 +148,8 @@ $('glowOff').addEventListener('click', () => { brushGlow = false; $('glowOff').c
 
 async function loadPainted(id) {
   clearCurrent();
+  let paint = null;   // 縮尺の基準軸(kind)の判定に使うので、モデルより先に読む
+  try { const r = await fetch('../models/generated/' + id + '/paint.json'); if (r.ok) paint = await r.json(); } catch { /* 未塗装 */ }
   const loader = new GLTFLoader();
   const gltf = await loader.loadAsync(new URL('../models/generated/' + id + '/model.glb', location.href).href);
   gltf.scene.updateMatrixWorld(true);
@@ -125,10 +158,18 @@ async function loadPainted(id) {
   let merged = parts.length > 1 ? mergeGeometries(parts, false) : parts[0];
   merged = merged.toNonIndexed();   // 面ごとに独立した頂点にする（本編の適用時と同じ規約）
   merged.computeVertexNormals();
+  merged.computeBoundingBox();
+  const bb = merged.boundingBox, bbSize = bb.getSize(new THREE.Vector3());
+  // ゲームと同じ実寸(JET_CUSTOM_LEN)に正規化した縮尺。root配下はこの縮尺の空間＝ここで置いた
+  // 排気ギズモの座標がそのままゲーム側(jet.mesh基準)で使える。
+  // 塔などの縦長オブジェクトはZ基準だとプレビューが破綻するので、種別で基準軸を変える
+  // （kind未保存のものは形状から推定＝高さが最長なら'prop'。戦闘機は従来どおりZ基準のまま）
+  const kind = paint?.kind || (bbSize.y > Math.max(bbSize.x, bbSize.z) ? 'prop' : 'jet');
+  const isJet = kind !== 'prop';
+  const scale = JET_CUSTOM_LEN / Math.max(0.01, isJet ? bbSize.z : Math.max(bbSize.x, bbSize.y, bbSize.z));
+  const posY = -bbSize.y * scale / 2 - bb.min.y * scale;
   const triCount = merged.attributes.position.count / 3;
 
-  let paint = null;
-  try { const r = await fetch('../models/generated/' + id + '/paint.json'); if (r.ok) paint = await r.json(); } catch { /* 未塗装 */ }
   const colors = (paint?.colors?.length === triCount) ? paint.colors.slice() : new Array(triCount).fill('#888888');
   const glow = (paint?.glow?.length === triCount) ? paint.glow.slice() : new Array(triCount).fill(false);
   let flip180 = !!paint?.flip180;
@@ -145,17 +186,20 @@ async function loadPainted(id) {
   merged.setAttribute('color', new THREE.BufferAttribute(colorAttr, 3));
   repaintAttr();
 
-  const root = new THREE.Group();
+  const root = new THREE.Group();   // このGroup配下はゲーム実寸空間（機体の見た目スケールは内側のvisualGroupへ）
+  const visual = new THREE.Group();
+  visual.scale.setScalar(scale); visual.position.y = posY;
+  root.add(visual);
   const baseMat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.5, roughness: 0.45, side: THREE.DoubleSide });
   const baseMesh = new THREE.Mesh(merged, baseMat);
-  root.add(baseMesh);
+  visual.add(baseMesh);
   const glowGeo = new THREE.BufferGeometry();
   glowGeo.setAttribute('position', merged.attributes.position);
   glowGeo.setAttribute('color', merged.attributes.color);
   const glowMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
   const glowMesh = new THREE.Mesh(glowGeo, glowMat);
   glowMesh.renderOrder = 1;
-  root.add(glowMesh);
+  visual.add(glowMesh);
   function rebuildGlowIndex() {
     const idx = [];
     for (let t = 0; t < triCount; t++) if (glow[t]) idx.push(t * 3, t * 3 + 1, t * 3 + 2);
@@ -165,13 +209,37 @@ async function loadPainted(id) {
 
   if (flip180) root.rotation.y = Math.PI;
   scene.add(root);
+  fwdArrow.visible = isJet;   // 固定の目印＝ゲーム内で進む方向。この矢印の先にモデルの機首が向くようrootごと回して合わせる（塔は向きの概念が無いので出さない）
+
+  // 排気ギズモ（root直下＝ゲーム実寸空間。座標がそのまま jet.mesh 基準で使える）
+  const exDefault = { x: 0, y: 0, z: -JET_CUSTOM_LEN * 0.42, len: JET_CUSTOM_LEN * 0.6, rad: JET_CUSTOM_LEN * 0.045 };
+  // 保存済みはG空間（flip180時点で焼き込み後の座標）なので、R空間で置くエディタのマーカーへ戻す
+  const exData = paint?.exhaust ? flipXZ({ ...exDefault, ...paint.exhaust }, flip180) : exDefault;
+  const exhaustMarker = new THREE.Group();
+  exhaustMarker.position.set(exData.x, exData.y, exData.z);
+  const exGeo = new THREE.ConeGeometry(1, 1, 12, 1, true); exGeo.rotateX(-Math.PI / 2); exGeo.translate(0, 0, -0.5);
+  const exMat = new THREE.MeshBasicMaterial({ color: 0xffa050, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const exPreview = new THREE.Mesh(exGeo, exMat);
+  exPreview.scale.set(exData.rad, exData.rad, exData.len);
+  exhaustMarker.add(exPreview);
+  root.add(exhaustMarker);
+  $('exLen').value = exData.len.toFixed(2); $('exRad').value = exData.rad.toFixed(3);
+  const updateExPreview = () => exPreview.scale.set(exData.rad, exData.rad, exData.len);
+  exhaustMarker.visible = isJet;
+  // 戦闘機専用の操作（前後反転・排気位置）は塔などでは出さない
+  $('flip180').style.display = isJet ? '' : 'none';
+  $('exhaustMode').style.display = isJet ? '' : 'none';
 
   current = {
-    kind: 'painted', root, id, mesh: baseMesh, triCount, colors, glow, flip180,
-    setFlip(v) { flip180 = v; root.rotation.y = flip180 ? Math.PI : 0; },
+    kind: 'painted', objKind: kind, root, id, mesh: baseMesh, triCount, colors, glow, flip180, exhaustMarker, exData,
+    setFlip(v) { flip180 = v; current.flip180 = v; root.rotation.y = flip180 ? Math.PI : 0; },
     paintFace(t, hex, glowOn) { colors[t] = hex; glow[t] = glowOn; repaintAttr(); rebuildGlowIndex(); },
     resetAll() { colors.fill('#888888'); glow.fill(false); repaintAttr(); rebuildGlowIndex(); },
+    setExhaustLen(v) { exData.len = v; updateExPreview(); },
+    setExhaustRad(v) { exData.rad = v; updateExPreview(); },
+    getExhaust() { return flipXZ({ x: exhaustMarker.position.x, y: exhaustMarker.position.y, z: exhaustMarker.position.z, len: exData.len, rad: exData.rad }, flip180); },
   };
+  $('flip180').classList.toggle('on', flip180);
   $('meta').textContent = triCount + ' 面 / ' + (paint ? '保存済みの塗装を読込み' : '未塗装（グレー）');
   $('paintPanel').style.display = 'block';
   info('');
@@ -182,10 +250,15 @@ $('flip180').addEventListener('click', () => {
   current.setFlip(!current.flip180);
   $('flip180').classList.toggle('on', current.flip180);
 });
+$('exhaustMode').addEventListener('click', () => setExhaustMode(!exhaustEditMode));
+$('exLen').addEventListener('input', () => { if (current?.kind === 'painted') current.setExhaustLen(+$('exLen').value || 0.1); });
+$('exRad').addEventListener('input', () => { if (current?.kind === 'painted') current.setExhaustRad(+$('exRad').value || 0.05); });
 $('resetPaint').addEventListener('click', () => { if (current?.kind === 'painted') current.resetAll(); });
 $('savePaint').addEventListener('click', async () => {
   if (current?.kind !== 'painted') return;
-  const data = { colors: current.colors, glow: current.glow, flip180: current.flip180 };
+  const isJet = current.objKind !== 'prop';
+  const data = { kind: current.objKind, colors: current.colors, glow: current.glow, flip180: current.flip180 };
+  if (isJet) data.exhaust = current.getExhaust();   // 排気は戦闘機専用。塔などには持たせない
   try {
     const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dir: 'models', filename: 'generated/' + current.id + '/paint.json', content: data }) });
@@ -205,7 +278,7 @@ function pickFace(clientX, clientY) {
 }
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (current?.kind !== 'painted') return;
+  if (current?.kind !== 'painted' || exhaustEditMode) return;   // 排気ギズモ編集中は面ペイントを止める
   const t = pickFace(e.clientX, e.clientY);
   if (t < 0) return;
   if (e.button === 2) {   // スポイト
@@ -223,7 +296,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   current.paintFace(t, palette[curColorIdx], brushGlow);
 });
 window.addEventListener('pointermove', (e) => {
-  if (!painting) return;
+  if (!painting || exhaustEditMode) return;
   const t = pickFace(e.clientX, e.clientY);
   if (t >= 0) current.paintFace(t, palette[curColorIdx], brushGlow);
 });

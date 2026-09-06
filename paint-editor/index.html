@@ -67,7 +67,15 @@
         <button id="glowOn">発光で塗る</button>
       </div>
       <div class="sep"></div>
+      <h3>向き・排気</h3>
+      <div class="hint">緑の矢印＝ゲーム内で進む方向。逆なら反転ボタンで直す。</div>
       <button id="flip180" class="sub">前後反転（機首とテール入替）</button>
+      <button id="exhaustMode" class="sub">排気位置を編集（ギズモ表示）</button>
+      <div id="exhaustFields" style="display:none">
+        <div class="row"><span class="lb" style="width:36px">長さ</span><input type="number" id="exLen" step="0.5" style="width:70px;background:#1a2438;color:#e6ecf5;border:1px solid #2a3756;border-radius:4px;padding:4px 6px;"></div>
+        <div class="row"><span class="lb" style="width:36px">太さ</span><input type="number" id="exRad" step="0.1" style="width:70px;background:#1a2438;color:#e6ecf5;border:1px solid #2a3756;border-radius:4px;padding:4px 6px;"></div>
+      </div>
+      <div class="sep"></div>
       <button id="resetPaint" class="sub">全面リセット</button>
       <button id="savePaint">paint.json に保存</button>
     </div>
