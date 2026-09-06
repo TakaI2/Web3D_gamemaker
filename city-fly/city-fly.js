@@ -6489,7 +6489,7 @@ function openSafeZones() {
 }
 // 救助のお礼＝補給のプネウマドール。セーフゾーンのリング内に立たせる（吸血して回復できる）
 function spawnSafeZonePneuma(z) {
-  const a = Math.random() * Math.PI * 2, r = z.r * 0.55;
+  const a = Math.random() * Math.PI * 2, r = z.r * 1.35;   // リングの少し外＝掴みに行っても吸い込まれない
   const px = z.x + Math.cos(a) * r, pz = z.z + Math.sin(a) * r;
   spawnKen({
     mannequin: 'pneuma', still: true, healMul: 1 / 3,
@@ -6516,6 +6516,7 @@ function updateSafeZones(dt) {
       if (sk.t >= SAFEZONE_SUCK) { spawnImpactFx(m.vrm.scene.position.clone(), 1); m.vrm.scene.visible = false; m._remove = true; m.suck = null; }
       continue;
     }
+    if (m.mannequin) continue;   // 補給のプネウマドールは避難対象ではない（掴んでも吸い込まれない）
     if (m.rescued || !m.wasGrabbed || m.dissolving || m.dead) continue;   // 掴んで運ばれた市民だけが対象
     kenCenter(m, _szV);
     for (const z of safeZones) {
@@ -8509,12 +8510,12 @@ async function prepareKenAssets() {
     try {   // セリフセット（住民の状況セリフ）
       const sd = await fetchSpeechSet(kenAssets.bundle?.speech || 'ken.speech.json');   // npc.jsonのspeech指定を優先
       if (sd) kenAssets.speechChar = buildSpeechCharacter(sd, '住民');
-      if (TUTORIAL) {   // ドールは専用のセリフ（機械的な応答／プネウマは無言に近い）
+      if (TUTORIAL) {   // ダミードールはチュートリアル専用
         const dd = await fetchSpeechSet('dummydoll.speech.json');
         if (dd) kenAssets.dollChar = buildSpeechCharacter(dd, 'ダミードール');
-        const pd = await fetchSpeechSet('pneuma.speech.json');
-        if (pd) kenAssets.pneumaChar = buildSpeechCharacter(pd, 'プネウマドール');
       }
+      const pd = await fetchSpeechSet('pneuma.speech.json');   // 本編でもセーフゾーンの補給で出るので常に読む
+      if (pd) kenAssets.pneumaChar = buildSpeechCharacter(pd, 'プネウマドール');
       if (!speechUI) speechUI = createSpeechUI({ dom: document.body });
     } catch (e) { console.warn('kenセリフ準備失敗:', e); }
     kenAssets.ready = true;

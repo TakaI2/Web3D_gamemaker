@@ -11,7 +11,9 @@
   "data": {
     "talks": "ep1_talks.json",
     "events": "ep1_events.json",
-    "speech": [],
+    "speech": [
+      "pneuma.speech.json"
+    ],
     "bgm": "Sound_Wave.ogg"
   },
   "rules": {
