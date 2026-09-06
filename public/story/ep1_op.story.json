@@ -1,52 +1,140 @@
 {
-  "version": 1,
-  "id": "ep1_op",
-  "title": "OP：ブリーフィング",
-  "mode": "2d",
-  "actors": [],
-  "script": [
-    {
-      "op": "bg",
-      "color": "#0a1024",
-      "image": "gif/sf-command-ui_640x360_20fps_6s.gif"
-    },
-    {
-      "op": "bgm.play",
-      "name": "BGM/crisis_2.ogg",
-      "loop": true,
-      "volume": 0.55
-    },
-    {
-      "op": "fade.in",
-      "duration": 700
-    },
-    {
-      "op": "say",
-      "actor": "hakase",
-      "face": "normal",
-      "lines": [
-        "ネイ、聞こえる？　ブリーフィングを始めるわよ"
-      ]
-    },
-    {
-      "op": "say",
-      "actor": "hakase",
-      "face": "worry",
-      "lines": [
-        "現在、デッドアトモスの軍団が本市に接近中。かなり大規模な攻撃が予想されるわ"
-      ]
-    },
-    {
-      "op": "say",
-      "actor": "hakase",
-      "face": "normal",
-      "lines": [
-        "市長から我々に出動要請がでている。初任務だからしっかりね！"
-      ]
-    },
-    {
-      "op": "fade.out",
-      "duration": 700
-    }
-  ]
+ "version": 1,
+ "id": "ep1_op",
+ "title": "OP：ブリーフィング",
+ "mode": "2d",
+ "actors": [],
+ "script": [
+  {
+   "op": "bg",
+   "color": "#0a1024",
+   "image": "gif/sf-command-ui_640x360_20fps_6s.gif"
+  },
+  {
+   "op": "bgm.play",
+   "name": "BGM/crisis_2.ogg",
+   "loop": true,
+   "volume": 0.55
+  },
+  {
+   "op": "fade.in",
+   "duration": 700
+  },
+  {
+   "op": "say",
+   "actor": "hakase",
+   "face": "panic",
+   "lines": [
+    "ネイ、緊急の出動要請よ！"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "hakase",
+   "face": "worry",
+   "lines": [
+    "矢ツ木市遠方の海上に謎の施設の存在が確認された。"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "hakase",
+   "face": "worry",
+   "lines": [
+    "おそらく、デッドアトモスに関連したものと思われるわ！"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "hakase",
+   "face": "normal",
+   "lines": [
+    "市長から我々に直々の出動要請が来ている！　今、通信が入っているわ。"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "mayor",
+   "face": "normal",
+   "lines": [
+    "あー、聞こえるかね？　博士。　矢ツ木市長の田中だ。まずは出動の快諾に感謝する。"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "mayor",
+   "face": "panic",
+   "lines": [
+    "とにかく早く来てほしい！　沖の方におかしな建物が急に現れ、街はパニック寸前だ！"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "mayor",
+   "face": "panic",
+   "lines": [
+    "調査に向かわせたヘリは撃墜された！　明らかに敵対的な存在と見られる。"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "hakase",
+   "face": "normal",
+   "lines": [
+    "状況はこちらでも把握しております市長！　早速、我々科学防衛隊のエージェントを派遣する予定ですので！"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "nei",
+   "face": "worry",
+   "lines": [
+    "調査・・・、て言っても何を調べればいいの・・・？"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "mayor",
+   "face": "panic",
+   "lines": [
+    "ん・・・まさかその子供が例の？　まだ子供じゃないか！"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "mayor",
+   "face": "worry",
+   "lines": [
+    "本当に奴らの軍団に対抗できるのか？"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "hakase",
+   "face": "smile",
+   "lines": [
+    "ご心配なく！　このネイは、我々黒崎グループと科学防衛隊が協力のうえ調整を行った強力なサイキッカーです。"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "hakase",
+   "face": "normal",
+   "lines": [
+    "デッドアトモスがいかに強大な軍備を用意しようと、この子の力で十分に跳ね返すことができるでしょう！"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "hakase",
+   "face": "normal",
+   "lines": [
+    "ネイ、準備をして！　いよいよ実戦よ！"
+   ]
+  },
+  {
+   "op": "fade.out",
+   "duration": 700
+  }
+ ]
 }

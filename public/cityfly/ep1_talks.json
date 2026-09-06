@@ -33,121 +33,247 @@
     }
   },
   "talks": {
-    "t_hp50": [
+    "t_start": [
       {
-        "who": "nei",
-        "face": "damage",
-        "text": "私のマントが！！"
+        "who": "hakase",
+        "face": "normal",
+        "text": "まずは、海に向かいましょう！　あのおかしな建物を間近で確認するわよ。"
+      },
+      {
+        "who": "hakase",
+        "face": "normal",
+        "text": "私たちはシティタワー内で指揮を執るわ！　ここは緊急の為に頑丈に作られているからね！"
       },
       {
         "who": "nei",
-        "face": "damage",
-        "text": "まずい、このままじゃ力が出せなくなる！！"
-      }
-    ],
-    "t_hp25": [
-      {
-        "who": "nei",
-        "face": "weak",
-        "text": "くっ！！　飛ぶのがキツくなってきた！！"
-      },
-      {
-        "who": "nei",
-        "face": "weak",
-        "text": "だめ・・・、補充しなきゃ・・・、　精気・・・、元気な精気・・・"
-      }
-    ],
-    "t_city40": [
-      {
-        "who": "mayor",
-        "face": "panic",
-        "text": "ま・・・町が！　おいっ！　被害がどんどん拡大しているぞ！"
+        "face": "worry",
+        "text": "気持ち悪い形した建物・・・！　なんだか怪獣みたい・・・。"
       },
       {
         "who": "hakase",
         "face": "worry",
-        "text": "くっ！！　ネイ！　誤射はなるべく抑えて！！"
+        "text": "デッドアトモスの仕業に違いないわね。　急に現れたっていうのもおかしい。"
+      },
+      {
+        "who": "hakase",
+        "face": "normal",
+        "text": "十分に注意して！"
       },
       {
         "who": "nei",
-        "face": "angry",
-        "text": "うるさいな・・・、できるんならやってるっての！"
+        "face": "normal",
+        "text": "はーい・・・。"
       }
     ],
-    "t_attr50": [
+    "t_wave1": [
       {
         "who": "kanbu",
         "face": "normal",
-        "text": "わが軍の損耗率、50%"
-      },
-      {
-        "who": "kanbu",
-        "face": "normal",
-        "text": "化け物め！"
-      },
-      {
-        "who": "kanbu",
-        "face": "normal",
-        "text": "ウォーカータンクを投入せよ！　一気に制圧する。"
+        "text": "新たな敵の接近を確認！　作戦を開始する！"
       }
     ],
-    "t_badroute": [
+    "t_jets": [
       {
         "who": "nei",
-        "face": "weak",
-        "text": "はぁ・・・はぁ・・・、精気・・・、　吸わせて・・・、あなたの・・・。"
-      },
-      {
-        "who": "nei",
-        "face": "angry",
-        "text": "許さない・・・！！　もう怒った！！"
-      },
-      {
-        "who": "nei",
-        "face": "angry",
-        "text": "邪魔するもの。　全部・・・壊す！！"
+        "face": "damage",
+        "text": "っ！！　何か出てきた！"
       },
       {
         "who": "hakase",
         "face": "panic",
-        "text": "ネイ！！　何をしているの！！　一旦引きなさい！"
+        "text": "っネイ！！　戦闘態勢！！"
+      }
+    ],
+    "t_rescue": [
+      {
+        "who": "mayor",
+        "face": "panic",
+        "text": "町にむかってきているぞ！"
       },
       {
         "who": "mayor",
         "face": "panic",
-        "text": "これは！！　一体どういうことだ！？"
+        "text": "まだ、避難も済んでいないのに。"
+      },
+      {
+        "who": "hakase",
+        "face": "normal",
+        "text": "ご安心を。　我々も救助に協力いたします！"
+      },
+      {
+        "who": "hakase",
+        "face": "normal",
+        "text": "ネイ！　街中の公園にセーフゾーンを設けるわ！　まだ避難しきれてない人をみたら運んであげて！"
+      },
+      {
+        "who": "nei",
+        "face": "angry",
+        "text": "そんなこと急に言われてもっ！！　　そんな余裕ないよ！"
       },
       {
         "who": "hakase",
         "face": "worry",
-        "text": "まずい！　暴走しているっ！　人間から直接精気を吸ったりなんかするから・・・！！"
+        "text": "できる範囲でいいわ！　とにかく優先は脅威を排除することよ！"
       },
       {
-        "who": "elix",
+        "who": "hakase",
+        "face": "normal",
+        "text": "それと・・・、セーフゾーンには補給物資としてプネウマドールもあるわよ！"
+      },
+      {
+        "who": "nei",
         "face": "smile",
-        "text": "あらあら、なにやら面白いことになっているわね・・・。"
+        "text": "あ・・・！！"
+      },
+      {
+        "who": "hakase",
+        "face": "normal",
+        "text": "救助者一人あたり１つ補給してあげるわ！"
       }
     ],
-    "t_attr75": [
+    "t_jetspec": [
       {
-        "who": "kanbu",
-        "face": "panic",
-        "text": "わが軍の損耗率、75%！　き・・・危険です！！　本部に通信を！"
+        "who": "hakase",
+        "face": "worry",
+        "text": "速さも、攻撃力もこちらの想定を超えている・・・。　こんな戦闘機はデータにない。"
       },
       {
-        "who": "elix",
+        "who": "hakase",
+        "face": "worry",
+        "text": "まさか、こんな短期間で新兵器を？　ありえない。"
+      },
+      {
+        "who": "hakase",
         "face": "normal",
-        "text": "あらあら、順調に進んでいるかとみてみれば！"
+        "text": "ネイ！　囲まれないように注意して。"
+      }
+    ],
+    "t_city1": [
+      {
+        "who": "mayor",
+        "face": "panic",
+        "text": "おい！！　どんどん被害が広がっているぞ！！"
       },
       {
-        "who": "elix",
-        "face": "smile",
-        "text": "せっかくだから私もじっくり観戦してみたいわ！　スパイダーキャリアを出しなさい！"
+        "who": "hakase",
+        "face": "worry",
+        "text": "ネイ！　戦いがキツいのはわかるけど、なるべく誤射は控えて！！"
       },
+      {
+        "who": "nei",
+        "face": "angry",
+        "text": "そんなの、出来たらとっくにやってるよ！！"
+      }
+    ],
+    "t_city3": [
+      {
+        "who": "mayor",
+        "face": "panic",
+        "text": "ああ～～っ！！　区画単位で町が破壊されている！！"
+      },
+      {
+        "who": "hakase",
+        "face": "worry",
+        "text": "まさかと思うけど・・・、ネイ、あなた・・・。"
+      }
+    ],
+    "t_city5": [
+      {
+        "who": "mayor",
+        "face": "panic",
+        "text": "これは、一体どういうことだ！　いくらなんでも被害が出すぎだ・・・！！"
+      },
+      {
+        "who": "hakase",
+        "face": "panic",
+        "text": "まずい、やはり暴走している・・・！！"
+      },
+      {
+        "who": "hakase",
+        "face": "panic",
+        "text": "市長！　とりあえずシェルターに避難を！！"
+      }
+    ],
+    "t_grab_ship": [
+      {
+        "who": "nei",
+        "face": "angry",
+        "text": "ムカついた！！　これで、叩き潰してやる！！"
+      },
+      {
+        "who": "mayor",
+        "face": "panic",
+        "text": "うわぁ・・・！！　週末のクルーズがぁ！！"
+      },
+      {
+        "who": "hakase",
+        "face": "tired",
+        "text": "はぁ・・・、確か週末は海外視察の予定では？"
+      }
+    ],
+    "t_grab_tower": [
+      {
+        "who": "mayor",
+        "face": "panic",
+        "text": "ぎゃあああぁぁ・・・・・・！！"
+      },
+      {
+        "who": "hakase",
+        "face": "panic",
+        "text": "ネイ！！　何してるの・・・？！　タワーには私たちがいるのよ！！"
+      },
+      {
+        "who": "nei",
+        "face": "angry",
+        "text": "頑丈な建物なんでしょ！　あいつら倒すのに使わせてよ！！"
+      }
+    ],
+    "t_feed": [
+      {
+        "who": "mayor",
+        "face": "panic",
+        "text": "な・・・なんだ！！　なにをしている？！"
+      },
+      {
+        "who": "hakase",
+        "face": "panic",
+        "text": "マズい！！　人から直接精気なんか吸ったら！！"
+      },
+      {
+        "who": "nei",
+        "face": "damage",
+        "text": "はぁ・・・、はぁ・・・！！　やっぱりコレじゃなきゃ満たされない！！"
+      },
+      {
+        "who": "nei",
+        "face": "angry",
+        "text": "私を苦しめるやつらは許せない！！　みんな襲ってやる！！"
+      }
+    ],
+    "t_carrier": [
+      {
+        "who": "hakase",
+        "face": "panic",
+        "text": "海上施設が動き始めた！？　　あれも移動要塞だったのね！"
+      },
+      {
+        "who": "hakase",
+        "face": "worry",
+        "text": "あきれた科学力だわ！！　一体、新総裁は何者なの？"
+      }
+    ],
+    "t_missile": [
       {
         "who": "kanbu",
-        "face": "panic",
-        "text": "スパイダーキャリア、投入！！"
+        "face": "normal",
+        "text": "あの蚊トンボを撃ち落とせ！　ミサイル発射！！"
+      }
+    ],
+    "t_walker2": [
+      {
+        "who": "kanbu",
+        "face": "normal",
+        "text": "まだまだだ！　次のウォーカータンクを発進させろ！"
       }
     ]
   }

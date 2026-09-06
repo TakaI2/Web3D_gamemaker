@@ -16,6 +16,7 @@
   },
   "rules": {
     "jetModel": "jet-custom",
-    "seaCarrier": true
+    "seaCarrier": true,
+    "jetsOnCue": true
   }
 }

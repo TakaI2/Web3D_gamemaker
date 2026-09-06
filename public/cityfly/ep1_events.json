@@ -3,59 +3,88 @@
   "version": 1,
   "events": [
     {
-      "id": "hp50",
+      "id": "start",
       "when": {
-        "param": "hpPct",
-        "op": "<=",
-        "value": 50
+        "param": "playTime",
+        "op": ">=",
+        "value": 2
       },
       "do": [
         {
           "type": "talk",
-          "talk": "t_hp50"
+          "talk": "t_start"
         }
       ]
     },
     {
-      "id": "hp25",
+      "id": "wave1",
       "when": {
-        "param": "hpPct",
-        "op": "<=",
-        "value": 25
+        "param": "playTime",
+        "op": ">=",
+        "value": 30
       },
       "do": [
         {
           "type": "talk",
-          "talk": "t_hp25"
+          "talk": "t_wave1"
+        },
+        {
+          "type": "spawn",
+          "enemy": "jet"
         }
       ]
     },
     {
-      "id": "city40",
+      "id": "jets",
       "when": {
-        "param": "cityDamage",
+        "on": "jetsAppear"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_jets"
+        }
+      ]
+    },
+    {
+      "id": "rescue",
+      "when": {
+        "param": "since:jetsAppear",
+        "op": ">=",
+        "value": 30
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_rescue"
+        },
+        {
+          "type": "safezone"
+        }
+      ]
+    },
+    {
+      "id": "jetspec",
+      "when": {
+        "param": "since:jetsAppear",
+        "op": ">=",
+        "value": 60
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_jetspec"
+        }
+      ]
+    },
+    {
+      "id": "walkerStart",
+      "when": {
+        "param": "attrition",
         "op": ">=",
         "value": 40
       },
       "do": [
-        {
-          "type": "talk",
-          "talk": "t_city40"
-        }
-      ]
-    },
-    {
-      "id": "attr50",
-      "when": {
-        "param": "attrition",
-        "op": ">=",
-        "value": 50
-      },
-      "do": [
-        {
-          "type": "talk",
-          "talk": "t_attr50"
-        },
         {
           "type": "spawn",
           "enemy": "walker"
@@ -63,16 +92,115 @@
       ]
     },
     {
-      "id": "badRoute",
+      "id": "carrierMove",
       "when": {
-        "param": "wanted",
+        "param": "attrition",
         "op": ">=",
-        "value": 5
+        "value": 75
+      },
+      "do": [
+        {
+          "type": "advance",
+          "enemy": "spider"
+        }
+      ]
+    },
+    {
+      "id": "city1",
+      "when": {
+        "param": "cityDamage",
+        "op": ">=",
+        "value": 1,
+        "notFlag": "fed"
       },
       "do": [
         {
           "type": "talk",
-          "talk": "t_badroute"
+          "talk": "t_city1"
+        }
+      ]
+    },
+    {
+      "id": "city3",
+      "when": {
+        "param": "cityDamage",
+        "op": ">=",
+        "value": 3,
+        "notFlag": "fed"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_city3"
+        }
+      ]
+    },
+    {
+      "id": "city5",
+      "when": {
+        "param": "cityDamage",
+        "op": ">=",
+        "value": 5,
+        "notFlag": "fed"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_city5"
+        }
+      ]
+    },
+    {
+      "id": "badRoute10",
+      "when": {
+        "param": "cityDamage",
+        "op": ">=",
+        "value": 10
+      },
+      "do": [
+        {
+          "type": "flag",
+          "flag": "badRoute"
+        }
+      ]
+    },
+    {
+      "id": "grabShip",
+      "when": {
+        "on": "grabShip"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_grab_ship"
+        }
+      ]
+    },
+    {
+      "id": "grabTower",
+      "when": {
+        "on": "grabTower"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_grab_tower"
+        }
+      ]
+    },
+    {
+      "id": "feed",
+      "when": {
+        "on": "feedHuman"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_feed"
+        },
+        {
+          "type": "flag",
+          "flag": "fed"
         },
         {
           "type": "flag",
@@ -81,32 +209,47 @@
       ]
     },
     {
-      "id": "attr75",
+      "id": "carrier",
       "when": {
-        "param": "attrition",
-        "op": ">=",
-        "value": 75,
-        "flag": "badRoute"
+        "on": "carrierWake"
       },
       "do": [
         {
           "type": "talk",
-          "talk": "t_attr75"
-        },
-        {
-          "type": "spawn",
-          "enemy": "spider"
-        },
-        {
-          "type": "advance",
-          "enemy": "spider"
+          "talk": "t_carrier"
         }
       ]
     },
     {
-      "id": "walkerDown",
+      "id": "missile",
       "when": {
-        "kill": "walker",
+        "on": "carrierMissile"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_missile"
+        }
+      ]
+    },
+    {
+      "id": "walker2",
+      "when": {
+        "param": "walkerLaunched",
+        "op": ">=",
+        "value": 2
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_walker2"
+        }
+      ]
+    },
+    {
+      "id": "spiderDownGood",
+      "when": {
+        "kill": "spider",
         "notFlag": "badRoute"
       },
       "do": [
@@ -122,9 +265,10 @@
       ]
     },
     {
-      "id": "spiderDown",
+      "id": "spiderDownBad",
       "when": {
-        "kill": "spider"
+        "kill": "spider",
+        "flag": "badRoute"
       },
       "do": [
         {
@@ -134,7 +278,7 @@
         {
           "type": "flow",
           "port": "bad",
-          "delay": 6
+          "delay": 5
         }
       ]
     }

@@ -1,52 +1,76 @@
 {
-  "version": 1,
-  "id": "ep1_ed_good",
-  "title": "ED：Good（仮・脚本は後日追補）",
-  "mode": "2d",
-  "actors": [],
-  "script": [
-    {
-      "op": "bg",
-      "color": "#0a1830",
-      "image": "postwar_good.png"
-    },
-    {
-      "op": "bgm.play",
-      "name": "BGM/Destiny.ogg",
-      "loop": true,
-      "volume": 0.55
-    },
-    {
-      "op": "fade.in",
-      "duration": 900
-    },
-    {
-      "op": "say",
-      "actor": "kanbu",
-      "face": "panic",
-      "lines": [
-        "ウォーカータンク、撃破される！？　ば・・・化け物め！！"
-      ]
-    },
-    {
-      "op": "say",
-      "actor": "kanbu",
-      "face": "normal",
-      "lines": [
-        "これ以上の損害は許容できん。　全軍、撤退！！"
-      ]
-    },
-    {
-      "op": "say",
-      "actor": "hakase",
-      "face": "normal",
-      "lines": [
-        "敵軍が引いていくわ。　・・・お疲れ様、ネイ。初任務、上出来よ。"
-      ]
-    },
-    {
-      "op": "fade.out",
-      "duration": 1200
-    }
-  ]
+ "version": 1,
+ "id": "ep1_ed_good",
+ "title": "ED：Good（敵軍退却）",
+ "mode": "2d",
+ "actors": [],
+ "script": [
+  {
+   "op": "bg",
+   "color": "#101a2c",
+   "image": "postwar_good.png"
+  },
+  {
+   "op": "bgm.play",
+   "name": "BGM/Sound_Wave.ogg",
+   "loop": true,
+   "volume": 0.5
+  },
+  {
+   "op": "fade.in",
+   "duration": 700
+  },
+  {
+   "op": "say",
+   "actor": "mayor",
+   "face": "smile",
+   "lines": [
+    "やつらが、退却していく！　やったぞ！"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "hakase",
+   "face": "smile",
+   "lines": [
+    "素晴らしい成果よ、ネイ！　貴女はまさしくスーパーヒロインよ！！"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "mayor",
+   "face": "smile",
+   "lines": [
+    "早速記者会見を行おう！　博士！　あの子を呼び戻してくれ！！"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "nei",
+   "face": "tired",
+   "lines": [
+    "はぁ・・・、はぁ・・・。　死ぬかと思った・・・。"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "nei",
+   "face": "normal",
+   "lines": [
+    "でも、私守ったんだ・・・。　みんなのこと・・・。"
+   ]
+  },
+  {
+   "op": "say",
+   "actor": "nei",
+   "face": "smile",
+   "lines": [
+    "私たちの街を・・・。"
+   ]
+  },
+  {
+   "op": "fade.out",
+   "duration": 900
+  }
+ ]
 }
