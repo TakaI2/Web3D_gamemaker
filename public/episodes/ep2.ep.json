@@ -4,7 +4,7 @@
   "id": "ep2",
   "no": 2,
   "title": "EP2 アルデン（仮）",
-  "subtitle": "ARDEN",
+  "subtitle": "DEAD ATMOS ASSAULT",
   "map": "arden",
   "stage": "city",
   "flow": "ep1.flow.json",
@@ -19,6 +19,8 @@
   "rules": {
     "jetModel": "jet-custom",
     "seaCarrier": true,
-    "jetsOnCue": true
+    "jetsOnCue": true,
+    "titleSleep": true,
+    "paramsHud": false
   }
 }

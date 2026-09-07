@@ -271,7 +271,7 @@ function reportFatal(msg) {   // スマホ用: コンソールが見られない
 }
 window.addEventListener('error', (e) => reportFatal('エラー: ' + (e.message || e.error)));
 window.addEventListener('unhandledrejection', (e) => reportFatal('未処理の失敗: ' + (e.reason?.message || e.reason)));
-function setStatus(msg) { const e = $('status'); if (e) e.textContent = msg; }
+function setStatus(msg) { const e = $('status'); if (!e) return; e.textContent = msg; e.style.display = msg ? '' : 'none'; }   // 空なら枠ごと消す
 
 async function init() {
   const app = $('app');
@@ -2301,8 +2301,8 @@ function loadProg(pct, label) {
   }
 }
 let titleSleepOn = false;
-function updateTitleSleep() {   // チュートリアルのタイトル: GIF背景+眠るネイ（素材読込は裏で継続）
-  if (!TUTORIAL) return;
+function updateTitleSleep() {   // タイトル: GIF背景+眠るネイ（素材読込は裏で継続）。rules.titleSleep のエピソードで出す
+  if (!episode.rules.titleSleep) return;
   if (gameMode !== 'title') { titleSleepOn = false; return; }
   if (!titleSleepOn && player.ready && portraitCam) {
     titleSleepOn = true;
@@ -2440,7 +2440,7 @@ function revivePlayer() {   // リトライ＝その場で復帰（パラメー�
   setState('idle');
 }
 function updateParamsUI() {   // デバッグ兼HUD: 都市被害/敵損耗/手配（タイトル中は非表示）
-  if (gameMode === 'title' || TUTORIAL) { if (paramsEl) paramsEl.style.display = 'none'; return; }   // チュートリアルでは戦況パラメータなし
+  if (gameMode === 'title' || !episode.rules.paramsHud) { if (paramsEl) paramsEl.style.display = 'none'; return; }   // rules.paramsHud=false のエピソードは戦況パラメータを出さない
   if (!paramsEl) {
     paramsEl = document.createElement('div');
     paramsEl.style.cssText = 'position:fixed;left:12px;top:' + (HUD_TOP + 70) + 'px;z-index:20;pointer-events:none;'
@@ -2713,6 +2713,7 @@ function resetGameState() {
   flowNode = null; flowBattleDone = false; flowTimer = null; flowFallback = false;
   ev.fired.clear(); ev.flags = {}; ev.spawnAllow = {}; ev.kills.length = 0; ev.pendingOn.clear(); ev.lastPort = null;
   ev.playT = 0; ev.onT = {}; ev.counts = {}; ev.talkIdle = 0;
+  if (!TUTORIAL) gameHour = START_HOUR;   // 本編は毎回この時刻から（時間はリアルタイムで進む）
   // チュートリアル進行
   Object.assign(tut, { ready: false, room: 0, started: false, midFired: {}, goalDone: false, cullRoom: -99,
     rooms: [], doors: [], goal: null, targetsDown: 0, targetsTotal: 0, gateDown: false, rescued: 0, jetBase: 0,
@@ -2740,6 +2741,7 @@ async function buildStage() {
     loadProg(62, 'エフェクトを準備中…');
   }
   // ステージ完成（パイプラインのコンパイルまで含む）。タイトル解禁とプレイヤー移動の解禁条件になる
+  facePlayerToSea();   // 開始の向き（初回ロードもここを通る）
   stageReady = true;
 }
 // マント（GPUクロス）を現在位置・現在の向きで作る。空中でも落ちないよう floorY は無効化して作る。
@@ -2767,12 +2769,25 @@ function buildPlayerCloth() {
     if (portraitOnReady && player.cloth.clothMesh) player.cloth.clothMesh.layers.enable(PORTRAIT_LAYER);   // 立体ポートレートにも映す
   } catch (e) { console.warn('マント生成失敗:', e); }
 }
+// 開始時は海の方を向かせる（EP2は沖の母艦が目標なので、最初から視界に入っている方が導入が通る）。
+// 海が無いマップでは何もしない
+function facePlayerToSea() {
+  if (TUTORIAL) return;
+  const sea = mapWater.filter((w) => w.level === 0);
+  if (!sea.length) return;
+  let sx = 0, sz = 0, sa = 0;
+  for (const r of sea) { const a = r.w * r.d; sx += r.x * a; sz += r.z * a; sa += a; }
+  const yaw = Math.atan2(sx / sa - player.pos.x, sz / sa - player.pos.z);   // 前方=(sin(yaw), cos(yaw)) の規約
+  player.yaw = yaw; camYaw = yaw; camPitch = 0.05;
+  if (player.vrm) player.vrm.scene.rotation.set(0, player.yaw + player.faceOffset, 0);
+}
 function spawnPlayerForStage() {   // ステージ種別ごとの開始位置へ置く
   if (TUTORIAL && tutSpawn) {
     player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);
     player.yaw = Math.PI / 2; camYaw = Math.PI / 2; camPitch = 0.1;
   } else {
     player.pos.set(0, 230, 150);
+    facePlayerToSea();
   }
   player.vel.set(0, 0, 0);
   player.vrm.scene.position.copy(player.pos);
@@ -3413,7 +3428,7 @@ function updatePlayerDeath(dt) {
     playerHp = PLAYER_HP_MAX;
     updateHpUI(); applyDamageFx();
     if (TUTORIAL && tutSpawn) player.pos.set(tutSpawn[0], tutSpawn[1], tutSpawn[2]);
-    else player.pos.set(0, 230, 150);
+    else { player.pos.set(0, 230, 150); facePlayerToSea(); }
     player.vel.set(0, 0, 0);
     player.vrm.scene.position.copy(player.pos);
     player.vrm.scene.rotation.set(0, player.yaw + player.faceOffset, 0);
@@ -6460,7 +6475,9 @@ async function buildMapPinProps() {
 // ── 公園のセーフゾーン（本編）──
 // 博士の指示(events の safezone アクション)で開設。掴んで運んだ市民をここへ入れると避難できる。
 // 全公園に置くと数が多くて重いので、市街中心寄りの公園から散らして数か所だけにする。
-const SAFEZONE_N = 5, SAFEZONE_R = 15, SAFEZONE_H = 78, SAFEZONE_SUCK = 3.0;   // 光の柱は高さ78m＝ビル群の上に出て遠くからでも見つかる高さ
+const SAFEZONE_N = 5, SAFEZONE_R = 15, SAFEZONE_SUCK = 3.0;
+const SAFEZONE_H = 78;      // 光の柱の高さ。ビル群の上に出て遠くからでも見つかる高さ
+const SAFEZONE_HEAL = 15;   // 救助1人あたりの回復量。吸血(5HP/秒)を数秒続けたのと同じくらい
 const safeZones = [];
 let safeRescued = 0;
 const _szV = new THREE.Vector3();
@@ -6493,16 +6510,6 @@ function openSafeZones() {
     safeZones.push({ x: c.x, y: gy, z: c.z, r: SAFEZONE_R, ring, pillar });
   }
   console.log('セーフゾーン開設:', safeZones.length, '箇所');
-}
-// 救助のお礼＝補給のプネウマドール。セーフゾーンのリング内に立たせる（吸血して回復できる）
-function spawnSafeZonePneuma(z) {
-  const a = Math.random() * Math.PI * 2, r = z.r * 1.35;   // リングの少し外＝掴みに行っても吸い込まれない
-  const px = z.x + Math.cos(a) * r, pz = z.z + Math.sin(a) * r;
-  spawnKen({
-    mannequin: 'pneuma', still: true, healMul: 1 / 3,
-    pos: { x: px, z: pz },
-    bounds: { x0: z.x - z.r, x1: z.x + z.r, z0: z.z - z.r, z1: z.z + z.r },
-  }).catch((e) => console.warn('プネウマ補給の生成失敗:', e));
 }
 function updateSafeZones(dt) {
   if (!safeZones.length) return;
@@ -6537,7 +6544,11 @@ function updateSafeZones(dt) {
       m.suck = { t: 0, x: z.x, z: z.z, y0: _szV.y, ang: Math.atan2(_szV.z - z.z, _szV.x - z.x), r: Math.max(0.5, Math.hypot(_szV.x - z.x, _szV.z - z.z)) };
       playSfx('se1.ogg', 0.5);
       playSfx('Short_Accent17-1_Low_.ogg', 0.7);   // 救助のアクセント音（チュートリアルと同じ）
-      spawnSafeZonePneuma(z);   // 救助者1人につき補給を1体
+      if (playerHp < PLAYER_HP_MAX) {   // 救助のお礼＝その場で回復（補給人形を置く方式はやめた）
+        playerHp = Math.min(PLAYER_HP_MAX, playerHp + SAFEZONE_HEAL);
+        updateHpUI();
+        applyDamageFx();
+      }
       break;
     }
   }
@@ -9298,8 +9309,9 @@ function updateTotem(dt) {
 }
 
 // ── P1: 昼夜サイクル（ゲーム内時計→空(SkyMesh)/太陽光/フォグ/ネオン/車ライト）──
-const DAY_SECONDS = 600;   // 1ゲーム日 = 実時間10分
-let gameHour = 10, timeScale = 1;
+const DAY_SECONDS = 86400;   // 1ゲーム日 = 実時間24時間（＝ゲーム内時間はリアルタイムで進む）
+const START_HOUR = 18;       // 本編の開始時刻。日の入り（18時）から始めて夜へ向かう
+let gameHour = START_HOUR, timeScale = 1;
 const dayRefs = { amb: null, sun: null, hemi: null, bg: null, fog: null };
 let skyMesh = null, nightF = 0;
 async function initSky() {
@@ -11635,11 +11647,9 @@ function tick() {
   updateCamera(dt);
   camera.updateMatrixWorld();
   if (++_dbg % 30 === 0) {
-    const info = `建物 ${cityInfo ? cityInfo.count : 0} (近${_lodNearCount}/遠${_lodFarCount})`;
     updateParamsUI();
-    const clock = `${String(Math.floor(gameHour)).padStart(2, '0')}:${String(Math.floor((gameHour % 1) * 60)).padStart(2, '0')}`;
-    const wanted = wantedLevel() > 0 ? ` / 手配${'★'.repeat(wantedLevel())}` : '';
-    setStatus(`${clock}${timeScale > 1 ? `(x${timeScale})` : ''}${wanted} / 高度 ${Math.round(player.pos.y)}m / ${info}${entryPrompt ? ' / ' + entryPrompt : ''}`);
+    // 上部の常時表示（時計・高度・建物数）は畳んだ。建物へ入る【E】の案内だけ、必要なときに出す
+    setStatus(entryPrompt || '');
   }
   renderer.render(scene, camera);
   renderPortrait();   // 会話中のみ: 顔枠へキャラだけを追加描画
