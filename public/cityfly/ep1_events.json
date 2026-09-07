@@ -60,15 +60,20 @@
         },
         {
           "type": "safezone"
+        },
+        {
+          "type": "flag",
+          "flag": "rescueTold"
         }
       ]
     },
     {
       "id": "jetspec",
       "when": {
-        "param": "since:jetsAppear",
+        "param": "talkIdle",
         "op": ">=",
-        "value": 60
+        "value": 30,
+        "flag": "rescueTold"
       },
       "do": [
         {
@@ -88,6 +93,20 @@
         {
           "type": "spawn",
           "enemy": "walker"
+        }
+      ]
+    },
+    {
+      "id": "carrierPre",
+      "when": {
+        "param": "attrition",
+        "op": ">=",
+        "value": 70
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_carrier_pre"
         }
       ]
     },

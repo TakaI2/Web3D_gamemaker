@@ -17,6 +17,7 @@ tests/fixtures/*.vrma
 public/npc/
 public/models/*
 !public/models/generated/
+!public/models/building-entries.json
 public/fbx/
 public/ドライツェーン_ver1.01/
 

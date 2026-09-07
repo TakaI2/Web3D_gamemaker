@@ -2480,7 +2480,7 @@ function updateEnemyHpBar(o, hpMax, topY, dt) {
 function hitEnemyBar(o) { if (o) o.barT = ENEMY_BAR_SEC; }
 // ── ゲームループP3: イベントシステム＋ゲーム内会話（public/cityfly/events.json / talks.json）──
 const ev = { defs: [], talks: null, fired: new Set(), flags: {}, spawnAllow: {}, kills: [], pendingOn: new Set(), lastPort: null,
-  playT: 0, onT: {}, counts: {} };   // playT=本編の経過秒 / onT=パルスが最初に起きた時刻 / counts=数える系(ウォーカー発進数など)
+  playT: 0, onT: {}, counts: {}, talkIdle: 0 };   // playT=本編の経過秒 / onT=パルスが最初に起きた時刻 / counts=数える系(ウォーカー発進数など)
 // ゲーム内の出来事をイベント系へ通知する。1回きりの発火(when.on)と、経過時間(when.param='since:<名前>')の起点になる
 function evFire(name) {
   ev.pendingOn.add(name);
@@ -2712,7 +2712,7 @@ function resetGameState() {
   // フロー/イベント
   flowNode = null; flowBattleDone = false; flowTimer = null; flowFallback = false;
   ev.fired.clear(); ev.flags = {}; ev.spawnAllow = {}; ev.kills.length = 0; ev.pendingOn.clear(); ev.lastPort = null;
-  ev.playT = 0; ev.onT = {}; ev.counts = {};
+  ev.playT = 0; ev.onT = {}; ev.counts = {}; ev.talkIdle = 0;
   // チュートリアル進行
   Object.assign(tut, { ready: false, room: 0, started: false, midFired: {}, goalDone: false, cullRoom: -99,
     rooms: [], doors: [], goal: null, targetsDown: 0, targetsTotal: 0, gateDown: false, rescued: 0, jetBase: 0,
@@ -2841,6 +2841,7 @@ function evParam(name) {
   if (name === 'cityDamage') return cityDamagePct();
   if (name === 'wanted') return wantedLevel();
   if (name === 'playTime') return ev.playT;
+  if (name === 'talkIdle') return ev.talkIdle || 0;   // 会話が途切れてからの秒数（間を空けたい会話に使う）
   if (name.startsWith('since:')) {   // 指定の出来事からの経過秒。まだ起きていない間は -1（しきい値に届かない）
     const t = ev.onT[name.slice(6)];
     return t == null ? -1 : ev.playT - t;
@@ -3249,6 +3250,7 @@ function showTalkLine(ln) {
   talkT = Math.max(TALK_MIN_SEC, ln.text.length / TALK_CPS);
 }
 function updateTalk(dt) {
+  ev.talkIdle = (talkCur || talkQ.length) ? 0 : (ev.talkIdle || 0) + dt;   // 会話が途切れてからの秒数
   if (talkCur) {
     talkT -= dt;
     if (talkT > 0) return;
