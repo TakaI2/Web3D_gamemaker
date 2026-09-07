@@ -323,7 +323,10 @@ const letters = (a, z) => Array.from({ length: z.charCodeAt(0) - a.charCodeAt(0)
 const BLD = [
   { dir: 'city_GLB format', models: [...letters('a', 'n').map((c) => 'building-' + c), ...letters('a', 'e').map((c) => 'building-skyscraper-' + c)] },
   { dir: 'kenney_city-kit-suburban_20/Models/GLB format', models: [...letters('a', 'u').map((c) => 'building-type-' + c), 'tree-large', 'tree-small'] },
-  { dir: 'kenney_city-kit-roads/Models/GLB format', models: ['road-straight', 'light-curved', 'light-square', 'road-crossroad-path', 'road-intersection-path', 'road-bend-sidewalk', 'road-crossing', 'road-straight-barrier'] },
+  { dir: 'kenney_city-kit-roads/Models/GLB format', models: ['road-straight', 'light-curved', 'light-square', 'road-crossroad-path', 'road-intersection-path', 'road-bend-sidewalk', 'road-crossing', 'road-straight-barrier',
+    'road-split', 'sign-highway-detailed', 'light-curved-double'] },
+  // 工業地帯の建物（BLD_KIT_DIR.industrial）。街の生成が参照する
+  { dir: 'Industrial_GLB format', models: [...letters('a', 't').map((c) => 'building-' + c)] },
 ];
 for (const kit of (TUT ? [] : BLD)) {   // Kenney建物/道路キットは街専用
   const s = path.join(pub, 'models', kit.dir);
@@ -376,8 +379,41 @@ if (!TUT && fs.existsSync(furnSrc)) {   // 建物内装＝街専用（チュー�
   for (const f of fs.readdirSync(furnSrc).filter((f) => f.endsWith('.glb'))) { fs.copyFileSync(path.join(furnSrc, f), path.join(furnDest, f)); n++; }
   console.log(`copied: ${n} furniture models`);
 }
+// 電車（線路と車両）。マップに rails があるステージで使う
+if (!TUT) {
+  const trSrc = path.join(pub, 'models', 'train_GLB format');
+  if (fs.existsSync(trSrc)) {
+    const trDest = path.join(dest, 'models', 'train_GLB format');
+    fs.mkdirSync(trDest, { recursive: true });
+    let n = 0;
+    for (const f of fs.readdirSync(trSrc)) {
+      if (!/^(railroad-straight|train-electric-city-).*\.glb$/.test(f)) continue;   // 実際に読むのはこの2系統だけ
+      fs.copyFileSync(path.join(trSrc, f), path.join(trDest, f)); n++;
+    }
+    const trTex = path.join(trSrc, 'Textures', 'colormap.png');   // 車両の色はこのアトラス頼り
+    if (fs.existsSync(trTex)) {
+      fs.mkdirSync(path.join(trDest, 'Textures'), { recursive: true });
+      fs.copyFileSync(trTex, path.join(trDest, 'Textures', 'colormap.png'));
+    }
+    console.log(`copied: ${n} train models`);
+  }
+}
 const entriesSrc = path.join(pub, 'models', 'building-entries.json');
 if (fs.existsSync(entriesSrc)) { fs.copyFileSync(entriesSrc, path.join(dest, 'models', 'building-entries.json')); console.log('copied: building-entries.json'); }
+
+// 生成オブジェクト（Blender等で作ったモデル）。自作戦闘機(rules.jetModel)や、ピンに置く塔が参照する。
+// フォルダ丸ごと同梱する（1フォルダ=1オブジェクト / model.glb + paint.json 固定の規約）
+const genSrc = path.join(pub, 'models', 'generated');
+if (fs.existsSync(genSrc)) {
+  let n = 0;
+  for (const id of fs.readdirSync(genSrc, { withFileTypes: true })) {
+    if (!id.isDirectory()) continue;
+    const sd = path.join(genSrc, id.name), dd = path.join(dest, 'models', 'generated', id.name);
+    fs.mkdirSync(dd, { recursive: true });
+    for (const f of fs.readdirSync(sd)) { fs.copyFileSync(path.join(sd, f), path.join(dd, f)); n++; }
+  }
+  console.log(`copied: generated objects (${n} files)`);
+}
 
 // 道路グラフ + 静的 manifest（本番は vite ミドルウェアが無いので静的ファイルが必須）
 const roadSrc = path.join(pub, 'roads');
