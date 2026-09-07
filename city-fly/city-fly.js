@@ -2842,6 +2842,7 @@ function evParam(name) {
   if (name === 'wanted') return wantedLevel();
   if (name === 'playTime') return ev.playT;
   if (name === 'talkIdle') return ev.talkIdle || 0;   // 会話が途切れてからの秒数（間を空けたい会話に使う）
+  if (name === 'spiderHp') return spider && !spider.dying ? spider.hp / SP.hp * 100 : 100;   // 母艦の残量％
   if (name.startsWith('since:')) {   // 指定の出来事からの経過秒。まだ起きていない間は -1（しきい値に届かない）
     const t = ev.onT[name.slice(6)];
     return t == null ? -1 : ev.playT - t;
@@ -2857,8 +2858,10 @@ function evalEvents(dt = 0) {   // 本編のみ・各イベント1回発火。�
   for (const d of ev.defs) {
     if (ev.fired.has(d.id)) continue;
     const w = d.when || {};
-    if (w.flag && !ev.flags[w.flag]) continue;        // 追加AND条件: フラグ必須
-    if (w.notFlag && ev.flags[w.notFlag]) continue;   // 追加AND条件: フラグ不成立が必須
+    const need = w.flag == null ? [] : [].concat(w.flag);       // 追加AND条件: フラグ必須（配列可）
+    const deny = w.notFlag == null ? [] : [].concat(w.notFlag);   // 追加AND条件: フラグ不成立が必須（配列可）
+    if (need.some((f) => !ev.flags[f])) continue;
+    if (deny.some((f) => ev.flags[f])) continue;
     let hit = false;
     if (w.on) hit = ev.pendingOn.has(w.on);
     else if (w.param) hit = evCmp(evParam(w.param), w.op || '>=', w.value || 0);
@@ -2870,7 +2873,9 @@ function evalEvents(dt = 0) {   // 本編のみ・各イベント1回発火。�
   ev.pendingOn.clear();
 }
 function runEvAction(a) {
-  if (a.type === 'talk') queueTalk(a.talk);
+  // 会話を積んだ瞬間に talkIdle を0へ。同じフレーム内で後続イベントが「会話が途切れている」と
+  // 誤判定して連鎖発火するのを防ぐ（母艦が前振りの会話中に動き出していた原因）
+  if (a.type === 'talk') { queueTalk(a.talk); ev.talkIdle = 0; }
   else if (a.type === 'spawn') ev.spawnAllow[a.enemy] = true;   // 投入指示（enemyAllowed が参照）
   else if (a.type === 'advance') { if (a.enemy === 'spider') spiderAdvance(); }   // 沖で待機中の母艦を上陸・進攻させる
   else if (a.type === 'safezone') openSafeZones();   // 街の公園に救助用セーフゾーンを開設

@@ -107,20 +107,39 @@
         {
           "type": "talk",
           "talk": "t_carrier_pre"
+        },
+        {
+          "type": "flag",
+          "flag": "carrierTold"
         }
       ]
     },
     {
       "id": "carrierMove",
       "when": {
-        "param": "attrition",
+        "param": "talkIdle",
         "op": ">=",
-        "value": 75
+        "value": 0.5,
+        "flag": "carrierTold"
       },
       "do": [
         {
           "type": "advance",
           "enemy": "spider"
+        }
+      ]
+    },
+    {
+      "id": "dmgOver1",
+      "when": {
+        "param": "cityDamage",
+        "op": ">",
+        "value": 1
+      },
+      "do": [
+        {
+          "type": "flag",
+          "flag": "dmgOver1"
         }
       ]
     },
@@ -252,6 +271,21 @@
       ]
     },
     {
+      "id": "carrierHalf",
+      "when": {
+        "param": "spiderHp",
+        "op": "<=",
+        "value": 50,
+        "flag": "carrierTold"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_carrier_half"
+        }
+      ]
+    },
+    {
       "id": "walker2",
       "when": {
         "param": "walkerLaunched",
@@ -269,9 +303,16 @@
       "id": "spiderDownGood",
       "when": {
         "kill": "spider",
-        "notFlag": "badRoute"
+        "notFlag": [
+          "badRoute",
+          "dmgOver1"
+        ]
       },
       "do": [
+        {
+          "type": "talk",
+          "talk": "t_carrier_down"
+        },
         {
           "type": "flag",
           "flag": "warEnd"
@@ -284,12 +325,39 @@
       ]
     },
     {
+      "id": "spiderDownGoodMessy",
+      "when": {
+        "kill": "spider",
+        "notFlag": "badRoute",
+        "flag": "dmgOver1"
+      },
+      "do": [
+        {
+          "type": "talk",
+          "talk": "t_carrier_down"
+        },
+        {
+          "type": "flag",
+          "flag": "warEnd"
+        },
+        {
+          "type": "flow",
+          "port": "win2",
+          "delay": 5
+        }
+      ]
+    },
+    {
       "id": "spiderDownBad",
       "when": {
         "kill": "spider",
         "flag": "badRoute"
       },
       "do": [
+        {
+          "type": "talk",
+          "talk": "t_carrier_down"
+        },
         {
           "type": "flag",
           "flag": "warEnd"
