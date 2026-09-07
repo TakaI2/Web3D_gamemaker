@@ -73,6 +73,8 @@ const jsSrc = fs.readFileSync(path.join(src, 'city-fly.js'), 'utf8')
   .replace(/\.\.\/audio\//g, './audio/')
   .replace(/\.\.\/sound/g, './sound')          // 効果音（'../sound' と '../sound/' の両方）
   .replace(/\.\.\/cityfly\//g, './cityfly/')   // イベント・会話定義
+  .replace(/\.\.\/episodes\//g, './episodes/')   // エピソード定義（ここが漏れるとlegacy構成へ落ちて会話名まで変わる）
+  .replace(/\.\.\/advertise\//g, './advertise/')   // 建物の広告テクスチャ
   .replace(/\.\.\/story\//g, './story/')       // 2Dシナリオ
   .replace(/\.\.\/flow\//g, './flow/')         // ゲームフロー
   .replace(/\.\.\/damage\//g, './damage/')     // ダメージ損耗設定

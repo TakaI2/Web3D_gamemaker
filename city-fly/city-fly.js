@@ -238,7 +238,11 @@ function dbg(...args) {
   }
   const t = ((performance.now() - _dbgT0) / 1000).toFixed(1);
   const line = document.createElement('div');
-  line.textContent = t + 's ' + args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  const fmt = (a) => {
+    if (a instanceof Error) return a.name + ': ' + a.message;   // JSON.stringify(Error) は {} になり原因が消える
+    return typeof a === 'object' && a !== null ? JSON.stringify(a) : String(a);
+  };
+  line.textContent = t + 's ' + args.map(fmt).join(' ');
   _dbgBody.appendChild(line);
   _dbgEl.scrollTop = _dbgEl.scrollHeight;
 }
@@ -409,14 +413,25 @@ function recenterToHachioji() {
 let episode = legacyEpisode(new URLSearchParams(location.search).get('map') || window.DEFAULT_MAP || 'mytown');
 let MAP_NAME = episode.map;
 let TUTORIAL = episode.stage === 'rooms';   // 部屋群を実行時構築するステージ（街の生成はスキップ）
+let episodeLoadError = null;   // エピソード定義の読込失敗の内訳（読み込み診断に出す）
 async function loadEpisode(epId, mapName) {   // 定義ファイルを読んで正規化（読めなければ null）
+  const getJson = async (rel) => {
+    const r = await fetch('../episodes/' + rel);
+    if (!r.ok) throw new Error(rel + ' が ' + r.status + ' ' + r.statusText);
+    try { return await r.json(); } catch { throw new Error(rel + ' がJSONとして読めない（配信設定を確認）'); }
+  };
   let index = [];
-  try { index = (await (await fetch('../episodes/index.json')).json()).episodes || []; }
+  try { index = (await getJson('index.json')).episodes || []; }
   catch { /* 一覧が無い構成でも動く（下でファイル名を直接試す）*/ }
   const file = episodeFileFor(index, epId, mapName);
   if (!file) return null;
-  try { return normalizeEpisode(await (await fetch('../episodes/' + file)).json(), epId); }
-  catch (err) { console.warn('エピソード定義を読めません:', file, err); return null; }
+  try { const ep = normalizeEpisode(await getJson(file), epId); episodeLoadError = null; return ep; }
+  catch (err) {
+    episodeLoadError = err?.message || String(err);
+    // ここで落ちると旧構成へフォールバックし、会話ファイル名まで変わって連鎖的に壊れる。原因を明示する
+    console.warn('エピソード定義を読めません:', episodeLoadError);
+    return null;
+  }
 }
 async function resolveEpisode() {
   const qs = new URLSearchParams(location.search);
@@ -2325,7 +2340,8 @@ function loadWatchdog() {   // 一定時間たっても起動しない場合、�
     const miss = [];
     if (!renderer) miss.push('描画初期化');
     if (!player.ready) miss.push('プレイヤーVRM');
-    if (!ev.talks) miss.push('会話データ');
+    if (episodeLoadError) miss.push('エピソード定義（' + episodeLoadError + '）');
+    if (!ev.talks) miss.push('会話データ' + (evLoadError ? '（' + evLoadError + '）' : ''));
     if (!guestPreloadDone) miss.push('会話キャストVRM');
     if (!(cityRoot && collBoxes.length)) miss.push('ステージ構築');
     dbg('[未完]', miss.join(' / ') || '不明');
@@ -2399,9 +2415,15 @@ function startMode(mode) {
 //   渡したのが板ポリ1枚(MeshBasicMaterial)でも同じ約3秒がかかる（順序を逆にすると
 //   先頭に来たユニットが払う＝オブジェクト固有のコストではないことを確認済み）。
 //   よって「分割して薄く延ばす」は不可能。ステージのコンパイルはOP再生より前に済ませる。
+const DMG_WARM_PROG = 0.35;   // ウォーム中に描く溶解の進行度。0のままだと溶けだまり等が出ずコンパイルが残る
 function warmDamageParts(frames = 8) {   // frames = 全部位アクティブで描くフレーム数（初回描画でパイプラインが焼かれる）
   dmgWarmT = Math.max(dmgWarmT, frames);
-  for (const dp of dmgParts) { try { if (dp.dis.setActive) dp.dis.setActive(true); } catch { /* noop */ } }
+  for (const dp of dmgParts) {
+    try {
+      if (dp.dis.setActive) dp.dis.setActive(true);
+      dp.dis.setProgress(DMG_WARM_PROG);   // 実際に溶けている状態を描かせる（終了時に applyDamageFx が本来の値へ戻す）
+    } catch { /* noop */ }
+  }
 }
 let dmgWarmDone = false;   // 部位溶解のウォームを最後までやり切ったか（やり切っていればゲーム開始時の再ウォームは不要）
 function showGameOver() {
@@ -2602,6 +2624,9 @@ function flowAdvance(port) {
     playFlowStory(name);
   } else if (nx.type === 'battle') {
     gameMode = 'play';
+    // タイトルやOPの描画では部位溶解のパイプラインが焼き切れない（実測: 初回被弾で350〜500msのヒッチ）。
+    // プレイヤーが本編の描画パスで実際に描かれるここで温め直す
+    warmDamageParts(12);
   } else if (nx.type === 'end') {
     runFlowEnd(nx);
   } else {
@@ -2840,15 +2865,23 @@ function updateFlowTimer(dt) {   // battle中のポート発火遅延（例: ウ
   const port = flowTimer.port; flowTimer = null;
   if (flowNode && flowNode.type === 'battle') { flowBattleDone = true; flowAdvance(port); }
 }
+let evLoadError = null;   // 会話/イベントの読込失敗の内訳（読み込み診断に出す）
 async function loadGameEvents() {
+  const get = async (rel) => {
+    const url = '../cityfly/' + rel;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(rel + ' が ' + r.status + ' ' + r.statusText);
+    try { return await r.json(); } catch { throw new Error(rel + ' がJSONとして読めない（配信設定を確認）'); }
+  };
   try {
-    const [e, t] = await Promise.all([
-      fetch('../cityfly/' + episode.events).then((r) => r.json()),
-      fetch('../cityfly/' + episode.talks).then((r) => r.json()),
-    ]);
+    const [e, t] = await Promise.all([get(episode.events), get(episode.talks)]);
     ev.defs = Array.isArray(e.events) ? e.events : [];
     ev.talks = t;
-  } catch (err) { console.warn('イベント定義の読込失敗:', err); }
+    evLoadError = null;
+  } catch (err) {
+    evLoadError = err?.message || String(err);
+    console.warn('イベント定義の読込失敗:', evLoadError);
+  }
 }
 function evParam(name) {
   if (name === 'hpPct') return playerHp / PLAYER_HP_MAX * 100;
@@ -3309,7 +3342,9 @@ function applyDamageFx() {   // ダメージ割合 → 各部位の溶解進行�
     const t0 = e0 > s0 ? Math.max(0, Math.min(1, (dmgPct - s0) / (e0 - s0))) : (dmgPct >= e0 ? 1 : 0);
     const prog = t0 * (dp.maxProg ?? 1);   // 最大溶解%: 損耗MAXでも布を残せる
     dp.dis.setProgress(prog);
-    if (dmgWarmT <= 0 && dp.dis.setActive) dp.dis.setActive(prog > 0);   // ウォーム後は無傷部位の溶解シェーダを停止
+    // 溶解シェーダのON/OFF切替は材質ノードを差し替えるため毎回コンパイルを誘発する
+    // （実測: 1部位あたり100〜500msのヒッチ。被弾のたびに部位がしきい値を越えて発生していた）。
+    // 有効のままにしても定常負荷は実測で差が無かった（中央値16.7ms / 16.8ms）ので、ウォーム後も切らない
   }
   const em = player.vrm?.expressionManager;
   if (em) for (const ec of dmgExpressions) { try { em.setValue(ec.name, dmgExprValueAt(ec.keys, dmgPct)); } catch { /* noop */ } }
@@ -3590,6 +3625,7 @@ window.__fly = { get paused() { return paused; }, get gameBgmPaused() { return g
   get camYaw() { return camYaw; }, get camPitch() { return camPitch; }, get pausePan() { return pausePanOffset.toArray(); },
   killPlayer: () => playerDamage(9999), get buildProf() { return buildProf; },
   get sea() { return ensureSeaInfo(); }, get spider() { return spider; }, get walker() { return walker; }, spiderAdvance,   // 海からの侵攻の確認用
+  get dmgWarm() { return { t: dmgWarmT, done: dmgWarmDone, parts: dmgParts.length }; }, warmDamageParts,   // 部位溶解ウォームの進捗（初回被弾ヒッチの調査用）
   get pins() { return mapPins; }, get pinProps() { return pinProps; },   // ピン配置ランドマークの確認用
   salvoPoint: (x, y, z) => spSalvoPoint(x, y, z, new THREE.Vector3()),   // 街への斉射の散らばり確認用
   get safeZones() { return safeZones; }, get safeRescued() { return safeRescued; }, openSafeZones,   // 公園セーフゾーンの確認用
