@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 let stage = null;
 let story = newStory();
 let selected = null;            // 選択中コマンドの index
-let npcFiles = [], vrmaFiles = [], stageFiles = [];
+let npcFiles = [], vrmaFiles = [], stageFiles = [], bgFiles = [], bgmFiles = [];
 let exprOptions = [...EXPR_PRESETS];   // 状態表情の候補（cityfly/expressions.json のカスタム表情を追加で読み込む）
 
 function newStory() { return { version: 1, id: 'untitled', title: '', stage: '', actors: [], script: [] }; }
@@ -111,6 +111,12 @@ function buildField(op, f) {
     const sel = selectEl(ids, op[f.key] ?? '', (v) => { op[f.key] = v; renderCmdList(); }, '(アクター)');
     return rowEl(f.key, sel);
   }
+  if (t === 'bgRef') {   // 背景: scenario2d/bg の画像と public/gif の GIF から選ぶ（手入力も可）
+    return rowEl(f.key, comboInput(op, f, bgFiles, '(背景なし)'));
+  }
+  if (t === 'bgmRef') {   // BGM: public/BGM の曲から選ぶ（手入力も可）
+    return rowEl(f.key, comboInput(op, f, bgmFiles, '(曲を選ぶ)'));
+  }
   if (t === 'combo') {   // 候補つき自由入力（datalist）
     const inp = document.createElement('input'); inp.type = 'text'; inp.value = op[f.key] ?? '';
     const dlId = 'dl-combo-' + f.key;
@@ -151,8 +157,9 @@ function buildLinesField(op) {
   lines.forEach((line, i) => {
     const v = typeof line === 'string' ? { text: line, expression: '', weight: 1 } : { text: line.text || '', expression: line.expression || '', weight: line.weight != null ? line.weight : 1 };
     const wr = document.createElement('div'); wr.className = 'line-row';
-    const txt = document.createElement('input'); txt.type = 'text'; txt.value = v.text; txt.placeholder = 'セリフ';
-    txt.style.cssText = 'width:100%;background:#222;color:#ddd;border:1px solid #3a3a60;border-radius:3px;padding:3px;';
+    const no = document.createElement('div'); no.className = 'line-no'; no.textContent = (i + 1) + '行目';
+    wr.appendChild(no);
+    const txt = document.createElement('textarea'); txt.value = v.text; txt.placeholder = 'セリフ';
     txt.oninput = () => { v.text = txt.value; writeLine(lines, i, v); };
     wr.appendChild(txt);
     const ctl = document.createElement('div'); ctl.style.cssText = 'display:flex;gap:4px;margin-top:4px;align-items:center;';
@@ -246,12 +253,58 @@ function playAll() { stage.loadStory(story); stage.play(0); }
 async function playHere() { stage.loadStory(story); await stage.prime(selected || 0); stage.play(selected || 0); }
 function stopPreview() { stage.stop(); }
 
+// ── 右パネル: 幅を引き出す／たたむ（セリフ編集を広く使うため。幅は次回も復元する）──
+const RIGHT_W_KEY = 'storyEditor.rightW', RIGHT_MIN = 240, RIGHT_MAX_RATIO = 0.7;
+function setRightWidth(px) {
+  const w = Math.max(RIGHT_MIN, Math.min(Math.round(window.innerWidth * RIGHT_MAX_RATIO), Math.round(px)));
+  document.getElementById('main').style.setProperty('--rightW', w + 'px');
+  localStorage.setItem(RIGHT_W_KEY, String(w));
+  syncGrip();
+}
+function rightCollapsed() { return document.getElementById('main').classList.contains('right-collapsed'); }
+function syncGrip() {
+  const main = document.getElementById('main');
+  const w = rightCollapsed() ? 0 : parseInt(getComputedStyle(main).getPropertyValue('--rightW'), 10) || 340;
+  const grip = $('right-grip'), tg = $('right-toggle');
+  grip.style.right = w + 'px';
+  grip.style.display = rightCollapsed() ? 'none' : '';
+  tg.style.right = w + 'px';
+  tg.textContent = rightCollapsed() ? '◀' : '▶';
+}
+function initRightPanel() {
+  const saved = parseInt(localStorage.getItem(RIGHT_W_KEY) || '', 10);
+  setRightWidth(Number.isFinite(saved) ? saved : 340);
+  const grip = $('right-grip');
+  let dragging = false;
+  grip.addEventListener('pointerdown', (e) => { dragging = true; grip.classList.add('dragging'); grip.setPointerCapture(e.pointerId); e.preventDefault(); });
+  grip.addEventListener('pointermove', (e) => { if (dragging) setRightWidth(window.innerWidth - e.clientX); });
+  const end = () => { dragging = false; grip.classList.remove('dragging'); };
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
+  $('right-toggle').onclick = () => { document.getElementById('main').classList.toggle('right-collapsed'); syncGrip(); };
+  window.addEventListener('resize', syncGrip);
+}
+
 // ── init ──
+// 候補つき自由入力（select だと手書きのパスを潰してしまうので datalist で両立させる）
+function comboInput(op, f, options, placeholder) {
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.value = op[f.key] ?? ''; inp.placeholder = placeholder || '';
+  const dlId = 'dl-' + f.type + '-' + f.key;
+  let dl = document.getElementById(dlId);
+  if (!dl) { dl = document.createElement('datalist'); dl.id = dlId; document.body.appendChild(dl); }
+  dl.innerHTML = (options || []).map((o) => `<option value="${o}">`).join('');
+  inp.setAttribute('list', dlId);
+  inp.oninput = () => { op[f.key] = inp.value; renderCmdList(); };
+  return inp;
+}
 async function init() {
-  [npcFiles, vrmaFiles, stageFiles] = await Promise.all([
+  [npcFiles, vrmaFiles, stageFiles, bgFiles, bgmFiles] = await Promise.all([
     fetchList('../npc/manifest.json', []),
     fetchList('../vrma/manifest.json', []),
     fetchList('../models/manifest.json', []),
+    fetchList('../scenario2d/bg-manifest.json', []),
+    fetchList('../BGM/manifest.json', []),
   ]);
   try {   // カスタム表情（合成表情）を状態表情の候補へ追加
     const ed = await (await fetch('../cityfly/expressions.json')).json();
@@ -287,6 +340,7 @@ async function init() {
     if (j) setStory(j); else toast('読込失敗: ' + f);
   };
 
+  initRightPanel();
   await refreshStoryList(null);
   // 初期はサンプルを読み込む（あれば）
   const sampleList = await fetchList('../story/manifest.json', []);

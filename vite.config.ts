@@ -254,6 +254,31 @@ export default defineConfig({
           res.end(JSON.stringify(files));
         });
 
+        // 2D紙芝居の背景一覧（public/gif/*.gif と public/scenario2d/bg/* の画像）。
+        // story-editor の背景コマンドで選べるようにする。gif は public 直下参照なので 'gif/xxx.gif' 形式で返す
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/scenario2d/bg-manifest.json')) return next();
+          const out: string[] = [];
+          const bgDir = path.join(pub, 'scenario2d', 'bg');
+          if (fs.existsSync(bgDir)) for (const f of fs.readdirSync(bgDir)) if (/\.(png|jpe?g|webp|gif)$/i.test(f)) out.push(f);
+          const gifDir = path.join(pub, 'gif');
+          if (fs.existsSync(gifDir)) for (const f of fs.readdirSync(gifDir)) if (/\.gif$/i.test(f)) out.push('gif/' + f);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(out));
+        });
+
+        // BGM一覧（public/BGM/*.ogg）。story-editor のBGM再生コマンドで選ばせる。
+        // .m4a は Safari 向けの同名フォールバックなので候補には出さない（指定は .ogg 側で書く規約）
+        server.middlewares.use((req, res, next) => {
+          const url = (req.url || '').split('?')[0];
+          if (!url.endsWith('/BGM/manifest.json')) return next();
+          const dir = path.join(pub, 'BGM');
+          const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /\.ogg$/i.test(f)).map((f) => 'BGM/' + f) : [];
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(files));
+        });
+
         // ゲームフロー一覧（public/flow/*.flow.json）
         server.middlewares.use((req, res, next) => {
           const url = (req.url || '').split('?')[0];
